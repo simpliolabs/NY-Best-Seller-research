@@ -27,7 +27,13 @@ The owner sells print-on-demand t-shirts (pickleball niche). The system is suppo
 ### PROBLEM 1: Not Actually Getting Best Sellers From Etsy
 
 **What should happen:**  
-Go to `https://www.etsy.com/search?q=hiking%20shirt&is_best_seller=true` — you can see the results right there. Bigfoot Dandelion Shirt (131 reviews), Cute Goose Camping Shirt (415 reviews), "Out Of Breath Hiking Society" (1.3k reviews), etc. These are REAL best sellers with the "Bestseller" badge.
+Etsy's **web search** exposes demand/quality filters as URL params: `&is_best_seller=true` and `&is_popular_now=true` (listing-level demand badges), plus the shop-level `&is_star_seller=true`:
+
+- `https://www.etsy.com/search?q=hiking%20shirt&is_best_seller=true`
+- `https://www.etsy.com/search?q=hiking%20shirt&is_popular_now=true`
+- `https://www.etsy.com/search?q=hiking%20shirt&is_star_seller=true`
+
+Real candidates show up right there: Bigfoot Dandelion Shirt (131 reviews), Cute Goose Camping Shirt (415 reviews), "Out Of Breath Hiking Society" (1.3k reviews), etc. **Both `Bestseller` and `Popular now` are good demand signals** — Popular now catches rising trends a Bestseller badge misses. (`Star Seller` is a *shop* service badge, not a per-listing demand signal — see issue #1.)
 
 **What actually happens in the code:**
 
@@ -42,7 +48,7 @@ const resp = await fetch(url, {
 
 **The issues:**
 
-1. The Etsy API v3 `is_best_seller` filter doesn't work the same as the web UI filter. The web UI clearly shows "Bestseller" badges. The API returns listings sorted by "score" but the `is_best_seller` flag doesn't reliably filter to only badge-holders. That's why a tennis shirt with ~1 sale/month got through (Failure #1: https://www.etsy.com/listing/1238977454).
+1. **The API doesn't expose Etsy's badge filters — the web search does.** The code passes `is_best_seller=true` to the *API* (`openapi.etsy.com/v3/.../listings/active`), where it doesn't reliably filter — the API just returns score-sorted listings, which is how a tennis shirt with ~1 sale/month got through (Failure #1: https://www.etsy.com/listing/1238977454). The badge filters live in the **web search** as URL params: `is_best_seller` and `is_popular_now` (listing-level demand badges) and `is_star_seller` (a *shop-level* service badge). **Don't conflate them:** Star Seller measures shop service quality (shipping speed, reviews, response time) — a star-seller shop can list a brand-new design with zero sales. The demand signals are `is_best_seller` + `is_popular_now`; use `is_star_seller` only as an optional shop-quality gate.
 
 2. We added `MIN_FAVORITES = 500` as a band-aid, but that's a guess. The Etsy web search shows listings with 131 reviews that DO have the Bestseller badge. Favorites ≠ reviews ≠ sales. The heuristic `estimatedSales: Math.max(1, Math.round(favorites / 3))` is made up.
 
@@ -56,13 +62,13 @@ const resp = await fetch(url, {
 |---------|---------|-------|------|
 | Bigfoot Dandelion Shirt | 131 | Bestseller | Graphic tee — GOOD source |
 | Cute Goose Camping Shirt | 415 | Bestseller | Graphic tee — GOOD source |
-| National Parks Bear Graphic Tee | 113 | Popular now | Graphic tee — NOT bestseller |
-| Comfort Colors National Park "Respect The Locals" | 23.2k | Popular now | Photo tee — NOT bestseller |
+| National Parks Bear Graphic Tee | 113 | Popular now | Graphic tee — GOOD source (Popular now is fine) |
+| Comfort Colors National Park "Respect The Locals" | 23.2k | Popular now | Photo tee — BAD source (wrong type, not the badge) |
 | "Out Of Breath Hiking Society" | 1.3k | Bestseller | Text design — OK source |
-| Embroidered National Park T-Shirt | 18.4k | Bestseller | Personalized/embroidered — BAD source |
+| Embroidered National Park T-Shirt | 18.4k | Bestseller | Embroidered — BAD source (Bestseller ≠ usable) |
 | Adventure Hiking Sweatshirt (True Crime) | 19.6k | Bestseller | Graphic — GOOD source |
 
-The web search clearly distinguishes "Bestseller" from "Popular now". The API doesn't give us this distinction reliably.
+The real good/bad discriminator is **product type** (graphic/text design = good; photo, embroidered, personalized, all-over-print = bad), **not** which badge. Both Bestseller and Popular now are valid demand signals — a Bestseller can still be a bad source (embroidered), and a Popular-now graphic tee is a good one. The API can't filter on any of these badges reliably; the web params can.
 
 ---
 
@@ -155,7 +161,7 @@ The `DEFAULT_PRINT_ZONE` is:
 { x: 0.22, y: 0.15, width: 0.56, height: 0.60 }
 ```
 
-**The real problem is not the anchor direction — it's the zone geometry and transparent padding:**
+**The real problem is not just the anchor direction — it's the zone geometry and transparent padding:**
 
 1. **The zone is too tall (0.60 = 60% of shirt height).** A realistic chest print zone is ~0.30–0.35. With a 0.60-tall zone and top-anchor, the contain-fit math shrinks the design to fit the width, leaving massive empty space below — making it look off-center.
 
@@ -252,7 +258,7 @@ The LLM generates "recurringPhrases", "insideJokes", "communityLanguage", "buyin
 
 ### Ideal Flow:
 
-1. **Get real source listings** — fail loud and label live vs simulated; treat the "Bestseller" badge as a hint, not ground truth (a personalized proxy, not sales)
+1. **Get real source listings** from Etsy web search using the badge params — `is_best_seller` + `is_popular_now` for demand, `is_star_seller` as an optional shop-quality gate — then filter by product type. Fail loud and label live vs simulated. Treat the badges as demand *proxies*, not verified sales.
 2. **Download the product photo** for each best seller
 3. **Vision LLM extracts style** (this part works OK — `styleExtractor.ts`)
 4. **Constrained subject swap (LLM + cultural map)** using the cultural map for guidance (bigfoot → llama, yoga grid → pickleball grid). This is NOT a deterministic lookup — the map holds only a handful of mascots, while real sources are arbitrary (a goose, a bear, a slogan) with no map entry. An LLM must still decide each mapping; the cultural map CONSTRAINS that decision with examples, it does not replace it.
@@ -318,7 +324,7 @@ This is hardcoded in the system prompt. If someone creates a workspace for hikin
 **Failure attribution:** The 80% figures are invented and the steps are a dependency chain, not independent coin flips. Failure #3 is a fixed UI bug → 8 real pipeline failures. Failures cluster: source quality (#1, #4, #7) and adaptation (#1, #2, #5, #8, #9) account for nearly all of them; image-generation content drift = 1 (#6); mockup = 0. Priority: **source ≫ adaptation > image-control ≫ mockup**.
 
 **What needs to happen:**
-- **Sourcing:** FIRST fail loud + label live vs simulated (silent fiction is the real killer — and why image gen has nothing to edit). The web "Bestseller" badge is a personalized proxy, not sales — a hint, not ground truth. Add per-scan instrumentation (HTTP status, result count, which mode fired).
+- **Sourcing:** FIRST fail loud + label live vs simulated (silent fiction is the real killer — and why image gen has nothing to edit). Pull from the web badge params — `is_best_seller` + `is_popular_now` (both demand signals), with `is_star_seller` as a shop-quality gate (it's a *service* badge, not sales) — then filter by product type. The badges are demand proxies, not verified sales. Add per-scan instrumentation (HTTP status, result count, which mode fired).
 - **Adaptation:** Constrain the LLM with cultural map + few-shot examples + automated vision QA. Can't be a pure lookup (long tail of arbitrary sources), but the map provides guardrails.
 - **Image generation:** KEEP editing; do NOT generate from scratch (produces "way off" style). Fix control via masked/regional editing + text as a separate composited layer + a vision-QA gate that rejects content drift.
 - **Mockup:** Delete `DEFAULT_PRINT_ZONE` and top-anchor. Trim transparent padding from the design PNG, then center-contain inside the per-template saved zone. This makes the compositor product-agnostic (mug, tote, hat = different zone rectangles, same 6 lines of code). Keep zone-fit for previews only; production DTF export must use real-world inch dimensions.
