@@ -192,32 +192,97 @@ The Print Zone editor already exists in the UI. A mug is just a template with it
 
 ---
 
-## The Deep Cultural Map — A Feature That Exists But Isn't Wired
+## The Deep Cultural Map — Generated, Partially Consumed, Contradicted, Then Lost
 
-During workspace onboarding, the system generates a "Deep Cultural Map" with structured data:
+### What it is
 
-| Category | Example for Pickleball |
-|----------|----------------------|
-| animalMascots | Llama (short arms), T-Rex (can't reach lobs) |
-| painPoints | Score amnesia, getting body-bagged |
-| funPoints | Perfect ATP shot, kitchen battles |
-| insideJokes | "The kitchen," DUPR obsession |
-| rivalries | Pickleball vs tennis, bangers vs dinkers |
-| catchphrases | "Dink responsibly," "Third shot drop" |
-| physicalComedy | T-Rex arms, split-step dance |
-| transferableVisualConcepts | Bigfoot→Llama, yoga grid→pickleball grid |
+During workspace onboarding (`server/onboardingRouter.ts` lines 97-280), the LLM is told the cultural map is "the most important section" and must produce a structured object with 9 categories:
 
-**This is the intelligence that SHOULD drive the subject swap.** When the system sees "Bigfoot blowing dandelion" it should know to map it to "Llama blowing dandelion" because the cultural map says llamas are a key pickleball mascot.
+| Category | Schema field | Example for Pickleball |
+|----------|-------------|----------------------|
+| Animal Mascots | `animalMascots[].animal, .whyItWorks, .visualTreatment` | Llama (short arms → can't reach lobs), T-Rex (same joke) |
+| Pain Points | `painPoints[].pain, .humorAngle` | Score amnesia → "Was that 4-3 or 3-4?" |
+| Fun Points | `funPoints[].joy, .visualConcept` | Perfect ATP shot → slow-mo freeze frame |
+| Inside Jokes | `insideJokes[].joke, .context` | "The kitchen" → only insiders know it's a court zone |
+| Rivalries | `rivalries[].rivalry, .humorAngle` | Pickleball vs tennis → "We stole your courts" |
+| Catchphrases | `catchphrases[]` (strings) | "Dink responsibly," "Third shot drop" |
+| Physical Comedy | `physicalComedy[].scenario, .whyFunny` | T-Rex arms, split-step dance |
+| Lifestyle Identity | `lifestyleIdentity[]` (strings) | Paddle bags, court shoes, bumper stickers |
+| Transferable Visual Concepts | `transferableVisualConcepts[].sourceNiche, .sourceConcept, .targetAdaptation` | Bigfoot (hiking) → Llama (pickleball) |
 
-**But:**
+**This is the intelligence that SHOULD drive the subject swap.** When the system finds "Bigfoot blowing dandelion" in hiking, it should know to map it to "Llama blowing dandelion" because `transferableVisualConcepts` says Bigfoot→Llama.
 
-1. **The wizard UI (Step 3) doesn't show it.** The user sees: summary, audience, subreddits, keywords, categories, cultural moments (flat strings), design styles, avoid topics. The structured cultural map is generated but INVISIBLE to the user. (See screenshot in the original message — no cultural map section.)
+### What the user actually sees (Step 3 of the wizard)
 
-2. **The workspace update router drops it.** `workspaceRouter.ts` line 68-77 defines the `nicheProfile` update schema WITHOUT `culturalMap`. If the user edits their profile, the cultural map is silently deleted.
+The screenshot proves it — the onboarding wizard shows:
+- Summary (paragraph)
+- Target Audience (paragraph)
+- Subreddits to Scan (flat tag list)
+- Etsy In-Niche Keywords (flat tag list)
+- Cross-Niche Scan Categories (flat tag list)
+- **Cultural Moments / Inside Jokes** (flat one-liner strings: "The 'dink' shot", "Staying out of 'the kitchen'", etc.)
+- Design Styles (flat tag list)
+- Avoid Topics (flat tag list)
 
-3. **The style intelligence system ignores it.** `styleIntelligence.ts` reads summary, audience, designStyles, crossNicheCategories, etsyKeywords, avoidTopics — never reads `culturalMap`.
+**The structured 9-category cultural map is generated but INVISIBLE.** The user cannot review, edit, or even know it exists. They see a dumbed-down flat list called "Cultural Moments" instead.
 
-4. **The one place that uses it (deconstructAndAdapt) explicitly disables its primary value.** The prompt says: "The cultural map is for VOCABULARY and CONTEXT only — NEVER inject new visual elements from it." This means the mascot-swap intelligence (bigfoot→llama) is explicitly forbidden.
+### How the system actually uses the cultural map (3 places)
+
+**1. `extractInNicheSignals()` (line 280-286) — flattened to a hint string:**
+```typescript
+const catchphrases = culturalMap?.catchphrases?.slice(0, 8).join(", ") ?? "";
+const insideJokes = culturalMap?.insideJokes?.slice(0, 5).map(j => j.joke).join(", ") ?? "";
+const painPoints = culturalMap?.painPoints?.slice(0, 4).map(p => p.pain).join(", ") ?? "";
+const culturalContext = [catchphrases, insideJokes, painPoints, legacyMoments].filter(Boolean).join("; ");
+```
+This flattens the structured data back into a single string and passes it as "Known cultural context" to the (fake) Reddit signal extractor. The rich schema (whyItWorks, humorAngle, visualTreatment) is discarded.
+
+**2. `deconstructAndAdapt()` (line 370-390) — partially used, then explicitly disabled:**
+```typescript
+if (culturalMap.animalMascots?.length) {
+  parts.push(`Animal mascots that work: ${culturalMap.animalMascots.slice(0, 3).map(a => `${a.animal} (${a.whyItWorks})`).join("; ")}`);
+}
+if (culturalMap.painPoints?.length) { ... }
+if (culturalMap.physicalComedy?.length) { ... }
+if (culturalMap.rivalries?.length) { ... }
+if (culturalMap.catchphrases?.length) { ... }
+```
+This builds a richer context string and injects it as "CULTURAL MAP" in the user message. **But the system prompt immediately contradicts it:**
+```
+=== HARD CONSTRAINT: NO ELEMENT INJECTION (Fix #5) ===
+The cultural map is for VOCABULARY and CONTEXT only — NEVER inject new visual elements from it
+```
+This means: the mascot-swap intelligence (`transferableVisualConcepts`: Bigfoot→Llama) is explicitly **forbidden from being used for its primary purpose**. The map tells the LLM "Llama is a pickleball mascot" but the constraint says "don't use it to swap subjects." These two instructions fight each other.
+
+**3. `rankPatterns()` (line 630-635) — flattened to catchphrases + jokes only:**
+```typescript
+const catchphrases = culturalMap?.catchphrases?.slice(0, 6).join(", ") ?? "";
+const insideJokes = culturalMap?.insideJokes?.slice(0, 4).map(j => j.joke).join(", ") ?? "";
+const culturalContext = [catchphrases, insideJokes, legacyCulturalMoments].filter(Boolean).join("; ");
+```
+Used as "Cultural context / inside jokes" in the ranking prompt. Only catchphrases and jokes survive — mascots, rivalries, pain points, physical comedy, transferable concepts are all dropped.
+
+### What DOESN'T use it at all
+
+- **`styleIntelligence.ts`** — computes style directives from summary, audience, designStyles, crossNicheCategories, etsyKeywords, avoidTopics. Never reads culturalMap.
+- **`buildGenerationPayload()` (the image generation prompt)** — receives `adaptedConcept` (a string) and `styleJSON`. The cultural map is not passed to image generation.
+- **`pipeline.ts` (NYT/book pipeline)** — uses legacy `culturalMoments` (flat strings), not `culturalMap`.
+
+### How it gets lost
+
+1. **Workspace update router (`workspaceRouter.ts` line 68-77)** defines the `nicheProfile` update schema WITHOUT `culturalMap`. If the user edits ANY field in their profile (summary, keywords, etc.), the save validates against the reduced schema and `culturalMap` is silently dropped from the database.
+
+2. **The OnboardingWizard UI** stores the full profile in React state (including culturalMap) and passes it to `finalizeWorkspace`. So the map IS persisted on initial creation. But the moment the user touches Settings → Workspace → Save, it's gone.
+
+### The fundamental contradiction
+
+The system generates a rich 9-category cultural map, tells the LLM it's "the most important section," then:
+- Hides it from the user (can't review or edit)
+- Flattens it to strings when consuming it (discards the structured fields)
+- Explicitly forbids using its primary value (mascot swaps / transferable concepts)
+- Silently deletes it on any profile update
+
+**What it should do:** The `transferableVisualConcepts` field (Bigfoot→Llama, yoga grid→pickleball grid) should be the PRIMARY input to the subject-swap decision. The constraint should be inverted: "USE the cultural map's transferable concepts for subject mapping; do NOT inject elements that have no mapping in the map." The map should be visible, editable, and preserved.
 
 ---
 
