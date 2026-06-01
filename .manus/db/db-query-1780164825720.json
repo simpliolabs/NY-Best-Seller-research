@@ -1,0 +1,16 @@
+{
+  "query": "SELECT errorLog FROM bot_runs WHERE id = 390001;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway05.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3aAiEZGvt2NNVee.7507f4d10542 --database 2UiWq4UmupNv3Rr5UypaGc --execute SELECT errorLog FROM bot_runs WHERE id = 390001;",
+  "rows": [
+    {
+      "errorLog": "Failed query: insert into `books` (`id`, `runId`, `title`, `author`, `isbn`, `coverUrl`, `synopsis`, `rank`, `weeksOnList`, `dominantColors`, `mood`, `setting`, `subgenre`, `visualMotifs`, `typographyStyle`, `fanCulture`, `trendScoreTotal`, `socialMomentum`, `socialRationale`, `designNovelty`, `designRationale`, `audienceSize`, `audienceRationale`, `trendDirection`, `previousTrendScore`, `scoreDelta`, `previousRank`, `streakCount`, `forumSignals`, `worldBible`, `refreshedAt`, `createdAt`) values (default, ?, ?, ?, ?, ?, ?, ?, ?, default, default, default, default, default, default, default, default, default, default, default, default, default, default, default, default, default, default, default, default, default, default, default)"
+    },
+    {
+      "errorLog": "params: 390001,Stay Out of the Kitchen,Reddit: r/Pickleball,niche-reddit-U3RheSBPdXQg,,This phrase is a fundamental rule in pickleball, referring to the non-volley zone (the 'kitchen'). It's a universally understood instruction and a humorous reminder of a common strategic challenge. Players would wear this as a badge of honor, showcasing their knowledge of the game's core mechanics and a playful warning to opponents.,10,0"
+    }
+  ],
+  "messages": [],
+  "stdout": "errorLog\nFailed query: insert into `books` (`id`, `runId`, `title`, `author`, `isbn`, `coverUrl`, `synopsis`, `rank`, `weeksOnList`, `dominantColors`, `mood`, `setting`, `subgenre`, `visualMotifs`, `typographyStyle`, `fanCulture`, `trendScoreTotal`, `socialMomentum`, `socialRationale`, `designNovelty`, `designRationale`, `audienceSize`, `audienceRationale`, `trendDirection`, `previousTrendScore`, `scoreDelta`, `previousRank`, `streakCount`, `forumSignals`, `worldBible`, `refreshedAt`, `createdAt`) values (default, ?, ?, ?, ?, ?, ?, ?, ?, default, default, default, default, default, default, default, default, default, default, default, default, default, default, default, default, default, default, default, default, default, default, default)\nparams: 390001,Stay Out of the Kitchen,Reddit: r/Pickleball,niche-reddit-U3RheSBPdXQg,,This phrase is a fundamental rule in pickleball, referring to the non-volley zone (the 'kitchen'). It's a universally understood instruction and a humorous reminder of a common strategic challenge. Players would wear this as a badge of honor, showcasing their knowledge of the game's core mechanics and a playful warning to opponents.,10,0\n",
+  "stderr": "",
+  "execution_time_ms": 261
+}

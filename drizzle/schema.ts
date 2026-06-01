@@ -1,0 +1,497 @@
+import {
+  int,
+  mysqlEnum,
+  mysqlTable,
+  text,
+  timestamp,
+  varchar,
+  boolean,
+  json,
+  decimal,
+} from "drizzle-orm/mysql-core";
+
+/**
+ * Core user table backing auth flow.
+ */
+export const users = mysqlTable("users", {
+  id: int("id").autoincrement().primaryKey(),
+  openId: varchar("openId", { length: 64 }).notNull().unique(),
+  name: text("name"),
+  email: varchar("email", { length: 320 }),
+  loginMethod: varchar("loginMethod", { length: 64 }),
+  role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
+});
+
+export type User = typeof users.$inferSelect;
+export type InsertUser = typeof users.$inferInsert;
+
+/**
+ * Pipeline run tracking. Each row = one execution of the 7-stage pipeline.
+ */
+export const botRuns = mysqlTable("bot_runs", {
+  id: int("id").autoincrement().primaryKey(),
+  status: mysqlEnum("status", ["running", "completed", "failed"]).default("running").notNull(),
+  currentStage: int("currentStage").default(0).notNull(),
+  totalStages: int("totalStages").default(7).notNull(),
+  stageLabel: varchar("stageLabel", { length: 255 }).default("Initializing...").notNull(),
+  booksProcessed: int("booksProcessed").default(0).notNull(),
+  imagesGenerated: int("imagesGenerated").default(0).notNull(),
+  topPickTitle: varchar("topPickTitle", { length: 512 }),
+  topPickIsbn: varchar("topPickIsbn", { length: 64 }),
+  errorLog: text("errorLog"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  completedAt: timestamp("completedAt"),
+  lastHeartbeat: timestamp("lastHeartbeat"),
+  /** Phase F: workspace that triggered this run (null for legacy NYT runs) */
+  workspaceId: varchar("workspaceId", { length: 36 }),
+});
+
+export type BotRun = typeof botRuns.$inferSelect;
+export type InsertBotRun = typeof botRuns.$inferInsert;
+
+/**
+ * Books extracted from the NYT Best Sellers list during a pipeline run.
+ */
+export const books = mysqlTable("books", {
+  id: int("id").autoincrement().primaryKey(),
+  runId: int("runId").notNull(),
+  title: varchar("title", { length: 512 }).notNull(),
+  author: varchar("author", { length: 512 }).notNull(),
+  isbn: varchar("isbn", { length: 64 }),
+  coverUrl: text("coverUrl"),
+  synopsis: text("synopsis"),
+  rank: int("rank"),
+  weeksOnList: int("weeksOnList"),
+  // AI-extracted metadata
+  dominantColors: json("dominantColors").$type<string[]>(),
+  mood: varchar("mood", { length: 255 }),
+  setting: varchar("setting", { length: 255 }),
+  subgenre: varchar("subgenre", { length: 255 }),
+  visualMotifs: json("visualMotifs").$type<string[]>(),
+  typographyStyle: varchar("typographyStyle", { length: 255 }),
+  /** v2: Fan community identity summary from extraction */
+  fanCulture: text("fanCulture"),
+  // Trend scores (0-100 each, total 0-300)
+  trendScoreTotal: int("trendScoreTotal"),
+  socialMomentum: int("socialMomentum"),
+  socialRationale: text("socialRationale"),
+  designNovelty: int("designNovelty"),
+  designRationale: text("designRationale"),
+  audienceSize: int("audienceSize"),
+  audienceRationale: text("audienceRationale"),
+  /** v3: Trend direction vs previous run (up/down/stable/new) */
+  trendDirection: mysqlEnum("trendDirection", ["up", "down", "stable", "new"]).default("new"),
+  /** v3: Previous run's total trend score for delta calculation */
+  previousTrendScore: int("previousTrendScore"),
+  /** v3: Score delta (current - previous), null if new */
+  scoreDelta: int("scoreDelta"),
+  /** v3: Previous run's rank for comparison */
+  previousRank: int("previousRank"),
+  /** v3: How many consecutive runs this book has appeared */
+  streakCount: int("streakCount").default(1),
+  /** v4: Real forum scraping results per source */
+  forumSignals: json("forumSignals").$type<{
+    reddit?: { postCount: number; avgUpvotes: number; topSubreddits: string[]; sampleTitles: string[]; status: "success" | "failed" | "skipped" };
+    goodreads?: { ratingsCount: number; avgRating: number; reviewCount: number; topShelves: string[]; status: "success" | "failed" | "skipped" };
+    storyGraph?: { moods: string[]; pace: string; themes: string[]; status: "success" | "failed" | "skipped" };
+    fable?: { clubCount: number; discussionCount: number; status: "success" | "failed" | "skipped" };
+    bookRiot?: { articleCount: number; articleTitles: string[]; status: "success" | "failed" | "skipped" };
+  }>(),
+  /** v5: World Bible — IP visual universe data extracted in Stage 2 for use in Stage 6 image generation */
+  worldBible: json("worldBible").$type<{
+    illustratorStyle: string;
+    keyVisualEnvironments: string[];
+    keyObjects: string[];
+    lightingSignature: string;
+    textureLanguage: string;
+    typographyNative: string;
+    emotionalTone: string;
+    colorAnchors: string[];
+  }>(),
+  /** v4: Last time this book was individually refreshed */
+  refreshedAt: timestamp("refreshedAt"),
+  /** Style Intelligence: per-book computed style directives for image generation */
+  styleDirectives: json("styleDirectives").$type<import("../shared/styleProfile").StyleProfile>(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type Book = typeof books.$inferSelect;
+export type InsertBook = typeof books.$inferInsert;
+
+/**
+ * v2: Niche research results per book per run.
+ * Stores the 3 research outputs: fan conversations, design styles, white space.
+ */
+export const nicheResearch = mysqlTable("niche_research", {
+  id: int("id").autoincrement().primaryKey(),
+  runId: int("runId").notNull(),
+  bookId: int("bookId").notNull(),
+  /** Jokes, slogans, inside comments, identity markers, pain points */
+  fanConversations: json("fanConversations").$type<{
+    insideJokes: string[];
+    slogans: string[];
+    communityReferences: string[];
+    painPoints: string[];
+    identityMarkers: string[];
+  }>(),
+  /** Resonating styles, palettes, typography, formats, aesthetics */
+  designStyles: json("designStyles").$type<{
+    colorPalettes: string[];
+    typographyPreferences: string[];
+    artStyles: string[];
+    formatPreferences: string[];
+    aestheticMovements: string[];
+  }>(),
+  /** Untapped angles, missing formats, oversaturated areas */
+  whiteSpace: json("whiteSpace").$type<{
+    untappedHumorAngles: string[];
+    ignoredSubAudiences: string[];
+    missingFormats: string[];
+    crossFandomOpportunities: string[];
+    oversaturated: string[];
+    fresh: string[];
+  }>(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type NicheResearch = typeof nicheResearch.$inferSelect;
+export type InsertNicheResearch = typeof nicheResearch.$inferInsert;
+
+/**
+ * AI-generated design concepts for print-on-demand products.
+ * v2: Each book gets 5 concepts (one per humor framework).
+ */
+export const designConcepts = mysqlTable("design_concepts", {
+  id: int("id").autoincrement().primaryKey(),
+  bookId: int("bookId").notNull(),
+  runId: int("runId").notNull(),
+  conceptName: varchar("conceptName", { length: 255 }).notNull(),
+  format: varchar("format", { length: 100 }).notNull(),
+  style: varchar("style", { length: 512 }).notNull(),
+  headline: varchar("headline", { length: 512 }),
+  subtext: varchar("subtext", { length: 512 }),
+  colorPalette: json("colorPalette").$type<string[]>(),
+  layoutDescription: text("layoutDescription"),
+  fontSuggestion: varchar("fontSuggestion", { length: 255 }),
+  copyrightSafe: boolean("copyrightSafe").default(true).notNull(),
+  isFavorite: boolean("isFavorite").default(false).notNull(),
+  /** v2: Which humor/concept framework was used */
+  humorFramework: varchar("humorFramework", { length: 512 }),
+  /** v3: Whether this concept is a global top-5 winner (gets 3 images) */
+  isWinner: boolean("isWinner").default(false).notNull(),
+  /** v3: Global rank among all concepts in this run (1 = best) */
+  globalRank: int("globalRank"),
+  /** Image variation 1: Clean/Commercial style */
+  imageUrlA: text("imageUrlA"),
+  /** Image variation 2: Bold/Artistic style */
+  imageUrlB: text("imageUrlB"),
+  /** Image variation 3: Trending/Social style */
+  imageUrlC: text("imageUrlC"),
+  /** Prompt used for variation 1 */
+  imagePromptA: text("imagePromptA"),
+  /** Prompt used for variation 2 */
+  imagePromptB: text("imagePromptB"),
+  /** Prompt used for variation 3 */
+  imagePromptC: text("imagePromptC"),
+  /** v2: Concept-level trend score (0-300) from niche-evidence scoring */
+  trendScore: int("trendScore"),
+  /** v2: FK to niche_research row that informed this concept */
+  nicheResearchId: int("nicheResearchId"),
+  /** v4: Source of this concept — full pipeline run or per-book refresh */
+  refreshSource: mysqlEnum("refreshSource", ["full_run", "book_refresh"]).default("full_run"),
+  /** v5: Cross-source signal tags that informed this concept (from forum overlap analysis) */
+  signalTags: json("signalTags").$type<string[]>(),
+  /** v6: The real fan phrase/quote this concept is anchored to */
+  sourcePhrase: text("sourcePhrase"),
+  /** Phase 3: FK to trend_patterns.id when concept was created from an approved niche pattern */
+  nichePatternId: varchar("nichePatternId", { length: 36 }),
+  /** v4: Cached production-ready transparent PNG URLs */
+  productionUrlA: text("productionUrlA"),
+  productionUrlB: text("productionUrlB"),
+  productionUrlC: text("productionUrlC"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type DesignConcept = typeof designConcepts.$inferSelect;
+export type InsertDesignConcept = typeof designConcepts.$inferInsert;
+
+/**
+ * v2: Etsy market validation data per design concept.
+ */
+export const marketValidation = mysqlTable("market_validation", {
+  id: int("id").autoincrement().primaryKey(),
+  conceptId: int("conceptId").notNull(),
+  etsyListingCount: int("etsyListingCount"),
+  avgPrice: decimal("avgPrice", { precision: 10, scale: 2 }),
+  minPrice: decimal("minPrice", { precision: 10, scale: 2 }),
+  maxPrice: decimal("maxPrice", { precision: 10, scale: 2 }),
+  topFavorites: int("topFavorites"),
+  saturationLevel: mysqlEnum("saturationLevel", [
+    "low",
+    "medium",
+    "high",
+    "unavailable",
+  ]).default("unavailable").notNull(),
+  searchKeywords: varchar("searchKeywords", { length: 512 }),
+  validatedAt: timestamp("validatedAt").defaultNow().notNull(),
+});
+
+export type MarketValidation = typeof marketValidation.$inferSelect;
+export type InsertMarketValidation = typeof marketValidation.$inferInsert;
+
+
+/**
+ * Self-healing log — records all auto-recovery actions taken by the system.
+ * Inspired by ClawHub self-healing-agent + memory-self-heal patterns.
+ */
+export const healingLog = mysqlTable("healing_log", {
+  id: int("id").autoincrement().primaryKey(),
+  subsystem: varchar("subsystem", { length: 50 }).notNull(), // 'pipeline', 'api', 'frontend', 'db', 'network'
+  issue: text("issue").notNull(),
+  classification: varchar("classification", { length: 50 }), // failure class from memory-self-heal
+  diagnosis: text("diagnosis"),
+  actionTaken: text("actionTaken"),
+  result: mysqlEnum("result", ["success", "fallback", "escalated"]).notNull(),
+  mttrSeconds: int("mttrSeconds"), // mean time to recovery
+  runId: int("runId"), // nullable, links to bot_runs if pipeline-related
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type HealingLog = typeof healingLog.$inferSelect;
+export type InsertHealingLog = typeof healingLog.$inferInsert;
+
+/**
+ * Workspaces — each workspace is an isolated research + design vertical.
+ * Phase A: Foundation
+ */
+export const workspaces = mysqlTable("workspaces", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  name: varchar("name", { length: 100 }).notNull(),
+  slug: varchar("slug", { length: 50 }).notNull().unique(),
+  icon: varchar("icon", { length: 10 }).default("🎯").notNull(),
+  workspaceType: mysqlEnum("workspaceType", ["nyt", "niche_hunter"]).notNull(),
+  ownerId: varchar("ownerId", { length: 64 }).notNull(),
+  nicheProfile: json("nicheProfile").$type<Record<string, unknown>>(),
+  pipelineConfig: json("pipelineConfig").$type<{
+    topicsPerScan: number;
+    conceptsPerTopic: number;
+    winnersToGenerate: number;
+    variationsPerWinner: number;
+  }>(),
+  descriptionTemplate: text("descriptionTemplate"),
+  /** Style Intelligence: computed visual style directives for image generation */
+  styleProfile: json("styleProfile").$type<import("../shared/styleProfile").StyleProfile>(),
+  /** Style Intelligence: user-set override fields that lock specific style parameters */
+  styleOverride: json("styleOverride").$type<Partial<import("../shared/styleProfile").StyleProfile>>(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Workspace = typeof workspaces.$inferSelect;
+export type InsertWorkspace = typeof workspaces.$inferInsert;
+
+/**
+ * Per-workspace encrypted credentials (Shopify token, Etsy keys, etc.)
+ */
+export const workspaceCredentials = mysqlTable("workspace_credentials", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  workspaceId: varchar("workspaceId", { length: 36 }).notNull(),
+  provider: varchar("provider", { length: 50 }).notNull(),
+  credKey: varchar("credKey", { length: 100 }).notNull(),
+  credValue: text("credValue").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type WorkspaceCredential = typeof workspaceCredentials.$inferSelect;
+export type InsertWorkspaceCredential = typeof workspaceCredentials.$inferInsert;
+
+/**
+ * Product groups — a named collection of blank mockup templates (e.g., "Comfort Colors 1717").
+ * Each workspace can have multiple product groups.
+ */
+export const productGroups = mysqlTable("product_groups", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  workspaceId: varchar("workspaceId", { length: 36 }).notNull(),
+  name: varchar("name", { length: 255 }).notNull(),
+  slug: varchar("slug", { length: 100 }).notNull(),
+  description: text("description"),
+  /** Product type label used in listing titles, e.g. "T-Shirt", "Crewneck", "Hoodie" */
+  productType: varchar("productType", { length: 100 }).default("T-Shirt"),
+  compareAtPrice: decimal("compareAtPrice", { precision: 10, scale: 2 }),
+  /** JSON: [{sizes: ["S","M","L","XL"], price: 34.95}, {sizes: ["2XL"], price: 37.95}, ...] */
+  pricingTiers: json("pricingTiers").$type<Array<{ sizes: string[]; price: number }>>(),
+  /** Print zone definition — ratios 0-1 relative to mockup image dimensions */
+  printZone: json("printZone").$type<{ x: number; y: number; width: number; height: number }>(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type ProductGroup = typeof productGroups.$inferSelect;
+export type InsertProductGroup = typeof productGroups.$inferInsert;
+
+/**
+ * Mockup templates — individual blank product photos within a group.
+ * Each row = one shirt color with its photo URL, available sizes, and color metadata.
+ */
+export const mockupTemplates = mysqlTable("mockup_templates", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  groupId: varchar("groupId", { length: 36 }).notNull(),
+  colorName: varchar("colorName", { length: 100 }).notNull(),
+  colorHex: varchar("colorHex", { length: 7 }).notNull().default("#000000"),
+  imageUrl: text("imageUrl").notNull(),
+  imageKey: varchar("imageKey", { length: 500 }).notNull(),
+  /** JSON: ["S","M","L","XL","2XL","3XL"] */
+  availableSizes: json("availableSizes").$type<string[]>().notNull(),
+  sortOrder: int("sortOrder").default(0).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type MockupTemplate = typeof mockupTemplates.$inferSelect;
+export type InsertMockupTemplate = typeof mockupTemplates.$inferInsert;
+
+/**
+ * Niche Hunter scan runs — one row per triggered scan.
+ * Phase E: Niche Hunter
+ */
+export const nicheScanRuns = mysqlTable("niche_scan_runs", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  workspaceId: varchar("workspaceId", { length: 36 }).notNull(),
+  status: mysqlEnum("status", ["running", "completed", "failed"]).default("running").notNull(),
+  /** 0-100 progress percentage */
+  progress: int("progress").default(0).notNull(),
+  patternsFound: int("patternsFound").default(0).notNull(),
+  errorLog: text("errorLog"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  completedAt: timestamp("completedAt"),
+});
+
+export type NicheScanRun = typeof nicheScanRuns.$inferSelect;
+export type InsertNicheScanRun = typeof nicheScanRuns.$inferInsert;
+
+/**
+ * Trend patterns — discovered design patterns from Niche Hunter scans.
+ * Each row = one transferable pattern found from a hot-selling listing.
+ * Phase E: Niche Hunter
+ */
+export const trendPatterns = mysqlTable("trend_patterns", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  workspaceId: varchar("workspaceId", { length: 36 }).notNull(),
+  scanId: varchar("scanId", { length: 36 }),
+  sourcePlatform: varchar("sourcePlatform", { length: 20 }), // 'etsy' | 'reddit'
+  sourceTitle: text("sourceTitle"),
+  /** Direct URL to the real Etsy listing that inspired this pattern */
+  sourceUrl: text("sourceUrl"),
+  sourceImageUrl: text("sourceImageUrl"),
+  sourceSales: int("sourceSales"),
+  /** Short name for this pattern, e.g. "Gorilla + Activity Absurdism" */
+  patternName: varchar("patternName", { length: 200 }).notNull(),
+  /** Layout/composition style, e.g. "centered character, bold text below" */
+  composition: text("composition"),
+  /** Color approach, e.g. "2-color vintage wash" */
+  colorStrategy: text("colorStrategy"),
+  /** Why buyers love it emotionally */
+  emotionalHook: text("emotionalHook"),
+  /** How this pattern can be adapted for the target niche */
+  transferablePattern: text("transferablePattern"),
+  /** LLM explanation of why this works */
+  whyItWorks: text("whyItWorks"),
+  /** Adapted concept idea for the target niche */
+  adaptedConcept: text("adaptedConcept"),
+  /** AI-generated preview image URL for the adapted concept */
+  previewImageUrl: text("previewImageUrl"),
+  /** Ranking score (0-100) based on market fit, originality, niche alignment */
+  score: int("score"),
+  /** LLM explanation of why this pattern scored the way it did */
+  rankReasoning: text("rankReasoning"),
+  /** Source niche category this pattern was adapted FROM, e.g. "Fishing", "Yoga Cats" */
+  sourceCategory: varchar("sourceCategory", { length: 100 }),
+  /** Whether the pun/hook survives the niche transfer (false = auto-dismissed) */
+  transferValid: boolean("transferValid").default(true),
+  /** LLM explanation of why the transfer passed or failed */
+  transferReasoning: text("transferReasoning"),
+  status: mysqlEnum("status", ["discovered", "approved", "dismissed"]).default("discovered").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  // ─── Style-Faithful Pipeline additions ───────────────────────────────────
+  /** Vision LLM style extraction from source Etsy image */
+  sourceStyleJson: json("sourceStyleJson"),
+  /** Generation mode selected by LLM: edit_source | style_reference | prompt_only */
+  adaptationMode: varchar("adaptationMode", { length: 20 }),
+  /** User reason for approving this pattern */
+  approvalReason: text("approvalReason"),
+  /** User reason for dismissing this pattern */
+  rejectionReason: text("rejectionReason"),
+  /** Structured approval tags: great_style, perfect_subject, etc. */
+  approvalTags: json("approvalTags").$type<string[]>(),
+  /** Structured rejection tags: wrong_style, bad_subject, etc. */
+  rejectionTags: json("rejectionTags").$type<string[]>(),
+  /** When the pattern was approved */
+  approvedAt: timestamp("approvedAt"),
+  /** When the pattern was dismissed */
+  dismissedAt: timestamp("dismissedAt"),
+  /** Production-ready transparent PNG, generated only after approval */
+  dtfImageUrl: text("dtfImageUrl"),
+});
+
+export type TrendPattern = typeof trendPatterns.$inferSelect;
+export type InsertTrendPattern = typeof trendPatterns.$inferInsert;
+
+/**
+ * Phase H: Mockup renders — composited design-on-shirt images.
+ * Each row = one composite of a concept variation on a specific mockup template.
+ */
+export const mockupRenders = mysqlTable("mockup_renders", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  conceptId: int("conceptId").notNull(),
+  variationKey: varchar("variationKey", { length: 1 }).notNull(),
+  templateId: varchar("templateId", { length: 36 }).notNull(),
+  compositeUrl: text("compositeUrl").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type MockupRender = typeof mockupRenders.$inferSelect;
+export type InsertMockupRender = typeof mockupRenders.$inferInsert;
+
+/** Phase G: Design revision iteration history */
+export const designRevisions = mysqlTable("design_revisions", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  conceptId: int("conceptId").notNull(),
+  variationKey: varchar("variationKey", { length: 1 }).notNull(),
+  iterationNumber: int("iterationNumber").notNull().default(1),
+  instruction: text("instruction"),
+  referenceImageUrl: text("referenceImageUrl"),
+  resultImageUrl: text("resultImageUrl").notNull(),
+  accepted: boolean("accepted").notNull().default(false),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type DesignRevision = typeof designRevisions.$inferSelect;
+export type InsertDesignRevision = typeof designRevisions.$inferInsert;
+
+/**
+ * Shopify Listings — Phase I: tracks listing drafts created from mockups.
+ * Each row = one listing draft ready for export to Shopify.
+ */
+export const shopifyListings = mysqlTable("shopify_listings", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  workspaceId: varchar("workspaceId", { length: 36 }).notNull(),
+  conceptId: int("conceptId").notNull(),
+  /** The product group used for pricing/sizing */
+  productGroupId: varchar("productGroupId", { length: 36 }).notNull(),
+  title: varchar("title", { length: 255 }).notNull(),
+  description: text("description"),
+  tags: json("tags").$type<string[]>(),
+  /** Price in dollars */
+  price: decimal("price", { precision: 10, scale: 2 }).notNull(),
+  compareAtPrice: decimal("compareAtPrice", { precision: 10, scale: 2 }),
+  /** JSON array of mockup render IDs used as product images */
+  mockupRenderIds: json("mockupRenderIds").$type<string[]>().notNull(),
+  /** Status: draft → ready → exported */
+  status: mysqlEnum("listingStatus", ["draft", "ready", "exported"]).default("draft").notNull(),
+  /** Shopify product ID once exported */
+  shopifyProductId: varchar("shopifyProductId", { length: 64 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type ShopifyListing = typeof shopifyListings.$inferSelect;
+export type InsertShopifyListing = typeof shopifyListings.$inferInsert;

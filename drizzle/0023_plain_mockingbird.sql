@@ -1,0 +1,1 @@
+ALTER TABLE `bot_runs` MODIFY COLUMN `topPickIsbn` varchar(64);

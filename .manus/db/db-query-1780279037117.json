@@ -1,0 +1,25 @@
+{
+  "query": "SELECT id, conceptName, imageUrlA FROM design_concepts WHERE conceptName LIKE '%Dink%' LIMIT 3;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway05.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3aAiEZGvt2NNVee.7507f4d10542 --database 2UiWq4UmupNv3Rr5UypaGc --execute SELECT id, conceptName, imageUrlA FROM design_concepts WHERE conceptName LIKE '%Dink%' LIMIT 3;",
+  "rows": [
+    {
+      "id": "390001",
+      "conceptName": "Dink, Drop, Drive, Dad!",
+      "imageUrlA": "NULL"
+    },
+    {
+      "id": "390005",
+      "conceptName": "Dink Responsibly",
+      "imageUrlA": "NULL"
+    },
+    {
+      "id": "390012",
+      "conceptName": "Live to Dink",
+      "imageUrlA": "NULL"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\tconceptName\timageUrlA\n390001\tDink, Drop, Drive, Dad!\tNULL\n390005\tDink Responsibly\tNULL\n390012\tLive to Dink\tNULL\n",
+  "stderr": "",
+  "execution_time_ms": 258
+}

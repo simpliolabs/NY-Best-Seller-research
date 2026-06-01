@@ -1,0 +1,18 @@
+{
+  "query": "SHOW COLUMNS FROM design_concepts LIKE 'nichePatternId';",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway05.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3aAiEZGvt2NNVee.7507f4d10542 --database 2UiWq4UmupNv3Rr5UypaGc --execute SHOW COLUMNS FROM design_concepts LIKE 'nichePatternId';",
+  "rows": [
+    {
+      "Field": "nichePatternId",
+      "Type": "varchar(36)",
+      "Null": "YES",
+      "Key": "",
+      "Default": "NULL",
+      "Extra": ""
+    }
+  ],
+  "messages": [],
+  "stdout": "Field\tType\tNull\tKey\tDefault\tExtra\nnichePatternId\tvarchar(36)\tYES\t\tNULL\t\n",
+  "stderr": "",
+  "execution_time_ms": 259
+}

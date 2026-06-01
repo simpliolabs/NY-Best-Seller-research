@@ -1,0 +1,1 @@
+ALTER TABLE `design_concepts` ADD `nichePatternId` varchar(36);

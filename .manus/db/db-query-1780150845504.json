@@ -1,0 +1,46 @@
+{
+  "query": "SELECT dc.bookId, b.title, b.runId, COUNT(*) as winners_no_images FROM design_concepts dc JOIN books b ON dc.bookId = b.id WHERE dc.isWinner = 1 AND (dc.imageUrlA IS NULL OR dc.imageUrlA = 'NULL') GROUP BY dc.bookId, b.title, b.runId;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway05.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3aAiEZGvt2NNVee.7507f4d10542 --database 2UiWq4UmupNv3Rr5UypaGc --execute SELECT dc.bookId, b.title, b.runId, COUNT(*) as winners_no_images FROM design_concepts dc JOIN books b ON dc.bookId = b.id WHERE dc.isWinner = 1 AND (dc.imageUrlA IS NULL OR dc.imageUrlA = 'NULL') GROUP BY dc.bookId, b.title, b.runId;",
+  "rows": [
+    {
+      "bookId": "240001",
+      "title": "THE BALLAD OF FALLING DRAGONS",
+      "runId": "360001",
+      "winners_no_images": "2"
+    },
+    {
+      "bookId": "3",
+      "title": "THEO OF GOLDEN",
+      "runId": "360001",
+      "winners_no_images": "2"
+    },
+    {
+      "bookId": "60004",
+      "title": "YESTERYEAR",
+      "runId": "360001",
+      "winners_no_images": "2"
+    },
+    {
+      "bookId": "210001",
+      "title": "A PARADE OF HORRIBLES",
+      "runId": "330001",
+      "winners_no_images": "1"
+    },
+    {
+      "bookId": "60001",
+      "title": "HOPE RISES",
+      "runId": "150009",
+      "winners_no_images": "3"
+    },
+    {
+      "bookId": "2",
+      "title": "PROJECT HAIL MARY",
+      "runId": "360001",
+      "winners_no_images": "7"
+    }
+  ],
+  "messages": [],
+  "stdout": "bookId\ttitle\trunId\twinners_no_images\n240001\tTHE BALLAD OF FALLING DRAGONS\t360001\t2\n3\tTHEO OF GOLDEN\t360001\t2\n60004\tYESTERYEAR\t360001\t2\n210001\tA PARADE OF HORRIBLES\t330001\t1\n60001\tHOPE RISES\t150009\t3\n2\tPROJECT HAIL MARY\t360001\t7\n",
+  "stderr": "",
+  "execution_time_ms": 287
+}

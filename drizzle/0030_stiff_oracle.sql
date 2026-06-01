@@ -1,0 +1,1 @@
+ALTER TABLE `design_concepts` MODIFY COLUMN `style` varchar(512) NOT NULL;

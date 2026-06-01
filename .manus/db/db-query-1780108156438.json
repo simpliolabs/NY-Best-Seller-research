@@ -1,0 +1,30 @@
+{
+  "query": "SELECT id, conceptName, LEFT(imageUrlA, 60) as imageA FROM design_concepts WHERE imageUrlA IS NOT NULL LIMIT 3;\nSELECT id, name FROM product_groups LIMIT 5;\nSELECT COUNT(*) as mockup_template_count FROM mockup_templates;\nSELECT COUNT(*) as mockup_render_count FROM mockup_renders;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway05.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3aAiEZGvt2NNVee.7507f4d10542 --database 2UiWq4UmupNv3Rr5UypaGc --execute SELECT id, conceptName, LEFT(imageUrlA, 60) as imageA FROM design_concepts WHERE imageUrlA IS NOT NULL LIMIT 3;\nSELECT id, name FROM product_groups LIMIT 5;\nSELECT COUNT(*) as mockup_template_count FROM mockup_templates;\nSELECT COUNT(*) as mockup_render_count FROM mockup_renders;",
+  "rows": [
+    {
+      "id": "90001",
+      "conceptName": "Always A Plan B",
+      "imageA": "https://d2xsxph8kpxj0f.cloudfront.net/310519663494566154/2Ui"
+    },
+    {
+      "id": "90002",
+      "conceptName": "Tactical Compass",
+      "imageA": "https://d2xsxph8kpxj0f.cloudfront.net/310519663494566154/2Ui"
+    },
+    {
+      "id": "120010",
+      "conceptName": "Cosmic Friendship",
+      "imageA": "https://d2xsxph8kpxj0f.cloudfront.net/310519663494566154/2Ui"
+    }
+  ],
+  "messages": [
+    "mockup_template_count",
+    "0",
+    "mockup_render_count",
+    "0"
+  ],
+  "stdout": "id\tconceptName\timageA\n90001\tAlways A Plan B\thttps://d2xsxph8kpxj0f.cloudfront.net/310519663494566154/2Ui\n90002\tTactical Compass\thttps://d2xsxph8kpxj0f.cloudfront.net/310519663494566154/2Ui\n120010\tCosmic Friendship\thttps://d2xsxph8kpxj0f.cloudfront.net/310519663494566154/2Ui\nmockup_template_count\n0\nmockup_render_count\n0\n",
+  "stderr": "",
+  "execution_time_ms": 288
+}

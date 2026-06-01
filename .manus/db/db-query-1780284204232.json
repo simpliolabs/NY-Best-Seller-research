@@ -1,0 +1,40 @@
+{
+  "query": "SELECT id, conceptName, LEFT(imageUrlA, 120) as urlA, LEFT(imagePromptA, 200) as promptA FROM design_concepts WHERE imageUrlA IS NOT NULL AND imageUrlA != '' LIMIT 5;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway05.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3aAiEZGvt2NNVee.7507f4d10542 --database 2UiWq4UmupNv3Rr5UypaGc --execute SELECT id, conceptName, LEFT(imageUrlA, 120) as urlA, LEFT(imagePromptA, 200) as promptA FROM design_concepts WHERE imageUrlA IS NOT NULL AND imageUrlA != '' LIMIT 5;",
+  "rows": [
+    {
+      "id": "90001",
+      "conceptName": "Always A Plan B",
+      "urlA": "https://d2xsxph8kpxj0f.cloudfront.net/310519663494566154/2UiWq4UmupNv3Rr5UypaGc/generated/1777334716386_604d1617.png",
+      "promptA": "A flat, clean typographic design for a mug. The background is a solid `#2C3E50` (dark blue). Centered prominently, the text \"Always Has A Plan B...\" is in a bold sans-serif font, `Oswald Bold`, colore"
+    },
+    {
+      "id": "90002",
+      "conceptName": "Tactical Compass",
+      "urlA": "https://d2xsxph8kpxj0f.cloudfront.net/310519663494566154/2UiWq4UmupNv3Rr5UypaGc/generated/1777334834582_f4c02220.png",
+      "promptA": "A clean, minimalist t-shirt design featuring a stylized compass graphic centered on a dark background. The compass points subtly integrate with a target scope reticle, rendered in crisp line art using"
+    },
+    {
+      "id": "120010",
+      "conceptName": "Cosmic Friendship",
+      "urlA": "https://d2xsxph8kpxj0f.cloudfront.net/310519663494566154/2UiWq4UmupNv3Rr5UypaGc/generated/1777350941531_f0ec5fe6.png",
+      "promptA": "A clean, minimal enamel pin design featuring two stylized hands in a gentle 'fist bump' gesture, centered on a circular background. One hand is human-like, the other alien-like with three digits, both"
+    },
+    {
+      "id": "150005",
+      "conceptName": "Espionage Flowchart",
+      "urlA": "https://d2xsxph8kpxj0f.cloudfront.net/310519663494566154/2UiWq4UmupNv3Rr5UypaGc/generated/1777383928300_56e9c19e.png",
+      "promptA": "A clean, minimalist poster design for print-on-demand merchandise. The background is a solid dark charcoal (#36454F). Centered at the top, the headline 'My Thriller Plot Flowchart' is rendered in a mo"
+    },
+    {
+      "id": "150016",
+      "conceptName": "Anachronism Bingo",
+      "urlA": "https://d2xsxph8kpxj0f.cloudfront.net/310519663494566154/2UiWq4UmupNv3Rr5UypaGc/generated/1777383908499_c73212ad.png",
+      "promptA": "A clean, flat, and commercially viable typographic design for a tote bag. The headline 'Anachronism Bingo Champion' is centered prominently in a distressed Baskerville-style serif font, colored #D2B48"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\tconceptName\turlA\tpromptA\n90001\tAlways A Plan B\thttps://d2xsxph8kpxj0f.cloudfront.net/310519663494566154/2UiWq4UmupNv3Rr5UypaGc/generated/1777334716386_604d1617.png\tA flat, clean typographic design for a mug. The background is a solid `#2C3E50` (dark blue). Centered prominently, the text \"Always Has A Plan B...\" is in a bold sans-serif font, `Oswald Bold`, colore\n90002\tTactical Compass\thttps://d2xsxph8kpxj0f.cloudfront.net/310519663494566154/2UiWq4UmupNv3Rr5UypaGc/generated/1777334834582_f4c02220.png\tA clean, minimalist t-shirt design featuring a stylized compass graphic centered on a dark background. The compass points subtly integrate with a target scope reticle, rendered in crisp line art using\n120010\tCosmic Friendship\thttps://d2xsxph8kpxj0f.cloudfront.net/310519663494566154/2UiWq4UmupNv3Rr5UypaGc/generated/1777350941531_f0ec5fe6.png\tA clean, minimal enamel pin design featuring two stylized hands in a gentle 'fist bump' gesture, centered on a circular background. One hand is human-like, the other alien-like with three digits, both\n150005\tEspionage Flowchart\thttps://d2xsxph8kpxj0f.cloudfront.net/310519663494566154/2UiWq4UmupNv3Rr5UypaGc/generated/1777383928300_56e9c19e.png\tA clean, minimalist poster design for print-on-demand merchandise. The background is a solid dark charcoal (#36454F). Centered at the top, the headline 'My Thriller Plot Flowchart' is rendered in a mo\n150016\tAnachronism Bingo\thttps://d2xsxph8kpxj0f.cloudfront.net/310519663494566154/2UiWq4UmupNv3Rr5UypaGc/generated/1777383908499_c73212ad.png\tA clean, flat, and commercially viable typographic design for a tote bag. The headline 'Anachronism Bingo Champion' is centered prominently in a distressed Baskerville-style serif font, colored #D2B48\n",
+  "stderr": "",
+  "execution_time_ms": 264
+}

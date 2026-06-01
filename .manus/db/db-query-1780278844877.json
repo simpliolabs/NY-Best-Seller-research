@@ -1,0 +1,61 @@
+{
+  "query": "SHOW TABLES;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway05.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3aAiEZGvt2NNVee.7507f4d10542 --database 2UiWq4UmupNv3Rr5UypaGc --execute SHOW TABLES;",
+  "rows": [
+    {
+      "Tables_in_2UiWq4UmupNv3Rr5UypaGc": "__drizzle_migrations"
+    },
+    {
+      "Tables_in_2UiWq4UmupNv3Rr5UypaGc": "books"
+    },
+    {
+      "Tables_in_2UiWq4UmupNv3Rr5UypaGc": "bot_runs"
+    },
+    {
+      "Tables_in_2UiWq4UmupNv3Rr5UypaGc": "design_concepts"
+    },
+    {
+      "Tables_in_2UiWq4UmupNv3Rr5UypaGc": "design_revisions"
+    },
+    {
+      "Tables_in_2UiWq4UmupNv3Rr5UypaGc": "healing_log"
+    },
+    {
+      "Tables_in_2UiWq4UmupNv3Rr5UypaGc": "market_validation"
+    },
+    {
+      "Tables_in_2UiWq4UmupNv3Rr5UypaGc": "mockup_renders"
+    },
+    {
+      "Tables_in_2UiWq4UmupNv3Rr5UypaGc": "mockup_templates"
+    },
+    {
+      "Tables_in_2UiWq4UmupNv3Rr5UypaGc": "niche_research"
+    },
+    {
+      "Tables_in_2UiWq4UmupNv3Rr5UypaGc": "niche_scan_runs"
+    },
+    {
+      "Tables_in_2UiWq4UmupNv3Rr5UypaGc": "product_groups"
+    },
+    {
+      "Tables_in_2UiWq4UmupNv3Rr5UypaGc": "shopify_listings"
+    },
+    {
+      "Tables_in_2UiWq4UmupNv3Rr5UypaGc": "trend_patterns"
+    },
+    {
+      "Tables_in_2UiWq4UmupNv3Rr5UypaGc": "users"
+    },
+    {
+      "Tables_in_2UiWq4UmupNv3Rr5UypaGc": "workspace_credentials"
+    },
+    {
+      "Tables_in_2UiWq4UmupNv3Rr5UypaGc": "workspaces"
+    }
+  ],
+  "messages": [],
+  "stdout": "Tables_in_2UiWq4UmupNv3Rr5UypaGc\n__drizzle_migrations\nbooks\nbot_runs\ndesign_concepts\ndesign_revisions\nhealing_log\nmarket_validation\nmockup_renders\nmockup_templates\nniche_research\nniche_scan_runs\nproduct_groups\nshopify_listings\ntrend_patterns\nusers\nworkspace_credentials\nworkspaces\n",
+  "stderr": "",
+  "execution_time_ms": 258
+}

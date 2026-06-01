@@ -1,0 +1,40 @@
+{
+  "query": "SELECT b.id as bookId, b.title, b.runId, r.workspaceId FROM books b JOIN bot_runs r ON b.runId = r.id WHERE b.runId = 450001 LIMIT 5;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway05.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3aAiEZGvt2NNVee.7507f4d10542 --database 2UiWq4UmupNv3Rr5UypaGc --execute SELECT b.id as bookId, b.title, b.runId, r.workspaceId FROM books b JOIN bot_runs r ON b.runId = r.id WHERE b.runId = 450001 LIMIT 5;",
+  "rows": [
+    {
+      "bookId": "2",
+      "title": "PROJECT HAIL MARY",
+      "runId": "450001",
+      "workspaceId": "ws-nyt-default"
+    },
+    {
+      "bookId": "3",
+      "title": "THEO OF GOLDEN",
+      "runId": "450001",
+      "workspaceId": "ws-nyt-default"
+    },
+    {
+      "bookId": "60004",
+      "title": "YESTERYEAR",
+      "runId": "450001",
+      "workspaceId": "ws-nyt-default"
+    },
+    {
+      "bookId": "240001",
+      "title": "THE BALLAD OF FALLING DRAGONS",
+      "runId": "450001",
+      "workspaceId": "ws-nyt-default"
+    },
+    {
+      "bookId": "240002",
+      "title": "IRONWOOD",
+      "runId": "450001",
+      "workspaceId": "ws-nyt-default"
+    }
+  ],
+  "messages": [],
+  "stdout": "bookId\ttitle\trunId\tworkspaceId\n2\tPROJECT HAIL MARY\t450001\tws-nyt-default\n3\tTHEO OF GOLDEN\t450001\tws-nyt-default\n60004\tYESTERYEAR\t450001\tws-nyt-default\n240001\tTHE BALLAD OF FALLING DRAGONS\t450001\tws-nyt-default\n240002\tIRONWOOD\t450001\tws-nyt-default\n",
+  "stderr": "",
+  "execution_time_ms": 258
+}

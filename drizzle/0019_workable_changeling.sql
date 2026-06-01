@@ -1,0 +1,1 @@
+ALTER TABLE `bot_runs` ADD `workspaceId` varchar(36);

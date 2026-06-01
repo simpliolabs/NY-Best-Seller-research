@@ -1,0 +1,55 @@
+{
+  "query": "SELECT id, status, progress, patternsFound, errorLog, createdAt, completedAt FROM niche_scan_runs ORDER BY createdAt DESC LIMIT 5;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway05.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3aAiEZGvt2NNVee.7507f4d10542 --database 2UiWq4UmupNv3Rr5UypaGc --execute SELECT id, status, progress, patternsFound, errorLog, createdAt, completedAt FROM niche_scan_runs ORDER BY createdAt DESC LIMIT 5;",
+  "rows": [
+    {
+      "id": "yOu_V-IcA_djl9QhSR1cF",
+      "status": "running",
+      "progress": "10",
+      "patternsFound": "0",
+      "errorLog": "NULL",
+      "createdAt": "2026-06-01 16:50:20",
+      "completedAt": "NULL"
+    },
+    {
+      "id": "f2hxB8C-uDBtbWx1sQZe1",
+      "status": "completed",
+      "progress": "100",
+      "patternsFound": "6",
+      "errorLog": "NULL",
+      "createdAt": "2026-05-31 15:43:31",
+      "completedAt": "2026-05-31 15:44:48"
+    },
+    {
+      "id": "EQLiH_q6s70_kuO-Wr76N",
+      "status": "completed",
+      "progress": "100",
+      "patternsFound": "6",
+      "errorLog": "NULL",
+      "createdAt": "2026-05-31 15:25:37",
+      "completedAt": "2026-05-31 15:29:51"
+    },
+    {
+      "id": "XSIMnNyUTFtDXZMUUPJdI",
+      "status": "completed",
+      "progress": "100",
+      "patternsFound": "8",
+      "errorLog": "NULL",
+      "createdAt": "2026-05-31 00:44:25",
+      "completedAt": "2026-05-31 00:48:56"
+    },
+    {
+      "id": "RzXPs6SgUf0fZI_r_fskk",
+      "status": "completed",
+      "progress": "100",
+      "patternsFound": "8",
+      "errorLog": "NULL",
+      "createdAt": "2026-05-31 00:12:50",
+      "completedAt": "2026-05-31 00:17:35"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\tstatus\tprogress\tpatternsFound\terrorLog\tcreatedAt\tcompletedAt\nyOu_V-IcA_djl9QhSR1cF\trunning\t10\t0\tNULL\t2026-06-01 16:50:20\tNULL\nf2hxB8C-uDBtbWx1sQZe1\tcompleted\t100\t6\tNULL\t2026-05-31 15:43:31\t2026-05-31 15:44:48\nEQLiH_q6s70_kuO-Wr76N\tcompleted\t100\t6\tNULL\t2026-05-31 15:25:37\t2026-05-31 15:29:51\nXSIMnNyUTFtDXZMUUPJdI\tcompleted\t100\t8\tNULL\t2026-05-31 00:44:25\t2026-05-31 00:48:56\nRzXPs6SgUf0fZI_r_fskk\tcompleted\t100\t8\tNULL\t2026-05-31 00:12:50\t2026-05-31 00:17:35\n",
+  "stderr": "",
+  "execution_time_ms": 269
+}

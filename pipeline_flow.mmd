@@ -1,0 +1,45 @@
+flowchart TD
+    subgraph ONBOARDING["Workspace Onboarding (One-Time)"]
+        A[User describes niche in plain text] --> B[LLM enrichNiche]
+        B --> C[Structured NicheProfile + Deep Cultural Map]
+        C --> D[User reviews Step 3 wizard]
+        D --> E[finalizeWorkspace → DB]
+    end
+
+    subgraph SCAN["Niche Hunter Scan (Per-Run)"]
+        F[Trigger Scan] --> G["Step 1: Etsy API\n(cross-niche categories)\nFallback: LLM simulation"]
+        G --> H["Step 1b: Vision LLM\nStyle Extraction per image"]
+        H --> I["Step 2: Reddit Signal Extraction\n(LLM — no real scraping)"]
+        I --> J["Steps 3+4: deconstructAndAdapt\n(LLM — deconstruct + adapt)"]
+        J --> K["Step 5: rankPatterns\n(LLM — score 0-100)"]
+    end
+
+    subgraph GENERATION["Image Generation (Per-Pattern)"]
+        K --> L{determineAdaptationMode}
+        L -->|sourceImage + styleJSON| M["edit_source\n(edit reference image)"]
+        L -->|sourceImage only| N["style_reference\n(generate with style ref)"]
+        L -->|no image| O["prompt_only\n(pure text prompt)"]
+    end
+
+    subgraph POST_SCAN["Post-Scan Workflow"]
+        M & N & O --> P[Pattern Cards in UI]
+        P --> Q{Human Review}
+        Q -->|Approve| R[Create Library Concept]
+        R --> S[Deferred DTF Extraction]
+        S --> T[Design Studio Revision]
+        T --> U[Mockup Compositor]
+        U --> V[Shopify Listing]
+        Q -->|Dismiss| W[Dismissed — no further action]
+    end
+
+    subgraph DATA_GAPS["⚠️ Broken/Missing Wiring"]
+        X["culturalMap generated at onboarding\nbut NOT shown in wizard UI\nNOT in workspace.update schema\nNOT used by styleIntelligence"]
+        Y["Reddit signals = LLM hallucination\n(no actual Reddit API call)"]
+        Z["LLM fallback = fictional Etsy data\n(when API key fails)"]
+    end
+
+    style DATA_GAPS fill:#fee2e2,stroke:#dc2626
+    style ONBOARDING fill:#f0fdf4,stroke:#16a34a
+    style SCAN fill:#eff6ff,stroke:#2563eb
+    style GENERATION fill:#fef3c7,stroke:#d97706
+    style POST_SCAN fill:#f5f3ff,stroke:#7c3aed

@@ -1,0 +1,1 @@
+ALTER TABLE `design_concepts` MODIFY COLUMN `humorFramework` varchar(512);

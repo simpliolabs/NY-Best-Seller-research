@@ -1,0 +1,28 @@
+{
+  "query": "SELECT id, workspaceId, workspaceId IS NULL as is_null, workspaceId = 'NULL' as is_string_null FROM bot_runs LIMIT 3;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway05.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3aAiEZGvt2NNVee.7507f4d10542 --database 2UiWq4UmupNv3Rr5UypaGc --execute SELECT id, workspaceId, workspaceId IS NULL as is_null, workspaceId = 'NULL' as is_string_null FROM bot_runs LIMIT 3;",
+  "rows": [
+    {
+      "id": "1",
+      "workspaceId": "ws-nyt-default",
+      "is_null": "0",
+      "is_string_null": "0"
+    },
+    {
+      "id": "30001",
+      "workspaceId": "ws-nyt-default",
+      "is_null": "0",
+      "is_string_null": "0"
+    },
+    {
+      "id": "60001",
+      "workspaceId": "ws-nyt-default",
+      "is_null": "0",
+      "is_string_null": "0"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\tworkspaceId\tis_null\tis_string_null\n1\tws-nyt-default\t0\t0\n30001\tws-nyt-default\t0\t0\n60001\tws-nyt-default\t0\t0\n",
+  "stderr": "",
+  "execution_time_ms": 257
+}

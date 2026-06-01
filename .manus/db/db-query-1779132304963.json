@@ -1,0 +1,160 @@
+{
+  "query": "SELECT dc.id, dc.conceptName, dc.trendScore, dc.isWinner, dc.globalRank, dc.imageUrlA, b.isbn, b.title FROM design_concepts dc JOIN books b ON dc.bookId = b.id WHERE dc.runId = 180001 ORDER BY dc.id LIMIT 15;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway05.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3aAiEZGvt2NNVee.7507f4d10542 --database 2UiWq4UmupNv3Rr5UypaGc --execute SELECT dc.id, dc.conceptName, dc.trendScore, dc.isWinner, dc.globalRank, dc.imageUrlA, b.isbn, b.title FROM design_concepts dc JOIN books b ON dc.bookId = b.id WHERE dc.runId = 180001 ORDER BY dc.id LIMIT 15;",
+  "rows": [
+    {
+      "id": "180001",
+      "conceptName": "Second Chance Compass",
+      "trendScore": "NULL",
+      "isWinner": "0",
+      "globalRank": "NULL",
+      "imageUrlA": "NULL",
+      "isbn": "9780593953242",
+      "title": "OUR PERFECT STORM"
+    },
+    {
+      "id": "180002",
+      "conceptName": "Amaze! Amaze! Crew",
+      "trendScore": "NULL",
+      "isWinner": "0",
+      "globalRank": "NULL",
+      "imageUrlA": "NULL",
+      "isbn": "9780593135228",
+      "title": "PROJECT HAIL MARY"
+    },
+    {
+      "id": "180003",
+      "conceptName": "Club of Detectives",
+      "trendScore": "NULL",
+      "isWinner": "0",
+      "globalRank": "NULL",
+      "imageUrlA": "NULL",
+      "isbn": "9780316569828",
+      "title": "26 BEAUTIES"
+    },
+    {
+      "id": "180004",
+      "conceptName": "Anachronisms Are My Aesthetic",
+      "trendScore": "NULL",
+      "isWinner": "0",
+      "globalRank": "NULL",
+      "imageUrlA": "NULL",
+      "isbn": "9780593804216",
+      "title": "YESTERYEAR"
+    },
+    {
+      "id": "180005",
+      "conceptName": "Golden Moment Collector",
+      "trendScore": "NULL",
+      "isWinner": "0",
+      "globalRank": "NULL",
+      "imageUrlA": "NULL",
+      "isbn": "9781668236512",
+      "title": "THEO OF GOLDEN"
+    },
+    {
+      "id": "180006",
+      "conceptName": "Stone Heart Binding",
+      "trendScore": "NULL",
+      "isWinner": "0",
+      "globalRank": "NULL",
+      "imageUrlA": "NULL",
+      "isbn": "9780316601412",
+      "title": "FURY BOUND"
+    },
+    {
+      "id": "180007",
+      "conceptName": "Eridian Star Map",
+      "trendScore": "NULL",
+      "isWinner": "0",
+      "globalRank": "NULL",
+      "imageUrlA": "NULL",
+      "isbn": "9780593135228",
+      "title": "PROJECT HAIL MARY"
+    },
+    {
+      "id": "180008",
+      "conceptName": "Coastal Grandmother Comfort",
+      "trendScore": "NULL",
+      "isWinner": "0",
+      "globalRank": "NULL",
+      "imageUrlA": "NULL",
+      "isbn": "9780593953242",
+      "title": "OUR PERFECT STORM"
+    },
+    {
+      "id": "180009",
+      "conceptName": "SF Noir Silhouette",
+      "trendScore": "NULL",
+      "isWinner": "0",
+      "globalRank": "NULL",
+      "imageUrlA": "NULL",
+      "isbn": "9780316569828",
+      "title": "26 BEAUTIES"
+    },
+    {
+      "id": "180010",
+      "conceptName": "Temporal Collage",
+      "trendScore": "NULL",
+      "isWinner": "0",
+      "globalRank": "NULL",
+      "imageUrlA": "NULL",
+      "isbn": "9780593804216",
+      "title": "YESTERYEAR"
+    },
+    {
+      "id": "180011",
+      "conceptName": "Quiet Observation",
+      "trendScore": "NULL",
+      "isWinner": "0",
+      "globalRank": "NULL",
+      "imageUrlA": "NULL",
+      "isbn": "9781668236512",
+      "title": "THEO OF GOLDEN"
+    },
+    {
+      "id": "180012",
+      "conceptName": "Ancient Fury Tapestry",
+      "trendScore": "NULL",
+      "isWinner": "0",
+      "globalRank": "NULL",
+      "imageUrlA": "NULL",
+      "isbn": "9780316601412",
+      "title": "FURY BOUND"
+    },
+    {
+      "id": "180013",
+      "conceptName": "Quiet Moments Journal",
+      "trendScore": "NULL",
+      "isWinner": "0",
+      "globalRank": "NULL",
+      "imageUrlA": "NULL",
+      "isbn": "9780593953242",
+      "title": "OUR PERFECT STORM"
+    },
+    {
+      "id": "180014",
+      "conceptName": "Engineer's Schematic",
+      "trendScore": "NULL",
+      "isWinner": "0",
+      "globalRank": "NULL",
+      "imageUrlA": "NULL",
+      "isbn": "9780593135228",
+      "title": "PROJECT HAIL MARY"
+    },
+    {
+      "id": "180015",
+      "conceptName": "Forensic Focus",
+      "trendScore": "NULL",
+      "isWinner": "0",
+      "globalRank": "NULL",
+      "imageUrlA": "NULL",
+      "isbn": "9780316569828",
+      "title": "26 BEAUTIES"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\tconceptName\ttrendScore\tisWinner\tglobalRank\timageUrlA\tisbn\ttitle\n180001\tSecond Chance Compass\tNULL\t0\tNULL\tNULL\t9780593953242\tOUR PERFECT STORM\n180002\tAmaze! Amaze! Crew\tNULL\t0\tNULL\tNULL\t9780593135228\tPROJECT HAIL MARY\n180003\tClub of Detectives\tNULL\t0\tNULL\tNULL\t9780316569828\t26 BEAUTIES\n180004\tAnachronisms Are My Aesthetic\tNULL\t0\tNULL\tNULL\t9780593804216\tYESTERYEAR\n180005\tGolden Moment Collector\tNULL\t0\tNULL\tNULL\t9781668236512\tTHEO OF GOLDEN\n180006\tStone Heart Binding\tNULL\t0\tNULL\tNULL\t9780316601412\tFURY BOUND\n180007\tEridian Star Map\tNULL\t0\tNULL\tNULL\t9780593135228\tPROJECT HAIL MARY\n180008\tCoastal Grandmother Comfort\tNULL\t0\tNULL\tNULL\t9780593953242\tOUR PERFECT STORM\n180009\tSF Noir Silhouette\tNULL\t0\tNULL\tNULL\t9780316569828\t26 BEAUTIES\n180010\tTemporal Collage\tNULL\t0\tNULL\tNULL\t9780593804216\tYESTERYEAR\n180011\tQuiet Observation\tNULL\t0\tNULL\tNULL\t9781668236512\tTHEO OF GOLDEN\n180012\tAncient Fury Tapestry\tNULL\t0\tNULL\tNULL\t9780316601412\tFURY BOUND\n180013\tQuiet Moments Journal\tNULL\t0\tNULL\tNULL\t9780593953242\tOUR PERFECT STORM\n180014\tEngineer's Schematic\tNULL\t0\tNULL\tNULL\t9780593135228\tPROJECT HAIL MARY\n180015\tForensic Focus\tNULL\t0\tNULL\tNULL\t9780316569828\t26 BEAUTIES\n",
+  "stderr": "",
+  "execution_time_ms": 263
+}

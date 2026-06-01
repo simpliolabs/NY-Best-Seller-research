@@ -1,0 +1,45 @@
+{
+  "query": "SELECT id, workspaceId, status, currentStage, LEFT(errorLog, 200) as errorSnippet FROM bot_runs ORDER BY id DESC LIMIT 5;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway05.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3aAiEZGvt2NNVee.7507f4d10542 --database 2UiWq4UmupNv3Rr5UypaGc --execute SELECT id, workspaceId, status, currentStage, LEFT(errorLog, 200) as errorSnippet FROM bot_runs ORDER BY id DESC LIMIT 5;",
+  "rows": [
+    {
+      "id": "390001",
+      "workspaceId": "nSkhaBO2_DfJDy23t0lj0",
+      "status": "failed",
+      "currentStage": "1",
+      "errorSnippet": "Failed query: insert into `books` (`id`, `runId`, `title`, `author`, `isbn`, `coverUrl`, `synopsis`, `rank`, `weeksOnList`, `dominantColors`, `mood`, `setting`, `subgenre`, `visualMotifs`, `typography"
+    },
+    {
+      "id": "360001",
+      "workspaceId": "ws-nyt-default",
+      "status": "completed",
+      "currentStage": "7",
+      "errorSnippet": "Pipeline timed out after 420s: Timeout after 420000ms: Overall pipeline execution"
+    },
+    {
+      "id": "330001",
+      "workspaceId": "ws-nyt-default",
+      "status": "completed",
+      "currentStage": "7",
+      "errorSnippet": "NULL"
+    },
+    {
+      "id": "300001",
+      "workspaceId": "ws-nyt-default",
+      "status": "completed",
+      "currentStage": "7",
+      "errorSnippet": "NULL"
+    },
+    {
+      "id": "270002",
+      "workspaceId": "ws-nyt-default",
+      "status": "completed",
+      "currentStage": "7",
+      "errorSnippet": "NULL"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\tworkspaceId\tstatus\tcurrentStage\terrorSnippet\n390001\tnSkhaBO2_DfJDy23t0lj0\tfailed\t1\tFailed query: insert into `books` (`id`, `runId`, `title`, `author`, `isbn`, `coverUrl`, `synopsis`, `rank`, `weeksOnList`, `dominantColors`, `mood`, `setting`, `subgenre`, `visualMotifs`, `typography\n360001\tws-nyt-default\tcompleted\t7\tPipeline timed out after 420s: Timeout after 420000ms: Overall pipeline execution\n330001\tws-nyt-default\tcompleted\t7\tNULL\n300001\tws-nyt-default\tcompleted\t7\tNULL\n270002\tws-nyt-default\tcompleted\t7\tNULL\n",
+  "stderr": "",
+  "execution_time_ms": 259
+}

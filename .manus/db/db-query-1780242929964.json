@@ -1,0 +1,50 @@
+{
+  "query": "SELECT c.id, c.conceptName, c.bookId, c.isWinner, c.globalRank, b.title as bookTitle FROM design_concepts c LEFT JOIN books b ON b.id = c.bookId WHERE c.runId = 390002 AND c.isWinner = 1 LIMIT 10;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway05.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3aAiEZGvt2NNVee.7507f4d10542 --database 2UiWq4UmupNv3Rr5UypaGc --execute SELECT c.id, c.conceptName, c.bookId, c.isWinner, c.globalRank, b.title as bookTitle FROM design_concepts c LEFT JOIN books b ON b.id = c.bookId WHERE c.runId = 390002 AND c.isWinner = 1 LIMIT 10;",
+  "rows": [
+    {
+      "id": "390005",
+      "conceptName": "Dink Responsibly",
+      "bookId": "270001",
+      "isWinner": "1",
+      "globalRank": "5",
+      "bookTitle": "Stay Out of the Kitchen"
+    },
+    {
+      "id": "390021",
+      "conceptName": "Dink Love Language",
+      "bookId": "270002",
+      "isWinner": "1",
+      "globalRank": "1",
+      "bookTitle": "Just Dink It!"
+    },
+    {
+      "id": "390016",
+      "conceptName": "Third Shot Control",
+      "bookId": "270003",
+      "isWinner": "1",
+      "globalRank": "4",
+      "bookTitle": "Third Shot Drop Master"
+    },
+    {
+      "id": "390008",
+      "conceptName": "Strategy Over Swing",
+      "bookId": "270003",
+      "isWinner": "1",
+      "globalRank": "3",
+      "bookTitle": "Third Shot Drop Master"
+    },
+    {
+      "id": "390004",
+      "conceptName": "Embrace the Drop",
+      "bookId": "270003",
+      "isWinner": "1",
+      "globalRank": "2",
+      "bookTitle": "Third Shot Drop Master"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\tconceptName\tbookId\tisWinner\tglobalRank\tbookTitle\n390005\tDink Responsibly\t270001\t1\t5\tStay Out of the Kitchen\n390021\tDink Love Language\t270002\t1\t1\tJust Dink It!\n390016\tThird Shot Control\t270003\t1\t4\tThird Shot Drop Master\n390008\tStrategy Over Swing\t270003\t1\t3\tThird Shot Drop Master\n390004\tEmbrace the Drop\t270003\t1\t2\tThird Shot Drop Master\n",
+  "stderr": "",
+  "execution_time_ms": 273
+}

@@ -1,0 +1,37 @@
+{
+  "query": "SELECT id, status, progress, patternsFound, errorLog, createdAt, completedAt FROM niche_scan_runs ORDER BY createdAt DESC LIMIT 3;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway05.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3aAiEZGvt2NNVee.7507f4d10542 --database 2UiWq4UmupNv3Rr5UypaGc --execute SELECT id, status, progress, patternsFound, errorLog, createdAt, completedAt FROM niche_scan_runs ORDER BY createdAt DESC LIMIT 3;",
+  "rows": [
+    {
+      "id": "WamoAfd35Qw7y1FemrHEZ",
+      "status": "completed",
+      "progress": "100",
+      "patternsFound": "4",
+      "errorLog": "NULL",
+      "createdAt": "2026-06-01 17:22:57",
+      "completedAt": "2026-06-01 17:25:09"
+    },
+    {
+      "id": "2bAW3Qa3jyGTmJdRuOI-j",
+      "status": "completed",
+      "progress": "100",
+      "patternsFound": "8",
+      "errorLog": "NULL",
+      "createdAt": "2026-06-01 16:59:50",
+      "completedAt": "2026-06-01 17:03:35"
+    },
+    {
+      "id": "yOu_V-IcA_djl9QhSR1cF",
+      "status": "failed",
+      "progress": "10",
+      "patternsFound": "0",
+      "errorLog": "Manually terminated - stuck at 10% for 10+ minutes",
+      "createdAt": "2026-06-01 16:50:20",
+      "completedAt": "2026-06-01 16:56:53"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\tstatus\tprogress\tpatternsFound\terrorLog\tcreatedAt\tcompletedAt\nWamoAfd35Qw7y1FemrHEZ\tcompleted\t100\t4\tNULL\t2026-06-01 17:22:57\t2026-06-01 17:25:09\n2bAW3Qa3jyGTmJdRuOI-j\tcompleted\t100\t8\tNULL\t2026-06-01 16:59:50\t2026-06-01 17:03:35\nyOu_V-IcA_djl9QhSR1cF\tfailed\t10\t0\tManually terminated - stuck at 10% for 10+ minutes\t2026-06-01 16:50:20\t2026-06-01 16:56:53\n",
+  "stderr": "",
+  "execution_time_ms": 264
+}

@@ -1,0 +1,20 @@
+{
+  "query": "SELECT id, name, workspaceType FROM workspaces;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway05.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3aAiEZGvt2NNVee.7507f4d10542 --database 2UiWq4UmupNv3Rr5UypaGc --execute SELECT id, name, workspaceType FROM workspaces;",
+  "rows": [
+    {
+      "id": "E_tLy72jT9gml4nlE32th",
+      "name": "Pickleball",
+      "workspaceType": "niche_hunter"
+    },
+    {
+      "id": "ws-nyt-default",
+      "name": "NYT Books",
+      "workspaceType": "nyt"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\tname\tworkspaceType\nE_tLy72jT9gml4nlE32th\tPickleball\tniche_hunter\nws-nyt-default\tNYT Books\tnyt\n",
+  "stderr": "",
+  "execution_time_ms": 272
+}

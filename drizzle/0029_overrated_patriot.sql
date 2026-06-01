@@ -1,0 +1,1 @@
+ALTER TABLE `product_groups` ADD `productType` varchar(100) DEFAULT 'T-Shirt';

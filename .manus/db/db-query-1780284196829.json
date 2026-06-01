@@ -1,0 +1,52 @@
+{
+  "query": "SELECT id, conceptName, imageUrlA, imageUrlB, imageUrlC, LEFT(imagePromptA, 300) as promptPreview FROM design_concepts WHERE conceptName LIKE '%Dink%' OR conceptName LIKE '%dink%' OR conceptName LIKE '%third shot%' OR conceptName LIKE '%love language%' LIMIT 5;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway05.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3aAiEZGvt2NNVee.7507f4d10542 --database 2UiWq4UmupNv3Rr5UypaGc --execute SELECT id, conceptName, imageUrlA, imageUrlB, imageUrlC, LEFT(imagePromptA, 300) as promptPreview FROM design_concepts WHERE conceptName LIKE '%Dink%' OR conceptName LIKE '%dink%' OR conceptName LIKE '%third shot%' OR conceptName LIKE '%love language%' LIMIT 5;",
+  "rows": [
+    {
+      "id": "390001",
+      "conceptName": "Dink, Drop, Drive, Dad!",
+      "imageUrlA": "NULL",
+      "imageUrlB": "NULL",
+      "imageUrlC": "NULL",
+      "promptPreview": "NULL"
+    },
+    {
+      "id": "390002",
+      "conceptName": "Pickleball Dad's Love Language",
+      "imageUrlA": "NULL",
+      "imageUrlB": "NULL",
+      "imageUrlC": "NULL",
+      "promptPreview": "NULL"
+    },
+    {
+      "id": "390005",
+      "conceptName": "Dink Responsibly",
+      "imageUrlA": "NULL",
+      "imageUrlB": "NULL",
+      "imageUrlC": "NULL",
+      "promptPreview": "Ultra-detailed 4-color t-shirt graphic design for DTF transfer printing, isolated graphic with open negative space throughout, "
+    },
+    {
+      "id": "390011",
+      "conceptName": "Third Shot Religion",
+      "imageUrlA": "NULL",
+      "imageUrlB": "NULL",
+      "imageUrlC": "NULL",
+      "promptPreview": "NULL"
+    },
+    {
+      "id": "390012",
+      "conceptName": "Live to Dink",
+      "imageUrlA": "NULL",
+      "imageUrlB": "NULL",
+      "imageUrlC": "NULL",
+      "promptPreview": "NULL"
+    }
+  ],
+  "messages": [
+    "pickleball world cover art aesthetic — bold graphic design with pop art influences style: clean lines, vibrant color blocking, high contrast, energetic and spirited visual "
+  ],
+  "stdout": "id\tconceptName\timageUrlA\timageUrlB\timageUrlC\tpromptPreview\n390001\tDink, Drop, Drive, Dad!\tNULL\tNULL\tNULL\tNULL\n390002\tPickleball Dad's Love Language\tNULL\tNULL\tNULL\tNULL\n390005\tDink Responsibly\tNULL\tNULL\tNULL\tUltra-detailed 4-color t-shirt graphic design for DTF transfer printing, isolated graphic with open negative space throughout, \npickleball world cover art aesthetic — bold graphic design with pop art influences style: clean lines, vibrant color blocking, high contrast, energetic and spirited visual \n390011\tThird Shot Religion\tNULL\tNULL\tNULL\tNULL\n390012\tLive to Dink\tNULL\tNULL\tNULL\tNULL\n",
+  "stderr": "",
+  "execution_time_ms": 259
+}

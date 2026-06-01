@@ -1,0 +1,120 @@
+{
+  "query": "SELECT id, status, currentStage, stageLabel, imagesGenerated, booksProcessed, errorLog, createdAt, completedAt FROM bot_runs ORDER BY id DESC LIMIT 10;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway05.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3aAiEZGvt2NNVee.7507f4d10542 --database 2UiWq4UmupNv3Rr5UypaGc --execute SELECT id, status, currentStage, stageLabel, imagesGenerated, booksProcessed, errorLog, createdAt, completedAt FROM bot_runs ORDER BY id DESC LIMIT 10;",
+  "rows": [
+    {
+      "id": "180001",
+      "status": "completed",
+      "currentStage": "7",
+      "stageLabel": "Complete",
+      "imagesGenerated": "0",
+      "booksProcessed": "6",
+      "errorLog": "NULL",
+      "createdAt": "2026-05-18 15:56:26",
+      "completedAt": "2026-05-18 15:58:09"
+    },
+    {
+      "id": "150009",
+      "status": "completed",
+      "currentStage": "7",
+      "stageLabel": "Complete",
+      "imagesGenerated": "15",
+      "booksProcessed": "6",
+      "errorLog": "NULL",
+      "createdAt": "2026-04-28 20:50:44",
+      "completedAt": "2026-04-28 20:55:02"
+    },
+    {
+      "id": "150008",
+      "status": "completed",
+      "currentStage": "7",
+      "stageLabel": "Complete",
+      "imagesGenerated": "15",
+      "booksProcessed": "6",
+      "errorLog": "NULL",
+      "createdAt": "2026-04-28 20:22:39",
+      "completedAt": "2026-04-28 20:28:24"
+    },
+    {
+      "id": "150007",
+      "status": "failed",
+      "currentStage": "6",
+      "stageLabel": "Generating design images for top concepts...",
+      "imagesGenerated": "0",
+      "booksProcessed": "6",
+      "errorLog": "Automatically recovered: server restarted while pipeline was running.",
+      "createdAt": "2026-04-28 19:56:28",
+      "completedAt": "2026-04-28 20:16:54"
+    },
+    {
+      "id": "150006",
+      "status": "completed",
+      "currentStage": "7",
+      "stageLabel": "Complete",
+      "imagesGenerated": "15",
+      "booksProcessed": "6",
+      "errorLog": "NULL",
+      "createdAt": "2026-04-28 19:26:56",
+      "completedAt": "2026-04-28 19:31:19"
+    },
+    {
+      "id": "150005",
+      "status": "completed",
+      "currentStage": "7",
+      "stageLabel": "Complete",
+      "imagesGenerated": "15",
+      "booksProcessed": "6",
+      "errorLog": "NULL",
+      "createdAt": "2026-04-28 18:24:38",
+      "completedAt": "2026-04-28 18:26:47"
+    },
+    {
+      "id": "150004",
+      "status": "failed",
+      "currentStage": "2",
+      "stageLabel": "Scraping fan forums (Goodreads, StoryGraph, Reddit, Fable, Book Riot)...",
+      "imagesGenerated": "0",
+      "booksProcessed": "0",
+      "errorLog": "Automatically recovered: run was stuck in \"running\" state for over 0.016666666666666666 minutes.",
+      "createdAt": "2026-04-28 16:51:22",
+      "completedAt": "2026-04-28 17:00:39"
+    },
+    {
+      "id": "150003",
+      "status": "completed",
+      "currentStage": "7",
+      "stageLabel": "Complete",
+      "imagesGenerated": "15",
+      "booksProcessed": "6",
+      "errorLog": "NULL",
+      "createdAt": "2026-04-28 15:52:57",
+      "completedAt": "2026-04-28 15:55:29"
+    },
+    {
+      "id": "150002",
+      "status": "failed",
+      "currentStage": "6",
+      "stageLabel": "Generating design images for top concepts...",
+      "imagesGenerated": "0",
+      "booksProcessed": "0",
+      "errorLog": "Automatically recovered: run was stuck in \"running\" state for over 0.016666666666666666 minutes.",
+      "createdAt": "2026-04-28 15:25:49",
+      "completedAt": "2026-04-28 15:40:27"
+    },
+    {
+      "id": "150001",
+      "status": "completed",
+      "currentStage": "7",
+      "stageLabel": "Complete",
+      "imagesGenerated": "2",
+      "booksProcessed": "6",
+      "errorLog": "Pipeline timed out after 300s: Timeout after 300000ms: Overall pipeline execution",
+      "createdAt": "2026-04-28 13:40:25",
+      "completedAt": "2026-04-28 13:45:54"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\tstatus\tcurrentStage\tstageLabel\timagesGenerated\tbooksProcessed\terrorLog\tcreatedAt\tcompletedAt\n180001\tcompleted\t7\tComplete\t0\t6\tNULL\t2026-05-18 15:56:26\t2026-05-18 15:58:09\n150009\tcompleted\t7\tComplete\t15\t6\tNULL\t2026-04-28 20:50:44\t2026-04-28 20:55:02\n150008\tcompleted\t7\tComplete\t15\t6\tNULL\t2026-04-28 20:22:39\t2026-04-28 20:28:24\n150007\tfailed\t6\tGenerating design images for top concepts...\t0\t6\tAutomatically recovered: server restarted while pipeline was running.\t2026-04-28 19:56:28\t2026-04-28 20:16:54\n150006\tcompleted\t7\tComplete\t15\t6\tNULL\t2026-04-28 19:26:56\t2026-04-28 19:31:19\n150005\tcompleted\t7\tComplete\t15\t6\tNULL\t2026-04-28 18:24:38\t2026-04-28 18:26:47\n150004\tfailed\t2\tScraping fan forums (Goodreads, StoryGraph, Reddit, Fable, Book Riot)...\t0\t0\tAutomatically recovered: run was stuck in \"running\" state for over 0.016666666666666666 minutes.\t2026-04-28 16:51:22\t2026-04-28 17:00:39\n150003\tcompleted\t7\tComplete\t15\t6\tNULL\t2026-04-28 15:52:57\t2026-04-28 15:55:29\n150002\tfailed\t6\tGenerating design images for top concepts...\t0\t0\tAutomatically recovered: run was stuck in \"running\" state for over 0.016666666666666666 minutes.\t2026-04-28 15:25:49\t2026-04-28 15:40:27\n150001\tcompleted\t7\tComplete\t2\t6\tPipeline timed out after 300s: Timeout after 300000ms: Overall pipeline execution\t2026-04-28 13:40:25\t2026-04-28 13:45:54\n",
+  "stderr": "",
+  "execution_time_ms": 261
+}

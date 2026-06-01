@@ -1,0 +1,9 @@
+{
+  "query": "ALTER TABLE `trend_patterns` ADD `sourceStyleJson` json;\nALTER TABLE `trend_patterns` ADD `adaptationMode` varchar(20);\nALTER TABLE `trend_patterns` ADD `approvalReason` text;\nALTER TABLE `trend_patterns` ADD `rejectionReason` text;\nALTER TABLE `trend_patterns` ADD `approvalTags` json;\nALTER TABLE `trend_patterns` ADD `rejectionTags` json;\nALTER TABLE `trend_patterns` ADD `approvedAt` timestamp;\nALTER TABLE `trend_patterns` ADD `dismissedAt` timestamp;\nALTER TABLE `trend_patterns` ADD `dtfImageUrl` text;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway05.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3aAiEZGvt2NNVee.7507f4d10542 --database 2UiWq4UmupNv3Rr5UypaGc --execute ALTER TABLE `trend_patterns` ADD `sourceStyleJson` json;\nALTER TABLE `trend_patterns` ADD `adaptationMode` varchar(20);\nALTER TABLE `trend_patterns` ADD `approvalReason` text;\nALTER TABLE `trend_patterns` ADD `rejectionReason` text;\nALTER TABLE `trend_patterns` ADD `approvalTags` json;\nALTER TABLE `trend_patterns` ADD `rejectionTags` json;\nALTER TABLE `trend_patterns` ADD `approvedAt` timestamp;\nALTER TABLE `trend_patterns` ADD `dismissedAt` timestamp;\nALTER TABLE `trend_patterns` ADD `dtfImageUrl` text;",
+  "rows": [],
+  "messages": [],
+  "stdout": "",
+  "stderr": "",
+  "execution_time_ms": 2462
+}

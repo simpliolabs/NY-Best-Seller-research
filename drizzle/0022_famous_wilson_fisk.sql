@@ -1,0 +1,1 @@
+ALTER TABLE `books` MODIFY COLUMN `isbn` varchar(64);

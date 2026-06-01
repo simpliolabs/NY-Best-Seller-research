@@ -1,0 +1,9 @@
+{
+  "query": "CREATE TABLE `design_concepts` (\n\t`id` int AUTO_INCREMENT NOT NULL,\n\t`bookId` int NOT NULL,\n\t`runId` int NOT NULL,\n\t`conceptName` varchar(255) NOT NULL,\n\t`format` varchar(100) NOT NULL,\n\t`style` varchar(100) NOT NULL,\n\t`headline` varchar(512),\n\t`subtext` varchar(512),\n\t`colorPalette` json,\n\t`layoutDescription` text,\n\t`fontSuggestion` varchar(255),\n\t`copyrightSafe` boolean NOT NULL DEFAULT true,\n\t`isFavorite` boolean NOT NULL DEFAULT false,\n\t`createdAt` timestamp NOT NULL DEFAULT (now()),\n\tCONSTRAINT `design_concepts_id` PRIMARY KEY(`id`)\n);",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway05.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3aAiEZGvt2NNVee.7507f4d10542 --database 2UiWq4UmupNv3Rr5UypaGc --execute CREATE TABLE `design_concepts` (\n\t`id` int AUTO_INCREMENT NOT NULL,\n\t`bookId` int NOT NULL,\n\t`runId` int NOT NULL,\n\t`conceptName` varchar(255) NOT NULL,\n\t`format` varchar(100) NOT NULL,\n\t`style` varchar(100) NOT NULL,\n\t`headline` varchar(512),\n\t`subtext` varchar(512),\n\t`colorPalette` json,\n\t`layoutDescription` text,\n\t`fontSuggestion` varchar(255),\n\t`copyrightSafe` boolean NOT NULL DEFAULT true,\n\t`isFavorite` boolean NOT NULL DEFAULT false,\n\t`createdAt` timestamp NOT NULL DEFAULT (now()),\n\tCONSTRAINT `design_concepts_id` PRIMARY KEY(`id`)\n);",
+  "rows": [],
+  "messages": [],
+  "stdout": "",
+  "stderr": "",
+  "execution_time_ms": 438
+}
