@@ -147,17 +147,37 @@ The compositor (`server/mockupCompositor.ts`) uses TOP-CENTER anchoring:
 ```typescript
 // line 420-422
 const offsetX = zoneX + Math.round((zoneW - finalW) / 2);  // Horizontally centered ✓
-const offsetY = zoneY;  // TOP anchor — NOT vertically centered ✗
+const offsetY = zoneY;  // TOP anchor — pins design to top of zone
 ```
-
-The design is pinned to the TOP of the print zone, not centered vertically. The comment says "this matches real DTF placement where designs sit at the top of the print area" — but the owner reports it still doesn't look right.
 
 The `DEFAULT_PRINT_ZONE` is:
 ```typescript
 { x: 0.22, y: 0.15, width: 0.56, height: 0.60 }
 ```
 
-This means the design starts at 15% from the top of the mockup image and fills a zone that's 60% of the height. With TOP anchoring, a short/wide design sits at the top of the zone with empty space below. But vertically centering inside a 0.60-tall zone would push the print toward the navel — worse. Real chest prints ARE top-anchored; the actual bug is zone geometry (~0.30–0.35 height, tuned y-origin) and/or size-based placement, not the anchor direction.
+**The real problem is not the anchor direction — it's the zone geometry and transparent padding:**
+
+1. **The zone is too tall (0.60 = 60% of shirt height).** A realistic chest print zone is ~0.30–0.35. With a 0.60-tall zone and top-anchor, the contain-fit math shrinks the design to fit the width, leaving massive empty space below — making it look off-center.
+
+2. **The PNG has transparent padding around the actual ink.** The compositor scales the full PNG (including transparent border), so "the design" appears smaller than it should. The fix: trim the transparent bounding box before scaling.
+
+3. **`DEFAULT_PRINT_ZONE` is a hardcoded shirt-chest assumption.** It should not exist. The per-template saved zone (from the Print Zone editor UI) should be the single source of truth.
+
+**The correct algorithm is 6 product-agnostic lines:**
+
+```
+1. Trim the design's transparent bounding box  ← "the design" = the ink, not the padding
+2. scale = min(zoneW / inkW, zoneH / inkH)      ← contain-fit
+3. offsetX = zoneX + (zoneW - finalW) / 2        ← center X
+4. offsetY = zoneY + (zoneH - finalH) / 2        ← center Y
+```
+
+Delete `DEFAULT_PRINT_ZONE` and the top-anchor. The saved per-template zone becomes the single source of truth. "Fill the canvas" = contain-fit inside that rectangle.
+
+**Why this matters for multi-product (mugs, totes, hats):**  
+The Print Zone editor already exists in the UI. A mug is just a template with its own saved rectangle (wide + short instead of tall). With center-contain, the same 6 lines composite a mug, a tote, a hat — zero new placement code. But there's a deeper catch: placement generalizes for free, but the **design itself doesn't transfer aspect ratios**. A portrait chest design contain-fit into a landscape mug band shrinks to unreadable. Real mug support isn't a compositor change — it's a generation change (the design must be laid out for the mug's shape).
+
+**Important distinction:** "Fill the zone" is correct for a mockup preview. It is NOT how you'd build the actual print file. Production scales to real-world inches (12" chest, 3.8" left-chest, 9"×3.5" mug wrap), not % rectangles. Keep zone-fit for previews; don't let it leak into DTF export.
 
 **Additional compositor issues:**
 - Background removal sometimes fails (colored backgrounds, textured backgrounds)
@@ -289,7 +309,7 @@ This is hardcoded in the system prompt. If someone creates a workspace for hikin
 1. **Source quality** — Can't reliably get actual best sellers from Etsy (API ≠ web search)
 2. **Concept adaptation** — One LLM prompt tries to do too much and fails on a large fraction of patterns
 3. **Image generation** — Edit mode preserves style/layout pixel-to-pixel; the failure is content control (subject drift, injected elements, copied signatures) — no masking, no QA gate
-4. **Mockup placement** — Zone geometry too tall (0.60 height); design sits correctly at top-anchor but zone pushes it too low on the shirt
+4. **Mockup placement** — Hardcoded shirt-chest zone (0.60 height) + top-anchor + un-trimmed transparent padding = design looks off-center. Fix: trim PNG, center-contain inside per-template saved zone, delete DEFAULT_PRINT_ZONE
 
 **Plus one phantom feature:**
 
@@ -301,5 +321,5 @@ This is hardcoded in the system prompt. If someone creates a workspace for hikin
 - **Sourcing:** FIRST fail loud + label live vs simulated (silent fiction is the real killer — and why image gen has nothing to edit). The web "Bestseller" badge is a personalized proxy, not sales — a hint, not ground truth. Add per-scan instrumentation (HTTP status, result count, which mode fired).
 - **Adaptation:** Constrain the LLM with cultural map + few-shot examples + automated vision QA. Can't be a pure lookup (long tail of arbitrary sources), but the map provides guardrails.
 - **Image generation:** KEEP editing; do NOT generate from scratch (produces "way off" style). Fix control via masked/regional editing + text as a separate composited layer + a vision-QA gate that rejects content drift.
-- **Mockup:** Fix the zone geometry (height ~0.30–0.35, tune y-origin to match real chest placement) or implement size-based top-pin logic — not the anchor direction.
+- **Mockup:** Delete `DEFAULT_PRINT_ZONE` and top-anchor. Trim transparent padding from the design PNG, then center-contain inside the per-template saved zone. This makes the compositor product-agnostic (mug, tote, hat = different zone rectangles, same 6 lines of code). Keep zone-fit for previews only; production DTF export must use real-world inch dimensions.
 - The cultural map needs to be surfaced in the UI, preserved on update, and actually used as the primary intelligence for subject swaps.
