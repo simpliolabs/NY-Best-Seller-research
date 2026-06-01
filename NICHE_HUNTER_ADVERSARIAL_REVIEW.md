@@ -380,6 +380,8 @@ NEVER adapt to another sport (soccer, basketball, tennis, etc.).
 
 This is hardcoded in the system prompt. If someone creates a workspace for hiking or fishing, the system will still force everything to pickleball.
 
+**Action:** Template the target niche from `nicheProfile.summary` / workspace niche field; remove the literal "PICKLEBALL" string. Acceptable as-is only while pickleball is the sole workspace — but the moment a second niche is created, this silently corrupts every scan.
+
 ---
 
 ## Summary For The Reviewer
@@ -402,4 +404,4 @@ This is hardcoded in the system prompt. If someone creates a workspace for hikin
 - **Adaptation:** Constrain the LLM with cultural map + few-shot examples + automated vision QA. Can't be a pure lookup (long tail of arbitrary sources), but the map provides guardrails.
 - **Image generation:** KEEP editing; do NOT generate from scratch (produces "way off" style). Fix control via masked/regional editing + text as a separate composited layer + a vision-QA gate that rejects content drift.
 - **Mockup:** Delete `DEFAULT_PRINT_ZONE` and top-anchor. Trim transparent padding from the design PNG, then center-contain inside the per-template saved zone. This makes the compositor product-agnostic (mug, tote, hat = different zone rectangles, same 6 lines of code). Keep zone-fit for previews only; production DTF export must use real-world inch dimensions.
-- The cultural map needs to be surfaced in the UI, preserved on update, and actually used as the primary intelligence for subject swaps.
+- The cultural map needs to be surfaced in the UI, preserved on update, and actually used as the primary intelligence for subject swaps — to MAP elements the source already has (Bigfoot→Llama), never to inject ones it doesn't (Cats→pilates).
