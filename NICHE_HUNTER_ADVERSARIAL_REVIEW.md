@@ -196,7 +196,7 @@ The Print Zone editor already exists in the UI. A mug is just a template with it
 
 ### What it is
 
-During workspace onboarding (`server/onboardingRouter.ts` lines 97-280), the LLM is told the cultural map is "the most important section" and must produce a structured object with 9 categories:
+During workspace onboarding (`server/onboardingRouter.ts` lines 97-280), the system prompt tells the LLM: `"CULTURAL MAP — This is the most important section. Go deep. Think like an insider:"` (verbatim, line 128). It must produce a structured object with 9 categories:
 
 | Category | Schema field | Example for Pickleball |
 |----------|-------------|----------------------|
@@ -265,7 +265,7 @@ Used as "Cultural context / inside jokes" in the ranking prompt. Only catchphras
 ### What DOESN'T use it at all
 
 - **`styleIntelligence.ts`** — computes style directives from summary, audience, designStyles, crossNicheCategories, etsyKeywords, avoidTopics. Never reads culturalMap.
-- **`buildGenerationPayload()` (the image generation prompt)** — receives `adaptedConcept` (a string) and `styleJSON`. The cultural map is not passed to image generation.
+- **`buildGenerationPayload()` (the image generation prompt)** — receives `adaptedConcept` (a string) and `styleJSON`. The cultural map is not passed to image generation. (Correctly — the swap decision is already baked into `adaptedConcept`; this is not a defect.)
 - **`pipeline.ts` (NYT/book pipeline)** — uses legacy `culturalMoments` (flat strings), not `culturalMap`.
 
 ### How it gets lost
@@ -282,7 +282,16 @@ The system generates a rich 9-category cultural map, tells the LLM it's "the mos
 - Explicitly forbids using its primary value (mascot swaps / transferable concepts)
 - Silently deletes it on any profile update
 
-**What it should do:** The `transferableVisualConcepts` field (Bigfoot→Llama, yoga grid→pickleball grid) should be the PRIMARY input to the subject-swap decision. The constraint should be inverted: "USE the cultural map's transferable concepts for subject mapping; do NOT inject elements that have no mapping in the map." The map should be visible, editable, and preserved.
+**What it should do:** `transferableVisualConcepts` should be the PRIMARY input to the subject-swap decision — but the constraint must gate on the **source**, not the map, or it reintroduces Failure #5. The code currently lumps two operations together:
+
+| Operation | Example | Verdict |
+|-----------|---------|--------|
+| **Replacement / mapping** | Source HAS Bigfoot → swap to Llama | ✅ GOOD — this is a 1:1 swap, the map's whole point |
+| **Injection** | Source has NO animal (pilates) → ADD Cats | ❌ BAD — this is Failure #5; note Cats WAS in the map, so "don't inject what's not in the map" wouldn't have caught it |
+
+**Correct rule:** "Swap only elements that exist in the source; map them via `transferableVisualConcepts`. Never add an element — even one in the map — that has no source counterpart."
+
+The current `NO ELEMENT INJECTION` constraint is too blunt: it blocks injection AND the legitimate replacement that is the map's whole point. Split the two: allow mapping of existing elements, forbid addition of absent ones. The map should also be visible, editable, and preserved.
 
 ---
 
@@ -384,7 +393,7 @@ This is hardcoded in the system prompt. If someone creates a workspace for hikin
 
 **Plus one phantom feature:**
 
-5. **Deep Cultural Map** — Generated but invisible, dropped on update, ignored by style system, and explicitly disabled in the one place it's used
+5. **Deep Cultural Map** — Generated but invisible, dropped on update, ignored by style system, flattened to strings in two places, and explicitly disabled in the one place that could do real swaps (`deconstructAndAdapt`)
 
 **Failure attribution:** The 80% figures are invented and the steps are a dependency chain, not independent coin flips. Failure #3 is a fixed UI bug → 8 real pipeline failures. Failures cluster: source quality (#1, #4, #7) and adaptation (#1, #2, #5, #8, #9) account for nearly all of them; image-generation content drift = 1 (#6); mockup = 0. Priority: **source ≫ adaptation > image-control ≫ mockup**.
 
