@@ -120,11 +120,11 @@ Edit this t-shirt design. HARD RULES — you MUST follow ALL of these:
 ...
 ```
 
-**But current AI image editors (DALL-E, Gemini, etc.) cannot do pixel-level layout-preserving edits.** They interpret "edit this image" as "generate a new image inspired by this one." The output:
+**Editing the source image DOES preserve style pixel-to-pixel — that is the part that works.** What editing fails at is CONTENT CONTROL: because the model re-synthesizes the whole canvas without a mask, the subject swap drifts and unwanted elements/text/signatures bleed through.
+
+Without a mask, a global edit re-renders the whole canvas, so the CONTENT drifts (style stays fine). The fix is regional/masked editing — or crop-edit-composite — plus rendering text as a separate composited layer, NOT abandoning editing. Observed content failures:
 
 - Changes the layout entirely
-- Changes the art style
-- Changes the color palette
 - Adds elements that weren't there
 - Copies signatures/watermarks from the source (Failure #6)
 
@@ -132,7 +132,7 @@ The `style_reference` mode is even worse — it just says "inspired by the visua
 
 The `prompt_only` mode (LLM fallback path) has no source image at all — it's pure text-to-image with no style constraint.
 
-**None of these modes can reliably produce a "same layout, different subject" result.**
+Of the three, only `edit_source` preserves style and layout reliably — its weakness is content control (subject drift, injected elements, copied signatures), which is fixable with masking + a separate text layer. `style_reference` and `prompt_only` give the generator too much freedom and should be labeled lower-quality fallbacks.
 
 ---
 
@@ -157,7 +157,7 @@ The `DEFAULT_PRINT_ZONE` is:
 { x: 0.22, y: 0.15, width: 0.56, height: 0.60 }
 ```
 
-This means the design starts at 15% from the top of the mockup image and fills a zone that's 60% of the height. With TOP anchoring, a short/wide design will sit at the very top of this zone with empty space below — looking off-center on the shirt.
+This means the design starts at 15% from the top of the mockup image and fills a zone that's 60% of the height. With TOP anchoring, a short/wide design sits at the top of the zone with empty space below. But vertically centering inside a 0.60-tall zone would push the print toward the navel — worse. Real chest prints ARE top-anchored; the actual bug is zone geometry (~0.30–0.35 height, tuned y-origin) and/or size-based placement, not the anchor direction.
 
 **Additional compositor issues:**
 - Background removal sometimes fails (colored backgrounds, textured backgrounds)
@@ -218,7 +218,7 @@ The LLM generates "recurringPhrases", "insideJokes", "communityLanguage", "buyin
 |---|--------|----------------|-----|
 | 1 | [Tennis shirt](https://www.etsy.com/listing/1238977454) | Not a best seller, added "THIRD SHOT DROP" text, changed design completely | API `is_best_seller` flag unreliable + LLM added text not in source |
 | 2 | Bowling source | Adapted to SOCCER instead of pickleball | LLM ignored target niche |
-| 3 | All approved items | DTF "spin" spinner showing on items not approved for DTF | UI state bug (fixed) |
+| 3 | All approved items | DTF "spin" spinner showing on items not approved for DTF | UI state bug (fixed) — already fixed and unrelated to the pipeline; exclude from the failure rate (8 real failures, not 9) |
 | 4 | [Custom golf shirt](https://www.etsy.com/listing/4469238276) | Customizable product pulled, output was "Custom PICKLEBALL shirt" | No title filter for "customised" |
 | 5 | Pilates source | Added "Cats" to the design — would have been PERFECT without it | Cultural map mascots injected |
 | 6 | [Punk tennis shirt](https://www.etsy.com/listing/4297400231) | Copied the bottom signature/watermark from source | No prohibition on copying signatures |
@@ -235,8 +235,8 @@ The LLM generates "recurringPhrases", "insideJokes", "communityLanguage", "buyin
 1. **Scrape Etsy web search** (not just API) with `is_best_seller=true` filter → get listings that actually have the Bestseller badge
 2. **Download the product photo** for each best seller
 3. **Vision LLM extracts style** (this part works OK — `styleExtractor.ts`)
-4. **Deterministic subject swap** using the cultural map: "Source has bigfoot → target gets llama. Source has 5 yoga poses → target gets 5 pickleball poses. Source has text 'Hiking Society' → target gets text 'Dinking Society'." This should be a LOOKUP, not a creative generation.
-5. **Generate image** with the source image as a strict reference + the deterministic swap instructions
+4. **Constrained subject swap (LLM + cultural map)** using the cultural map for guidance (bigfoot → llama, yoga grid → pickleball grid). This is NOT a deterministic lookup — the map holds only a handful of mascots, while real sources are arbitrary (a goose, a bear, a slogan) with no map entry. An LLM must still decide each mapping; the cultural map CONSTRAINS that decision with examples, it does not replace it.
+5. **Generate image** with the source image as a strict reference + the constrained swap instructions — NOTE: style comes from the reference IMAGE, not the 20-field styleJSON; the JSON is metadata for QA/filtering, not a generation input
 6. **Automated QA** — Vision LLM checks: does the output match the source layout? Is the subject actually pickleball? Is there text that shouldn't be there?
 7. **Human review** of QA-passed designs only
 
@@ -295,11 +295,11 @@ This is hardcoded in the system prompt. If someone creates a workspace for hikin
 
 5. **Deep Cultural Map** — Generated but invisible, dropped on update, ignored by style system, and explicitly disabled in the one place it's used
 
-**The compound effect:** Even if each step were 80% reliable, the pipeline chains 4 steps: 0.8 × 0.8 × 0.8 × 0.8 = 41% end-to-end success rate. The actual observed rate is worse — 9 failures out of ~16 patterns in one scan = ~44% failure rate.
+**Failure attribution:** The 80% figures are invented and the steps are a dependency chain, not independent coin flips. Failure #3 is a fixed UI bug → 8 real pipeline failures. Failures cluster: source quality (#1, #4, #7) and adaptation (#1, #2, #5, #8, #9) account for nearly all of them; image-generation content drift = 1 (#6); mockup = 0. Priority: **source ≫ adaptation > image-control ≫ mockup**.
 
 **What needs to happen:**
-- Etsy sourcing needs to use web scraping or a different API approach that actually returns Bestseller-badge listings
-- The concept adaptation needs to be split into deterministic lookup (cultural map) + minimal LLM assistance, not one giant creative prompt
-- Image generation needs a fundamentally different approach (possibly: generate from scratch with strict style constraints rather than trying to "edit" a source image)
-- The mockup compositor needs the centering fixed (vertical center within print zone, not top-anchor)
-- The cultural map needs to be surfaced in the UI, preserved on update, and actually used as the primary intelligence for subject swaps
+- **Sourcing:** FIRST fail loud + label live vs simulated (silent fiction is the real killer — and why image gen has nothing to edit). The web "Bestseller" badge is a personalized proxy, not sales — a hint, not ground truth. Add per-scan instrumentation (HTTP status, result count, which mode fired).
+- **Adaptation:** Constrain the LLM with cultural map + few-shot examples + automated vision QA. Can't be a pure lookup (long tail of arbitrary sources), but the map provides guardrails.
+- **Image generation:** KEEP editing; do NOT generate from scratch (produces "way off" style). Fix control via masked/regional editing + text as a separate composited layer + a vision-QA gate that rejects content drift.
+- **Mockup:** Fix the zone geometry (height ~0.30–0.35, tune y-origin to match real chest placement) or implement size-based top-pin logic — not the anchor direction.
+- The cultural map needs to be surfaced in the UI, preserved on update, and actually used as the primary intelligence for subject swaps.
