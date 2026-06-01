@@ -101,7 +101,7 @@ The LLM still violates these. 9 failures in ONE scan run.
 
 ---
 
-### PROBLEM 3: Image Generation Cannot "Edit" a Source Image While Preserving Layout
+### PROBLEM 3: Image Edit Mode Preserves Style, But Can't Control Content
 
 **What should happen:**  
 Take the actual Etsy product photo, keep the exact layout/style/colors, only swap the subject.
@@ -136,10 +136,10 @@ Of the three, only `edit_source` preserves style and layout reliably — its wea
 
 ---
 
-### PROBLEM 4: Mockup Compositor — Design Not Centered on Shirt
+### PROBLEM 4: Mockup Compositor — Design Mis-Placed on Shirt
 
 **What should happen:**  
-The generated design should be centered on the shirt mockup, looking like a real product photo.
+The generated design should sit correctly on the chest of the shirt mockup, looking like a real product photo.
 
 **What actually happens:**  
 The compositor (`server/mockupCompositor.ts`) uses TOP-CENTER anchoring:
@@ -232,7 +232,7 @@ The LLM generates "recurringPhrases", "insideJokes", "communityLanguage", "buyin
 
 ### Ideal Flow:
 
-1. **Scrape Etsy web search** (not just API) with `is_best_seller=true` filter → get listings that actually have the Bestseller badge
+1. **Get real source listings** — fail loud and label live vs simulated; treat the "Bestseller" badge as a hint, not ground truth (a personalized proxy, not sales)
 2. **Download the product photo** for each best seller
 3. **Vision LLM extracts style** (this part works OK — `styleExtractor.ts`)
 4. **Constrained subject swap (LLM + cultural map)** using the cultural map for guidance (bigfoot → llama, yoga grid → pickleball grid). This is NOT a deterministic lookup — the map holds only a handful of mascots, while real sources are arbitrary (a goose, a bear, a slogan) with no map entry. An LLM must still decide each mapping; the cultural map CONSTRAINS that decision with examples, it does not replace it.
@@ -245,10 +245,10 @@ The LLM generates "recurringPhrases", "insideJokes", "communityLanguage", "buyin
 1. Etsy API with unreliable `is_best_seller` flag → falls back to fictional LLM data
 2. Download product photo (works when API returns image URLs)
 3. Vision LLM style extraction (works)
-4. **One massive LLM prompt** tries to do deconstruction + adaptation + transfer validation + concept writing all at once → fails ~50% of the time
-5. Image generation with "edit" mode that can't actually preserve layout
+4. **One massive LLM prompt** tries to do deconstruction + adaptation + transfer validation + concept writing all at once → fails on a large fraction of patterns (see attribution below)
+5. Image generation with "edit" mode that preserves style but drifts on content (no masking, no text layer, no QA)
 6. **No automated QA** — goes straight to human review
-7. Human reviews everything (including the ~50% garbage)
+7. Human reviews everything (including a large share of garbage)
 
 ---
 
@@ -287,9 +287,9 @@ This is hardcoded in the system prompt. If someone creates a workspace for hikin
 **The system has 4 core problems that compound:**
 
 1. **Source quality** — Can't reliably get actual best sellers from Etsy (API ≠ web search)
-2. **Concept adaptation** — One LLM prompt tries to do too much and fails ~50% of the time
-3. **Image generation** — Current AI image editors can't do "same layout, different subject"
-4. **Mockup placement** — Design not centered properly on shirt
+2. **Concept adaptation** — One LLM prompt tries to do too much and fails on a large fraction of patterns
+3. **Image generation** — Edit mode preserves style/layout pixel-to-pixel; the failure is content control (subject drift, injected elements, copied signatures) — no masking, no QA gate
+4. **Mockup placement** — Zone geometry too tall (0.60 height); design sits correctly at top-anchor but zone pushes it too low on the shirt
 
 **Plus one phantom feature:**
 
