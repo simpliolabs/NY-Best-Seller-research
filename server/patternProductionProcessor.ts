@@ -1,12 +1,14 @@
 /**
  * Pattern Production Processor — v4 (Two-Call Edit→Extract)
  *
- * Two-step pipeline mirroring the PO's proven ChatGPT workflow:
+ * Two-step pipeline (edit → extract):
  *
- *   Step 1 — REPLACE: gpt-image-1 /edits on the FULL uncropped shirt photo.
- *     Prompt: "Edit this t-shirt mockup. Replace the design with: {promptDescription}.
- *              Keep the shirt, background, props, and lighting unchanged."
- *     Output: opaque shirt mockup with new design printed on it.
+ *   Step 1 — REPLACE: FLUX.1 Kontext [pro] (via fal) edits the printed graphic on
+ *     the FULL uncropped shirt photo IN PLACE. Kontext is an instruction-edit model
+ *     that preserves the rest of the image by design — it does not re-render the
+ *     whole canvas the way gpt-image-1 did (which redrew figures and invented props
+ *     like the salt shaker / fake brand). The edit instruction is built by
+ *     planMinimalEdit() + buildEditPrompt(). Output: opaque shirt mockup, niche-swapped.
  *
  *   Step 2 — EXTRACT: gpt-image-1 /edits on the Step 1 output, with background:"transparent".
  *     Prompt explicitly removes the GARMENT (not just the photo background): "Extract
@@ -30,10 +32,12 @@
  * introduced its own failure mode (model generates a full scene filling the canvas,
  * leaving no magenta to key) which the Dinosaur row exposed.
  *
- * Why gpt-image-1 (not gpt-image-2) for both calls:
+ * Why gpt-image-1 for the EXTRACT step:
  * gpt-image-2 returns HTTP 400 for background:"transparent" on /v1/images/edits
- * ("Transparent background is not supported for this model"). gpt-image-1 honors it.
- * Verified by direct API capability test.
+ * ("Transparent background is not supported for this model"); gpt-image-1 honors it.
+ * (Step 1 editing moved to Kontext after a 3-design bake-off showed gpt-image-1
+ * re-renders the whole canvas and won't do a faithful in-place edit, whereas
+ * Kontext preserved text, figure, AND illustration style.)
  */
 import sharp from "sharp";
 import { storagePut } from "./storage";
@@ -111,6 +115,63 @@ async function callImageEdit(
     return Buffer.from(await dlResp.arrayBuffer());
   }
   throw new Error("gpt-image-1 response has neither b64_json nor url");
+}
+
+// ─── FLUX.1 Kontext [pro] caller (fal queue API) ─────────────────────────────
+
+/**
+ * Edit an image with FLUX.1 Kontext [pro] via the fal queue API; return the
+ * result as a Buffer.
+ *
+ * Kontext is an instruction-driven image EDITOR: given a source image + a prompt,
+ * it changes only what the prompt asks and preserves the rest — the property
+ * gpt-image-1 lacked (it re-rendered the whole canvas). Used for Step 1.
+ * `imageUrl` is fetched server-side by fal, so no local download is needed.
+ *
+ * Requires FAL_KEY in the environment (Manus application secret).
+ */
+async function callFalKontextEdit(imageUrl: string, prompt: string): Promise<Buffer> {
+  const key = process.env.FAL_KEY;
+  if (!key) throw new Error("FAL_KEY is not configured");
+  const headers = { Authorization: `Key ${key}`, "Content-Type": "application/json" };
+
+  const submit = await fetch("https://queue.fal.run/fal-ai/flux-pro/kontext", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ prompt, image_url: imageUrl }),
+  });
+  if (!submit.ok) {
+    throw new Error(`fal Kontext submit error (${submit.status}): ${(await submit.text()).slice(0, 300)}`);
+  }
+  const { status_url, response_url } = (await submit.json()) as {
+    status_url: string;
+    response_url: string;
+  };
+
+  // Poll the queue until COMPLETED (or fail/timeout). ~3s interval, 240s cap.
+  let completed = false;
+  for (let i = 0; i < 80; i++) {
+    await new Promise((r) => setTimeout(r, 3000));
+    const st = (await (await fetch(status_url, { headers })).json()) as {
+      status?: string;
+      error?: unknown;
+    };
+    if (st.status === "COMPLETED") { completed = true; break; }
+    if (st.status === "FAILED" || st.error) {
+      throw new Error(`fal Kontext failed: ${JSON.stringify(st).slice(0, 300)}`);
+    }
+  }
+  if (!completed) throw new Error("fal Kontext timed out after 240s");
+
+  const out = (await (await fetch(response_url, { headers })).json()) as {
+    images?: Array<{ url: string }>;
+  };
+  const url = out.images?.[0]?.url;
+  if (!url) throw new Error(`fal Kontext returned no image: ${JSON.stringify(out).slice(0, 200)}`);
+
+  const dl = await fetch(url);
+  if (!dl.ok) throw new Error(`Failed to download Kontext output: ${dl.status}`);
+  return Buffer.from(await dl.arrayBuffer());
 }
 
 // ─── Step 0: Vision-grounded minimal-edit planner ────────────────────────────
@@ -318,27 +379,18 @@ async function replaceDesignOnShirt(
   sourceImageUrl: string,
   editPrompt: string
 ): Promise<Buffer> {
-  const imgResp = await fetch(sourceImageUrl);
-  if (!imgResp.ok) {
-    throw new Error(`Failed to download source image: ${imgResp.status}`);
-  }
-  const sourcePng = await sharp(Buffer.from(await imgResp.arrayBuffer()))
-    .png()
-    .toBuffer();
-
-  // The edit instruction is built upstream by buildEditPrompt() from a
-  // vision-grounded EditSpec: it enumerates the literal swaps and locks
-  // everything else. input_fidelity:"high" is the API-level lever that makes the
-  // model actually honour "preserve everything not listed" rather than silently
-  // re-rendering the whole canvas (the cause of the redrawn figure / re-lettered
-  // text the PO flagged).
+  // Step 1 uses FLUX.1 Kontext [pro] (via fal): an instruction-edit model that
+  // changes only the printed graphic and preserves the rest of the photo by
+  // design. This replaces gpt-image-1, which re-rendered the whole canvas and
+  // would redraw figures / invent props (the redrawn-lady, salt-shaker, and
+  // fake-brand failures). Verified in a 3-design bake-off vs Qwen-Image-Edit:
+  // Kontext preserved text, figure, AND illustration style across all three.
+  // The edit instruction comes from planMinimalEdit() + buildEditPrompt(); fal
+  // fetches `sourceImageUrl` server-side, so no local download is needed.
   console.log(
-    `[PatternProd] Step 1 (surgical replace, input_fidelity=high). Prompt: "${editPrompt.substring(0, 140)}..."`
+    `[PatternProd] Step 1 (Kontext [pro] in-place edit). Prompt: "${editPrompt.substring(0, 140)}..."`
   );
-  return callImageEdit(sourcePng, "source_shirt.png", editPrompt, {
-    transparent: false,
-    inputFidelity: "high",
-  });
+  return callFalKontextEdit(sourceImageUrl, editPrompt);
 }
 
 // ─── Step 2: Extract transparent design from edited shirt photo ──────────────
