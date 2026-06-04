@@ -56,6 +56,7 @@ import {
   getTrendPatternsByWorkspace,
 } from "./nicheHunterDb";
 import { invokeLLM } from "./_core/llm";
+import type { TrendPattern } from "../drizzle/schema";
 
 // ─── Shared OpenAI /v1/images/edits caller ───────────────────────────────────
 
@@ -331,7 +332,7 @@ async function planMinimalEdit(
  * The free-form "additions" field was removed — it was where the LLM smuggled in
  * taglines and stray props. Routing replaces it with bounded, class-specific rules.
  */
-function buildEditPrompt(spec: EditSpec, avoid: string[] = []): string {
+export function buildEditPrompt(spec: EditSpec, avoid: string[] = []): string {
   const preserveLine = `PRESERVE COMPLETELY (keep pixel-identical; do not redraw, restyle, recolour, reposition, or resize): ${spec.preserve}. Keep the shirt, fabric, background, lighting, and composition unchanged.`;
   const noInventText = "NEVER invent text — no taglines, slogans, subtitles, brand names, or descriptive copy of any kind. The only text allowed is listed above (if any).";
   const dtf = "PRINT CONSTRAINT (DTF): bold, solid shapes only — no thin hairlines, stipple, halftone, or small scattered dots; render any rain/sparkle/texture as a few BOLD solid strokes or omit it.";
@@ -382,26 +383,37 @@ function buildEditPrompt(spec: EditSpec, avoid: string[] = []): string {
  * (The scan-time half — biasing fresh concepts — and capturing a reason on the
  * per-render retry live in Manus's files.)
  */
+/**
+ * Pure aggregation of a workspace's reject signals into a capped AVOID list:
+ * free-text rejectionReason first (richest, e.g. "salt shaker again"), then
+ * rejectionTags as readable labels; deduped, capped at 8. Exported for unit
+ * testing (Karpathy P2: pure, no I/O).
+ */
+export function aggregateAvoidList(patterns: TrendPattern[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of patterns) {
+    if (p.status !== "dismissed") continue;
+    const reason = (p.rejectionReason ?? "").trim();
+    if (reason && !seen.has(reason.toLowerCase())) {
+      seen.add(reason.toLowerCase());
+      out.push(reason);
+    }
+    for (const tag of ((p.rejectionTags as string[] | null) ?? [])) {
+      const label = tag.replace(/_/g, " ").trim();
+      if (label && !seen.has(label)) {
+        seen.add(label);
+        out.push(label);
+      }
+    }
+  }
+  return out.slice(0, 8);
+}
+
 async function getWorkspaceAvoidList(workspaceId: string): Promise<string[]> {
   try {
     const dismissed = await getTrendPatternsByWorkspace(workspaceId, "dismissed");
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const p of dismissed) {
-      const reason = (p.rejectionReason ?? "").trim();
-      if (reason && !seen.has(reason.toLowerCase())) {
-        seen.add(reason.toLowerCase());
-        out.push(reason);
-      }
-      for (const tag of ((p.rejectionTags as string[] | null) ?? [])) {
-        const label = tag.replace(/_/g, " ").trim();
-        if (label && !seen.has(label)) {
-          seen.add(label);
-          out.push(label);
-        }
-      }
-    }
-    const capped = out.slice(0, 8);
+    const capped = aggregateAvoidList(dismissed);
     if (capped.length) {
       console.log(`[PatternProd] reject-feedback: ${capped.length} AVOID item(s) for workspace ${workspaceId}`);
     }

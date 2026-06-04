@@ -335,3 +335,83 @@ describe("assertTransparentPng", () => {
     await expect(assertTransparentPng(buf, "test-sparse-pass")).resolves.toBeUndefined();
   });
 });
+
+// ─── buildEditPrompt routing + reject-feedback (AVOID) tests ───────────────────
+import { buildEditPrompt, aggregateAvoidList, type EditSpec } from "./patternProductionProcessor";
+import type { TrendPattern } from "../drizzle/schema";
+
+const TEXT_SPEC: EditSpec = {
+  designType: "text-and-graphic",
+  preserve: "the woman with the umbrella",
+  niche: "pickleball",
+  nicheEquipment: ["a solid pickleball paddle"],
+  textSwaps: [{ from: "SALTY", to: "SALTY DINKER" }],
+  subjects: ["a woman with an umbrella"],
+};
+const VISUAL_SPEC: EditSpec = {
+  designType: "illustration",
+  preserve: "the vintage dinosaur scene",
+  niche: "pickleball",
+  nicheEquipment: ["a solid pickleball paddle", "a pickleball net"],
+  textSwaps: [],
+  subjects: ["T-Rex", "stegosaurus"],
+};
+const dp = (o: Partial<TrendPattern>): TrendPattern =>
+  ({ status: "dismissed", rejectionReason: null, rejectionTags: null, ...o }) as unknown as TrendPattern;
+
+describe("buildEditPrompt — routing", () => {
+  it("TEXT route applies the word swap and adds NO visual equipment", () => {
+    const p = buildEditPrompt(TEXT_SPEC, []);
+    expect(p).toContain('change the text "SALTY" to "SALTY DINKER"');
+    expect(p.toLowerCase()).not.toContain("integrate");
+    expect(p).not.toContain("AVOID —");
+  });
+  it("VISUAL route integrates niche equipment into the subjects, no text", () => {
+    const p = buildEditPrompt(VISUAL_SPEC, []);
+    expect(p).toContain("UNMISTAKABLY PICKLEBALL");
+    expect(p).toContain("a solid pickleball paddle");
+    expect(p).toContain("Add NO text or wordmark");
+  });
+});
+
+describe("buildEditPrompt — reject-feedback (AVOID injection)", () => {
+  it("injects the AVOID block with the reasons on the TEXT route", () => {
+    const p = buildEditPrompt(TEXT_SPEC, ["salt shaker again", "too generic"]);
+    expect(p).toContain("AVOID —");
+    expect(p).toContain("salt shaker again");
+    expect(p).toContain("too generic");
+  });
+  it("injects the AVOID block on the VISUAL route too", () => {
+    const p = buildEditPrompt(VISUAL_SPEC, ["no volcano"]);
+    expect(p).toContain("AVOID —");
+    expect(p).toContain("no volcano");
+  });
+  it("omits the AVOID block entirely when there is nothing to avoid", () => {
+    expect(buildEditPrompt(TEXT_SPEC, [])).not.toContain("AVOID —");
+    expect(buildEditPrompt(VISUAL_SPEC, [])).not.toContain("AVOID —");
+  });
+});
+
+describe("aggregateAvoidList", () => {
+  it("collects free-text reasons + tag labels and dedupes (case-insensitive)", () => {
+    const out = aggregateAvoidList([
+      dp({ rejectionReason: "salt shaker again", rejectionTags: ["too_generic"] }),
+      dp({ rejectionReason: "Salt Shaker Again", rejectionTags: ["too_generic", "off_brand"] }),
+    ]);
+    expect(out).toContain("salt shaker again");
+    expect(out).toContain("too generic");
+    expect(out).toContain("off brand");
+    expect(out.filter((x) => x.toLowerCase() === "salt shaker again")).toHaveLength(1);
+  });
+  it("ignores non-dismissed patterns", () => {
+    const out = aggregateAvoidList([
+      dp({ status: "approved", rejectionReason: "should be ignored" }),
+      dp({ status: "discovered", rejectionTags: ["wrong_style"] }),
+    ]);
+    expect(out).toHaveLength(0);
+  });
+  it("caps the list at 8", () => {
+    const many = Array.from({ length: 20 }, (_, i) => dp({ rejectionReason: `reason ${i}` }));
+    expect(aggregateAvoidList(many)).toHaveLength(8);
+  });
+});
