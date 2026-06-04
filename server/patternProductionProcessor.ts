@@ -1,21 +1,29 @@
 /**
- * Pattern Production Processor
+ * Pattern Production Processor — v3 (Magenta Chromakey)
  *
  * Two-step pipeline for trend_patterns:
- * 1. generateStandaloneDesign — gpt-image-1 /edits + background:"transparent"
- *    → productionDesignUrl (transparent PNG, canonical asset)
- * 2. compositePatternPreview — transparent PNG + first workspace template
- *    → previewImageUrl (how-it-looks-on-a-shirt thumbnail)
+ * 1. generateStandaloneDesign — gpt-image-2 /edits with solid magenta background.
+ *    The source image is passed as a style reference (image[]), NOT as the edit canvas.
+ *    The model generates a NEW standalone artwork on a flat magenta background.
+ * 2. chromakeyFromCorners — corner-sampled flood-fill removes the magenta background,
+ *    producing a clean transparent PNG with no halos.
+ * 3. cropToContent — trims transparent padding.
+ * 4. assertTransparentPng — validates the result before upload (throws on opaque output).
+ * 5. storagePut → productionDesignUrl (canonical transparent asset).
+ * 6. compositeDesignOnMockup → previewImageUrl (shirt thumbnail).
  *
- * Architecture decision (Option B, PO-approved):
- * - previewImageUrl = compositor output (transparent PNG + default template)
- * - dtfImageUrl = upscaled productionDesignUrl (no flood-fill, no extraction)
- * - gpt-image-1 with background:"transparent" returns a native transparent PNG —
- *   no chromakey step needed. gpt-image-2 does NOT support this parameter.
+ * Why magenta background (not transparent):
+ * gpt-image-1 background:"transparent" is unreliable — it fails consistently on dark-shirt
+ * source images (heather navy, dark grey) because the model sees no distinct background
+ * region to make transparent. gpt-image-2 + magenta BG is deterministic: we inject a
+ * known-color background, then remove it programmatically via chromakey. The chromakey
+ * keys off the ACTUAL corner color (not hardcoded #FF00FF) to handle the model's muted
+ * pink/magenta variance (r≈200-220, g≈60-100, b≈120-170).
  *
- * Default template selection: first product group by createdAt ASC,
- * first template by sortOrder ASC. If no product group exists for the workspace,
- * previewImageUrl is set to the transparent PNG directly (acceptable fallback).
+ * Why gpt-image-2 (not gpt-image-1):
+ * gpt-image-1 does not reliably honor the magenta background instruction — it sometimes
+ * ignores it and returns a white or shirt-colored background. gpt-image-2 reliably
+ * produces a flat colored background when instructed. Spike-validated 5/5.
  */
 import sharp from "sharp";
 import { storagePut } from "./storage";
@@ -32,6 +40,7 @@ import {
   updateTrendPatternImage,
   updateTrendPatternProductionUrl,
 } from "./nicheHunterDb";
+import { chromakeyFromCorners } from "./chromakey";
 
 // ─── Artwork extraction ─────────────────────────────────────────────────────────
 
@@ -39,20 +48,16 @@ import {
  * Extract the artwork/print area from a shirt product photo.
  * Etsy source images are typically shirt flat-lays (~2000x2000px).
  * The print area is in the center of the image.
- * Cropping prevents gpt-image-1 from treating the shirt as part of the subject.
+ * Cropping prevents gpt-image-2 from treating the shirt as part of the subject.
  *
  * Crop region: 25% from each side, 25% from top, 50% height.
  * This eliminates shirt necklines, collars, and labels on all flat-lay styles.
- * Validated visually: on 2000x2000 flat-lay with visible neckline at ~12%,
- * 25% top offset clears it completely while preserving the full artwork.
  */
 async function extractArtworkArea(imgBuf: Buffer): Promise<Buffer> {
   const metadata = await sharp(imgBuf).metadata();
   const w = metadata.width ?? 1000;
   const h = metadata.height ?? 1000;
 
-  // Crop center print area: 25% margin on sides, 25% from top, 50% height
-  // This is the "chest zone" where the artwork lives on a graphic tee
   const left = Math.round(w * 0.25);
   const top = Math.round(h * 0.25);
   const cropWidth = Math.round(w * 0.50);
@@ -66,14 +71,15 @@ async function extractArtworkArea(imgBuf: Buffer): Promise<Buffer> {
     .toBuffer();
 }
 
-// ─── Standalone design generation ─────────────────────────────────────────────
+// ─── Standalone design generation (Step 1) ────────────────────────────────────
 
 /**
- * Generate a standalone design with transparent background using gpt-image-1.
- * gpt-image-1 is the only OpenAI image model that honors background: "transparent"
- * on /v1/images/edits. gpt-image-2 rejects this parameter with HTTP 400.
- * The source image is passed as a style reference — NOT as the edit canvas.
- * Returns the raw transparent PNG buffer from the API.
+ * Generate a standalone design on a solid magenta background using gpt-image-2.
+ * The source image is passed as a style reference (image[]) — NOT as the edit canvas.
+ * Returns the raw PNG buffer from the API (magenta background, not yet transparent).
+ *
+ * The incoming promptDescription is the adaptedConcept or characterSwap edit instruction.
+ * We wrap it with magenta-BG framing here so callers don't need to know the pipeline detail.
  */
 async function generateStandaloneDesign(
   sourceImageUrl: string,
@@ -87,23 +93,28 @@ async function generateStandaloneDesign(
   const imgBuf = Buffer.from(await imgResp.arrayBuffer());
 
   // Pre-step: Extract artwork from product photo (shirt mockup).
-  // Etsy source images are typically shirt flat-lays. The artwork/print is in the
-  // center ~60% of the image. Cropping to this area prevents the model from
-  // treating the shirt as part of the subject.
   const imgPng = await extractArtworkArea(imgBuf);
 
-  // Edit instruction: surgical replace/add — NOT a new image creation.
-  // The source image is the canvas. We only tell the model what to change.
-  const prompt = promptDescription;
+  // Build the standalone generation prompt with magenta background instruction.
+  // The promptDescription is the adapted concept / swap instruction from the caller.
+  const prompt = [
+    `Create a standalone t-shirt graphic design artwork.`,
+    `Subject and style: ${promptDescription}`,
+    `BACKGROUND: Solid hot pink/magenta (#FF00FF) background filling the entire canvas.`,
+    `The artwork must have a hard, clean edge against the magenta background — no blending, no gradient, no soft edges.`,
+    `Use ONLY the colors described in the style within the artwork itself. The magenta is ONLY for the background.`,
+    `NO shirt, NO garment, NO fabric texture visible. Just the flat 2D artwork on solid magenta.`,
+    `The design should be centered and fill approximately 60-70% of the canvas.`,
+  ].join(" ");
 
-  console.log(`[PatternProd] Generating standalone design (gpt-image-1, transparent). Prompt: "${prompt.substring(0, 120)}..."`);
+  console.log(`[PatternProd] Generating standalone design (gpt-image-2, magenta BG). Prompt: "${prompt.substring(0, 120)}..."`);
 
   const formData = new FormData();
-  formData.append("model", "gpt-image-1");
+  formData.append("model", "gpt-image-2");
   formData.append("prompt", prompt);
   formData.append("size", "1024x1024");
   formData.append("quality", "high");
-  formData.append("background", "transparent");
+  // Pass source image as style reference (image[] — NOT the edit canvas)
   const blob = new Blob([new Uint8Array(imgPng)], { type: "image/png" });
   formData.append("image[]", blob, "style_reference.png");
 
@@ -115,12 +126,12 @@ async function generateStandaloneDesign(
 
   if (!resp.ok) {
     const errText = await resp.text();
-    throw new Error(`gpt-image-1 API error (${resp.status}): ${errText.substring(0, 300)}`);
+    throw new Error(`gpt-image-2 API error (${resp.status}): ${errText.substring(0, 300)}`);
   }
 
   const data = await resp.json() as { data: Array<{ b64_json?: string; url?: string }> };
   const item = data.data?.[0];
-  if (!item) throw new Error("gpt-image-1 returned no image data");
+  if (!item) throw new Error("gpt-image-2 returned no image data");
 
   if (item.b64_json) {
     return Buffer.from(item.b64_json, "base64");
@@ -129,7 +140,7 @@ async function generateStandaloneDesign(
     if (!dlResp.ok) throw new Error(`Failed to download generated image: ${dlResp.status}`);
     return Buffer.from(await dlResp.arrayBuffer());
   }
-  throw new Error("gpt-image-1 response has neither b64_json nor url");
+  throw new Error("gpt-image-2 response has neither b64_json nor url");
 }
 
 /**
@@ -177,6 +188,68 @@ async function cropToContent(imageBuf: Buffer): Promise<Buffer> {
   }
 }
 
+// ─── Output validation ───────────────────────────────────────────────────────
+
+/**
+ * Assert that a PNG buffer has a transparent background.
+ * Two checks must both pass:
+ *   1. Corner pixels: all 4 corners must have alpha < 16 (nearly transparent)
+ *   2. Transparent pixel ratio: ≥ 20% of pixels must have alpha < 128
+ *
+ * If either check fails, throws an error with the patternId for log tracing.
+ * This is the final safety net — catches edge cases where the chromakey color
+ * appears in the design itself (e.g., a magenta-heavy design that partially keys out).
+ */
+export async function assertTransparentPng(buf: Buffer, patternId: string): Promise<void> {
+  const { data, info } = await sharp(buf)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const { width, height, channels } = info;
+
+  // Check 1: 4 corner pixels must all have alpha < 16
+  const cornerCoords = [
+    [0, 0],
+    [width - 1, 0],
+    [0, height - 1],
+    [width - 1, height - 1],
+  ] as const;
+
+  for (const [cx, cy] of cornerCoords) {
+    const alpha = data[(cy * width + cx) * channels + 3];
+    if (alpha >= 16) {
+      throw new Error(
+        `[PatternProd] VALIDATION FAIL pattern=${patternId}: corner pixel (${cx},${cy}) has alpha=${alpha} (expected <16). Chromakey did not remove background. Aborting storagePut.`
+      );
+    }
+  }
+
+  // Check 2: transparent pixel ratio must be ≥ 20%
+  let transparentCount = 0;
+  const totalPixels = width * height;
+  for (let i = 0; i < totalPixels; i++) {
+    if (data[i * channels + 3] < 128) transparentCount++;
+  }
+  const ratio = transparentCount / totalPixels;
+  if (ratio < 0.20) {
+    throw new Error(
+      `[PatternProd] VALIDATION FAIL pattern=${patternId}: transparent pixel ratio=${(ratio * 100).toFixed(1)}% (expected ≥20%). Chromakey did not remove enough background. Aborting storagePut.`
+    );
+  }
+
+  // Check 3: design must have content — non-transparent pixels must be ≥ 5% of total
+  // Catches blank or near-blank outputs (model returned empty canvas after chromakey).
+  const opaqueCount = totalPixels - transparentCount;
+  const opaqueRatio = opaqueCount / totalPixels;
+  if (opaqueRatio < 0.05) {
+    throw new Error(
+      `[PatternProd] DESIGN_TOO_SPARSE pattern=${patternId}: non-transparent pixel ratio=${(opaqueRatio * 100).toFixed(1)}% (expected ≥5%). Design is blank or near-blank. Aborting storagePut.`
+    );
+  }
+
+  console.log(`[PatternProd] assertTransparentPng PASS pattern=${patternId}: ratio=${(ratio * 100).toFixed(1)}% transparent, ${(opaqueRatio * 100).toFixed(1)}% design content`);
+}
+
 // ─── Default template selection ───────────────────────────────────────────────
 
 /**
@@ -187,7 +260,6 @@ async function getFirstWorkspaceTemplate(workspaceId: string) {
   const groups = await getProductGroupsByWorkspace(workspaceId);
   if (groups.length === 0) return null;
 
-  // Sort by createdAt ascending to get the first group
   const firstGroup = groups.sort(
     (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
   )[0];
@@ -195,7 +267,6 @@ async function getFirstWorkspaceTemplate(workspaceId: string) {
   const templates = await getMockupsByGroup(firstGroup.id);
   if (templates.length === 0) return null;
 
-  // Templates are already ordered by sortOrder ASC from getMockupsByGroup
   return { template: templates[0], group: firstGroup };
 }
 
@@ -205,15 +276,12 @@ async function getFirstWorkspaceTemplate(workspaceId: string) {
  * Full production pipeline for a single trend pattern.
  *
  * Steps:
- * 1. gpt-image-1 /edits + background:"transparent" → native transparent PNG
- * 2. Crop to content bounding box → productionDesignUrl (canonical transparent asset)
- * 3. Composite onto first workspace template → previewImageUrl
- *    (if no template exists, previewImageUrl = productionDesignUrl)
- *
- * Resolution note: gpt-image-1 max is 1024x1024 at this quality setting.
- * DTF upscale path (1024→3600 = 3.52×) is handled by patternDtfProcessor.ts.
- * This is more aggressive than the prior gpt-image-2 path (2048→3600 = 1.76×).
- * Monitor DTF sharpness on first 5 production runs; Real-ESRGAN may be needed sooner.
+ * 1. gpt-image-2 /edits + magenta BG → raw magenta-background PNG
+ * 2. chromakeyFromCorners → transparent PNG (programmatic, deterministic)
+ * 3. cropToContent → trim transparent padding → productionDesignUrl candidate
+ * 4. assertTransparentPng → validate before upload (throws on failure, no bad writes)
+ * 5. storagePut + updateTrendPatternProductionUrl → productionDesignUrl
+ * 6. compositeDesignOnMockup → previewImageUrl (shirt thumbnail)
  *
  * Writes both productionDesignUrl and previewImageUrl to DB.
  * Returns { productionDesignUrl, previewImageUrl }.
@@ -226,19 +294,25 @@ export async function processPatternProduction(
 ): Promise<{ productionDesignUrl: string; previewImageUrl: string }> {
   console.log(`[PatternProd] Processing pattern ${patternId}...`);
 
-  // Step 1: Generate standalone design with transparent background (gpt-image-1)
-  const rawTransparent = await generateStandaloneDesign(sourceImageUrl, promptDescription);
+  // Step 1: Generate standalone design on magenta background (gpt-image-2)
+  const rawMagenta = await generateStandaloneDesign(sourceImageUrl, promptDescription);
 
-  // Step 2: Crop to content bounding box (no chromakey needed — gpt-image-1 returns native transparency)
-  const transparentPng = await cropToContent(rawTransparent);
+  // Step 2: Chromakey — remove magenta background via corner-sampled flood-fill
+  const keyed = await chromakeyFromCorners(rawMagenta);
 
-  // Step 3: Upload transparent PNG as productionDesignUrl
+  // Step 3: Crop to content bounding box
+  const transparentPng = await cropToContent(keyed);
+
+  // Step 4: Validate transparency before upload — throws if opaque (no silent bad writes)
+  await assertTransparentPng(transparentPng, patternId);
+
+  // Step 5: Upload transparent PNG as productionDesignUrl
   const prodKey = `pattern-production/${patternId}-${Date.now()}.png`;
   const { url: productionDesignUrl } = await storagePut(prodKey, transparentPng, "image/png");
   await updateTrendPatternProductionUrl(patternId, productionDesignUrl);
   console.log(`[PatternProd] productionDesignUrl: ${productionDesignUrl}`);
 
-  // Step 4: Composite onto first workspace template for previewImageUrl
+  // Step 6: Composite onto first workspace template for previewImageUrl
   let previewImageUrl: string;
   try {
     const result = await getFirstWorkspaceTemplate(workspaceId);
@@ -259,17 +333,15 @@ export async function processPatternProduction(
       previewImageUrl = url;
       console.log(`[PatternProd] previewImageUrl (composite): ${previewImageUrl}`);
     } else {
-      // No template available — use transparent PNG as preview fallback
       previewImageUrl = productionDesignUrl;
       console.log(`[PatternProd] No template found for workspace ${workspaceId}, using transparent PNG as preview`);
     }
   } catch (err) {
-    // Composite failed — fall back to transparent PNG
     console.warn(`[PatternProd] Composite failed, falling back to transparent PNG:`, err);
     previewImageUrl = productionDesignUrl;
   }
 
-  // Step 5: Update previewImageUrl in DB
+  // Step 7: Update previewImageUrl in DB
   await updateTrendPatternImage(patternId, previewImageUrl);
   console.log(`[PatternProd] Pattern ${patternId} done.`);
 

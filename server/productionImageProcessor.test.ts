@@ -243,3 +243,95 @@ describe("chromakeyFromCorners", () => {
     expect(centerA).toBe(255);
   });
 });
+
+// ─── assertTransparentPng tests ───────────────────────────────────────────────
+import { assertTransparentPng } from "./patternProductionProcessor";
+
+async function makePng(
+  width: number,
+  height: number,
+  fillFn: (x: number, y: number) => [number, number, number, number]
+): Promise<Buffer> {
+  const channels = 4;
+  const data = Buffer.alloc(width * height * channels);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const [r, g, b, a] = fillFn(x, y);
+      const i = (y * width + x) * channels;
+      data[i] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = a;
+    }
+  }
+  return sharp(data, { raw: { width, height, channels } }).png().toBuffer();
+}
+
+describe("assertTransparentPng", () => {
+  it("throws DESIGN_TOO_SPARSE for a fully-transparent PNG (blank canvas, 0% opaque)", async () => {
+    // A 100% transparent image passes the corner and ratio checks but fails the sparse check.
+    // This is correct: a blank canvas is not a valid production design.
+    const buf = await makePng(100, 100, () => [0, 0, 0, 0]);
+    await expect(assertTransparentPng(buf, "test-blank")).rejects.toThrow(
+      /DESIGN_TOO_SPARSE/
+    );
+  });
+
+  it("passes a PNG with transparent background and opaque design in center", async () => {
+    // Transparent corners, opaque center block (30x30 out of 100x100 = 9% opaque → 91% transparent ≥ 20%)
+    const buf = await makePng(100, 100, (x, y) => {
+      const inCenter = x >= 35 && x < 65 && y >= 35 && y < 65;
+      return inCenter ? [50, 80, 30, 255] : [0, 0, 0, 0];
+    });
+    await expect(assertTransparentPng(buf, "test-pass-center")).resolves.toBeUndefined();
+  });
+
+  it("throws when all 4 corners are opaque (alpha=255)", async () => {
+    // Fully opaque white PNG — simulates gpt-image-1 returning no transparency
+    const buf = await makePng(100, 100, () => [255, 255, 255, 255]);
+    await expect(assertTransparentPng(buf, "test-fail-opaque")).rejects.toThrow(
+      /VALIDATION FAIL.*corner pixel.*alpha=255/
+    );
+  });
+
+  it("throws when corners are transparent but ratio < 20% (mostly opaque body)", async () => {
+    // Corners transparent, but 85% of pixels are opaque (large opaque block)
+    // 85x85 opaque center out of 100x100 = 72.25% opaque → 27.75% transparent ≥ 20% — this passes
+    // Make it 95x95 opaque = 90.25% opaque → 9.75% transparent < 20% — this fails
+    const buf = await makePng(100, 100, (x, y) => {
+      const isCorner = (x === 0 || x === 99) && (y === 0 || y === 99);
+      const inLargeBlock = x >= 3 && x < 98 && y >= 3 && y < 98;
+      if (isCorner) return [0, 0, 0, 0];
+      if (inLargeBlock) return [50, 80, 30, 255];
+      return [0, 0, 0, 0];
+    });
+    await expect(assertTransparentPng(buf, "test-fail-ratio")).rejects.toThrow(
+      /VALIDATION FAIL.*transparent pixel ratio/
+    );
+  });
+
+  it("throws with patternId in the error message for traceability", async () => {
+    const buf = await makePng(50, 50, () => [255, 255, 255, 255]);
+    await expect(assertTransparentPng(buf, "MY_PATTERN_ID_XYZ")).rejects.toThrow(
+      /MY_PATTERN_ID_XYZ/
+    );
+  });
+
+  it("throws DESIGN_TOO_SPARSE when transparent corners pass but design is blank (< 5% opaque)", async () => {
+    // 99% transparent, only 1% opaque pixels — corners transparent, tiny dot in center
+    const buf = await makePng(100, 100, (x, y) => {
+      // Only a 3x3 dot in center (9 pixels = 0.09% of 10000) is opaque
+      const inDot = x >= 49 && x <= 51 && y >= 49 && y <= 51;
+      return inDot ? [50, 80, 30, 255] : [0, 0, 0, 0];
+    });
+    await expect(assertTransparentPng(buf, "test-sparse")).rejects.toThrow(
+      /DESIGN_TOO_SPARSE/
+    );
+  });
+
+  it("passes when design has sufficient content (corners transparent, 30% opaque body)", async () => {
+    // 30x30 opaque block in center of 100x100 = 9% opaque — above the 5% threshold
+    const buf = await makePng(100, 100, (x, y) => {
+      const inBlock = x >= 35 && x < 65 && y >= 35 && y < 65;
+      return inBlock ? [50, 80, 30, 255] : [0, 0, 0, 0];
+    });
+    await expect(assertTransparentPng(buf, "test-sparse-pass")).resolves.toBeUndefined();
+  });
+});
