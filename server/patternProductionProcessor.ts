@@ -108,12 +108,15 @@ async function callImageEdit(
 // ─── Step 1: Replace design on full shirt photo ──────────────────────────────
 
 /**
- * Edit the source shirt photo, replacing the existing design with the new one.
- * Output is an opaque shirt mockup — same shirt, same background, new design.
+ * Edit the source shirt photo with a SURGICAL in-place edit of the existing
+ * design — swap only the minimal niche-specific elements (text/subject),
+ * preserving the original composition, typography, style, and layout.
+ * Output is an opaque shirt mockup — same shirt, same design formula, niche-swapped.
  *
  * Full uncropped photo is fed to the model: the shirt context is what makes
- * gpt-image-1 understand "replace the design on the shirt" as a localized
- * edit rather than a from-scratch generation.
+ * gpt-image-1 treat this as a localized edit rather than a from-scratch
+ * generation. The prompt explicitly forbids redesign — "replace the entire
+ * design" produced fresh designs untrue to the source, which is the bug this fixes.
  */
 async function replaceDesignOnShirt(
   sourceImageUrl: string,
@@ -127,10 +130,20 @@ async function replaceDesignOnShirt(
     .png()
     .toBuffer();
 
+  // SURGICAL EDIT, not redesign. The model can see the original printed design;
+  // tell it to preserve that design and change only the minimal elements needed
+  // to make it niche-appropriate. "Replace the entire design" licensed a redesign
+  // and destroyed fidelity to the original — that is the behavior this prompt fixes.
   const prompt = [
-    `Edit this t-shirt mockup. Replace the entire printed design on the shirt with: ${promptDescription}.`,
-    `Keep the shirt itself, the background, props, lighting, folds, and overall photo composition completely unchanged.`,
-    `Only the printed design on the shirt changes. The new design should occupy the same area as the original design.`,
+    "Edit the printed graphic on this t-shirt IN PLACE. This is a surgical find-and-replace on the existing design, NOT a redesign.",
+    "PRESERVE EXACTLY — do not alter: the composition, layout, the number and position of every element, the typography and font, the lettering style, line weight, distressing/texture, the color palette, and the overall art style of the existing printed design.",
+    "Make ONLY the minimal changes needed to adapt the existing design to pickleball:",
+    "1. TEXT: keep the same words wherever they already work; swap only the words that are niche-specific to their pickleball equivalent, set in the SAME font, size, position, weight, and distress as the original text.",
+    "2. SUBJECT/OBJECT: if a non-pickleball object or character is present, replace it with its pickleball equivalent (e.g. a wrench becomes a pickleball paddle), drawn in the SAME art style and placed in the SAME location and scale as the original.",
+    "3. ADD text only if a pickleball reference requires it, matched to the existing style — otherwise add nothing.",
+    `The target adaptation (use it only to choose the new words/subject, NOT as a new design to draw from scratch): ${promptDescription}.`,
+    "Do NOT recompose, restyle, re-letter, reposition, or redraw anything that is not one of the minimal swaps above. Someone who saw both shirts should recognise them as the same design with the subject swapped.",
+    "Keep the shirt, background, props, lighting, folds, and photo composition completely unchanged.",
   ].join(" ");
 
   console.log(`[PatternProd] Step 1 (replace). Prompt: "${prompt.substring(0, 120)}..."`);
