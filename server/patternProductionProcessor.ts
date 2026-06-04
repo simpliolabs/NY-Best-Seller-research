@@ -53,6 +53,7 @@ import { getGarmentBbox, resolveZoneToPhoto } from "./garmentDetector";
 import {
   updateTrendPatternImage,
   updateTrendPatternProductionUrl,
+  getTrendPatternsByWorkspace,
 } from "./nicheHunterDb";
 import { invokeLLM } from "./_core/llm";
 
@@ -330,10 +331,15 @@ async function planMinimalEdit(
  * The free-form "additions" field was removed — it was where the LLM smuggled in
  * taglines and stray props. Routing replaces it with bounded, class-specific rules.
  */
-function buildEditPrompt(spec: EditSpec): string {
+function buildEditPrompt(spec: EditSpec, avoid: string[] = []): string {
   const preserveLine = `PRESERVE COMPLETELY (keep pixel-identical; do not redraw, restyle, recolour, reposition, or resize): ${spec.preserve}. Keep the shirt, fabric, background, lighting, and composition unchanged.`;
   const noInventText = "NEVER invent text — no taglines, slogans, subtitles, brand names, or descriptive copy of any kind. The only text allowed is listed above (if any).";
   const dtf = "PRINT CONSTRAINT (DTF): bold, solid shapes only — no thin hairlines, stipple, halftone, or small scattered dots; render any rain/sparkle/texture as a few BOLD solid strokes or omit it.";
+  // Reject-feedback: prior rejected reasons/tags, injected so we stop repeating them.
+  const avoidLine = avoid.length
+    ? `AVOID — these were rejected on previous designs in this shop; do NOT repeat them: ${avoid.join("; ")}.`
+    : null;
+  const tail = [preserveLine, noInventText, ...(avoidLine ? [avoidLine] : []), dtf];
 
   if (spec.textSwaps.length > 0) {
     // TEXT route — change only the words, add nothing visual.
@@ -347,9 +353,7 @@ function buildEditPrompt(spec: EditSpec): string {
       "Edit the printed graphic on this t-shirt IN PLACE — a surgical edit of the EXISTING design, NOT a redesign.",
       "TEXT CHANGES are the ONLY changes allowed. Do not add, remove, redraw, or restyle any graphic, figure, or prop:",
       textLines,
-      preserveLine,
-      noInventText,
-      dtf,
+      ...tail,
     ].join("\n");
   }
 
@@ -361,10 +365,51 @@ function buildEditPrompt(spec: EditSpec): string {
     "Edit the printed graphic on this t-shirt IN PLACE — keep the original artwork and art style; only make it clearly about the niche.",
     `MAKE IT UNMISTAKABLY ${NICHE}: integrate ${gear} into the existing subjects (${subjects}) — put the equipment in their hands and into the scene so a viewer instantly recognises ${spec.niche || "the niche"}. Keep every subject and the art style exactly as drawn.`,
     "Add NO text or wordmark of any kind.",
-    preserveLine,
-    noInventText,
-    dtf,
+    ...tail,
   ].join("\n");
+}
+
+/**
+ * Reject-feedback (production-path half of the learning loop).
+ *
+ * Collect the workspace's previously-rejected reasons + tags (from dismissed
+ * patterns) into a concise "AVOID" list injected into the edit prompt, so
+ * regenerations stop repeating mistakes the PO has already rejected. Free-text
+ * `rejectionReason` is the richest signal (e.g. "salt shaker again"); `rejectionTags`
+ * (e.g. too_generic, off_brand) are coarser guidance. Capped to keep the prompt
+ * tight. Non-fatal: returns [] on any error.
+ *
+ * (The scan-time half — biasing fresh concepts — and capturing a reason on the
+ * per-render retry live in Manus's files.)
+ */
+async function getWorkspaceAvoidList(workspaceId: string): Promise<string[]> {
+  try {
+    const dismissed = await getTrendPatternsByWorkspace(workspaceId, "dismissed");
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const p of dismissed) {
+      const reason = (p.rejectionReason ?? "").trim();
+      if (reason && !seen.has(reason.toLowerCase())) {
+        seen.add(reason.toLowerCase());
+        out.push(reason);
+      }
+      for (const tag of ((p.rejectionTags as string[] | null) ?? [])) {
+        const label = tag.replace(/_/g, " ").trim();
+        if (label && !seen.has(label)) {
+          seen.add(label);
+          out.push(label);
+        }
+      }
+    }
+    const capped = out.slice(0, 8);
+    if (capped.length) {
+      console.log(`[PatternProd] reject-feedback: ${capped.length} AVOID item(s) for workspace ${workspaceId}`);
+    }
+    return capped;
+  } catch (e) {
+    console.warn(`[PatternProd] getWorkspaceAvoidList failed (non-fatal):`, e);
+    return [];
+  }
 }
 
 // ─── Step 1: Replace design on full shirt photo ──────────────────────────────
@@ -638,7 +683,10 @@ export async function processPatternProduction(
   // model to ADD paddles/wordmarks/props and REDRAW figures) with a pixel-grounded
   // spec that forbids adding anything not already present in the source.
   const editSpec = await planMinimalEdit(sourceImageUrl, promptDescription);
-  const editPrompt = buildEditPrompt(editSpec);
+  // Reject-feedback: inject the workspace's previously-rejected reasons so the
+  // regeneration avoids repeating mistakes the PO already dismissed.
+  const avoid = await getWorkspaceAvoidList(workspaceId);
+  const editPrompt = buildEditPrompt(editSpec, avoid);
 
   // Step 1: Surgically edit the source shirt photo using only the planned swaps.
   const shirtMockup = await replaceDesignOnShirt(sourceImageUrl, editPrompt);
