@@ -169,6 +169,7 @@ async function planMinimalEdit(
           "4. ADD NOTHING. `additions` MUST be empty unless the niche is literally unreadable without one short text token — then at most ONE, and only text. No new graphics, props, paddles, balls, mascots, badges, or decorative wordmarks.",
           "5. If the source has NO text, add NO text. If the source is a complex illustration, prefer a few subject swaps over rebuilding the scene.",
           "6. Set `designType`: 'text-only' if essentially just lettering; 'text-and-graphic' if lettering plus a graphic; 'illustration' if a pictorial scene with little/no text; else 'other'.",
+          "7. When a swap target is niche/sports equipment, describe it precisely in `to` so the image model renders it unambiguously — e.g. 'a solid pickleball paddle with a short handle' (NOT a tennis racquet with strings, NOT a thin disc or frisbee); a pickleball is a small perforated ball.",
         ].join("\n"),
       },
       {
@@ -295,6 +296,7 @@ function buildEditPrompt(spec: EditSpec): string {
     "ADD:",
     addLines,
     "Do NOT recompose, re-letter, redraw, or add anything beyond the explicit changes above. Someone seeing both designs must recognise them as the SAME design with only those swaps made.",
+    "PRINT CONSTRAINT (DTF): render every element as bold, solid shapes with generous width. No thin hairlines, stipple, halftone, or small scattered dots. Any rain, sparkle, or fine texture must be a few BOLD solid strokes or omitted entirely — never tiny isolated marks. (Texture as gaps within a solid filled shape is fine.)",
     "Keep the shirt, fabric, background, lighting, folds, and photo composition completely unchanged.",
   ].join("\n");
 }
@@ -417,6 +419,56 @@ async function cropToContent(imageBuf: Buffer): Promise<Buffer> {
   }
 }
 
+// ─── Step 3.5: DTF despeckle (remove un-printable isolated specks) ────────────
+
+/**
+ * DTF safety net: zero the alpha of free-floating ink islands smaller than
+ * `minArea` pixels. DTF transfer cannot reproduce sub-millimetre isolated marks
+ * (stray specks, scattered dots) — they under-powder and peel off the film.
+ *
+ * This removes ISOLATED small components only. Texture that is connected to a
+ * larger shape (e.g. distress holes inside solid lettering) is untouched — those
+ * are gaps within one big component, not separate islands. Thin connected LINES
+ * (e.g. rain) are deliberately NOT handled here: width-based erosion that removes
+ * them also damages wanted thin elements like small text, so rain is constrained
+ * at generation (see the DTF line in buildEditPrompt) instead.
+ *
+ * 4-connectivity flood-fill labelling; O(pixels). Returns the input unchanged if
+ * nothing is removed.
+ */
+async function despeckleForDtf(buf: Buffer, minArea = 24): Promise<Buffer> {
+  const { data, info } = await sharp(buf).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const { width: w, height: h, channels: ch } = info;
+  const total = w * h;
+  const ON = 128;
+  const comp = new Int32Array(total).fill(-1);
+  const sizes: number[] = [];
+  const stack = new Int32Array(total);
+  let cur = 0;
+  for (let p = 0; p < total; p++) {
+    if (comp[p] !== -1) continue;
+    if (data[p * ch + 3] < ON) { comp[p] = -2; continue; }
+    let sp = 0; stack[sp++] = p; comp[p] = cur; let cnt = 0;
+    while (sp > 0) {
+      const q = stack[--sp]; cnt++;
+      const x = q % w, y = (q / w) | 0;
+      if (x > 0 && comp[q - 1] === -1 && data[(q - 1) * ch + 3] >= ON) { comp[q - 1] = cur; stack[sp++] = q - 1; }
+      if (x < w - 1 && comp[q + 1] === -1 && data[(q + 1) * ch + 3] >= ON) { comp[q + 1] = cur; stack[sp++] = q + 1; }
+      if (y > 0 && comp[q - w] === -1 && data[(q - w) * ch + 3] >= ON) { comp[q - w] = cur; stack[sp++] = q - w; }
+      if (y < h - 1 && comp[q + w] === -1 && data[(q + w) * ch + 3] >= ON) { comp[q + w] = cur; stack[sp++] = q + w; }
+    }
+    sizes.push(cnt); cur++;
+  }
+  let removed = 0;
+  for (let p = 0; p < total; p++) {
+    const c = comp[p];
+    if (c >= 0 && sizes[c] < minArea) { data[p * ch + 3] = 0; removed++; }
+  }
+  if (removed === 0) return buf;
+  console.log(`[PatternProd] despeckleForDtf: removed ${removed}px across islands <${minArea}px`);
+  return sharp(data, { raw: { width: w, height: h, channels: ch } }).png().toBuffer();
+}
+
 // ─── Step 4: Output validation ───────────────────────────────────────────────
 
 /**
@@ -537,8 +589,12 @@ export async function processPatternProduction(
   // Step 2: Extract just the design onto a transparent canvas
   const rawTransparent = await extractTransparentFromShirt(shirtMockup);
 
-  // Step 3: Crop to content bounding box
-  const transparentPng = await cropToContent(rawTransparent);
+  // Step 3a: DTF despeckle — drop un-printable isolated specks before cropping
+  // (so a stray dot in a corner doesn't inflate the crop bbox).
+  const despeckled = await despeckleForDtf(rawTransparent);
+
+  // Step 3b: Crop to content bounding box
+  const transparentPng = await cropToContent(despeckled);
 
   // Step 4: Validate transparency + content presence (throws on failure)
   await assertTransparentPng(transparentPng, patternId);
