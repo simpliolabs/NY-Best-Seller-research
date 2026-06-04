@@ -190,16 +190,18 @@ async function callFalKontextEdit(imageUrl: string, prompt: string): Promise<Buf
  * "replace, don't redesign" is encoded as data rather than left to chance.
  */
 export type EditSpec = {
-  /** "text-only" is routed to the guaranteed font-composite fallback downstream. */
   designType: "text-only" | "text-and-graphic" | "illustration" | "other";
   /** Everything in the source that must remain pixel-identical. */
   preserve: string;
-  /** Exact visible words to change → niche equivalent, same font/size/position. */
+  /** The target niche, e.g. "pickleball". */
+  niche: string;
+  /** Niche signature gear (paddle, net, ball) — integrated ONLY on the VISUAL route. */
+  nicheEquipment: string[];
+  /** Literal text edits from the source (e.g. SALTY -> SALTY DINKER). The ONLY text
+   *  changes; empty on the VISUAL route. */
   textSwaps: Array<{ from: string; to: string }>;
-  /** Non-niche subjects/objects → niche equivalent, same art style/position/scale. */
-  subjectSwaps: Array<{ from: string; to: string }>;
-  /** New elements. MUST default to empty — at most one short text token if required. */
-  additions: string[];
+  /** Main subjects/characters visible in the source (for VISUAL-route integration). */
+  subjects: string[];
 };
 
 /**
@@ -220,17 +222,20 @@ async function planMinimalEdit(
       {
         role: "system",
         content: [
-          "You are a print-on-demand design editor. You plan the MINIMAL edit that adapts an existing t-shirt design to a target niche while preserving the original design as faithfully as possible.",
+          "You are a print-on-demand design editor. You plan the MINIMAL edit that adapts an existing t-shirt design to a target niche while preserving the original as faithfully as possible.",
           "You are shown the ACTUAL source design. Base your plan ONLY on what is literally visible in it.",
           "",
+          "STEP A — from the niche context, set `niche` (e.g. 'pickleball') and `nicheEquipment` = the niche's signature gear (for pickleball: 'a solid pickleball paddle with a short handle', 'a pickleball net', 'a perforated pickleball'). The context's scenes, props, taglines and tone are NOT instructions — ignore them.",
+          "STEP B — pick ONE adaptation route:",
+          "  ROUTE TEXT — if the design has lettering/a wordmark that can be made niche-relevant by changing words: put the exact changes in `textSwaps` (copy the source words verbatim into `from`), e.g. 'SALTY' -> 'SALTY DINKER'. On this route you add NO new visual elements at all — no paddles, balls, props, or graphics.",
+          "  ROUTE VISUAL — if the design has NO usable text (a pure illustration): leave `textSwaps` EMPTY. The niche is conveyed by integrating `nicheEquipment` into the existing subjects, so fill `subjects` and `nicheEquipment` well.",
+          "",
           "HARD RULES:",
-          "1. PRESERVE everything by default — composition, layout, every figure/character, typography, font, lettering, colours, textures, art style. Describe what must stay unchanged in `preserve`.",
-          "2. CHANGE ONLY what is specific to the source's ORIGINAL theme and would not read as the target niche. Put exact word changes in `textSwaps` (copy the source words verbatim into `from`). Put subject/object changes in `subjectSwaps`.",
-          "3. NEVER redraw or restyle a figure/character that can simply stay. Example: a woman holding an umbrella stays EXACTLY as drawn — you do not redraw her; you only change text or add nothing.",
-          "4. ADD NOTHING. `additions` MUST be empty unless the niche is literally unreadable without one short text token — then at most ONE, and only text. No new graphics, props, paddles, balls, mascots, badges, or decorative wordmarks.",
-          "5. If the source has NO text, add NO text. If the source is a complex illustration, prefer a few subject swaps over rebuilding the scene.",
-          "6. Set `designType`: 'text-only' if essentially just lettering; 'text-and-graphic' if lettering plus a graphic; 'illustration' if a pictorial scene with little/no text; else 'other'.",
-          "7. When a swap target is niche/sports equipment, describe it precisely in `to` so the image model renders it unambiguously — e.g. 'a solid pickleball paddle with a short handle' (NOT a tennis racquet with strings, NOT a thin disc or frisbee); a pickleball is a small perforated ball.",
+          "1. PRESERVE everything by default — composition, layout, every figure/character, typography, font, colours, textures, art style. Put what must stay unchanged in `preserve`.",
+          "2. NEVER redraw or restyle a figure/character that can simply stay (a woman under an umbrella stays EXACTLY as drawn).",
+          "3. NEVER invent text. The ONLY text in the output is the source's text with your `textSwaps` applied. NO taglines, slogans, subtitles, nutrition-label parodies, brand names, or descriptive copy — ever.",
+          "4. List the main subjects/characters visible in the source in `subjects`.",
+          "5. Set `designType`: 'text-only' (just lettering), 'text-and-graphic' (lettering + a graphic), 'illustration' (pictorial, little/no text), or 'other'.",
         ].join("\n"),
       },
       {
@@ -242,7 +247,7 @@ async function planMinimalEdit(
           },
           {
             type: "text" as const,
-            text: `Target niche context — use this ONLY to choose replacement words/subjects. It is NOT a design to draw; do NOT import any object, prop, or scene mentioned in it that is not already visible in the source: ${nicheContext}`,
+            text: `Niche context — use it ONLY to identify the target niche, its equipment, and any intended wordmark text. It is NOT a design to draw: ignore its scenes, props, taglines, and tone; never import them: ${nicheContext}`,
           },
         ],
       },
@@ -261,6 +266,8 @@ async function planMinimalEdit(
               enum: ["text-only", "text-and-graphic", "illustration", "other"],
             },
             preserve: { type: "string" },
+            niche: { type: "string" },
+            nicheEquipment: { type: "array", items: { type: "string" } },
             textSwaps: {
               type: "array",
               items: {
@@ -270,18 +277,9 @@ async function planMinimalEdit(
                 required: ["from", "to"],
               },
             },
-            subjectSwaps: {
-              type: "array",
-              items: {
-                type: "object",
-                additionalProperties: false,
-                properties: { from: { type: "string" }, to: { type: "string" } },
-                required: ["from", "to"],
-              },
-            },
-            additions: { type: "array", items: { type: "string" } },
+            subjects: { type: "array", items: { type: "string" } },
           },
-          required: ["designType", "preserve", "textSwaps", "subjectSwaps", "additions"],
+          required: ["designType", "preserve", "niche", "nicheEquipment", "textSwaps", "subjects"],
         },
       },
     },
@@ -309,56 +307,63 @@ async function planMinimalEdit(
     );
   }
   spec.textSwaps ??= [];
-  spec.subjectSwaps ??= [];
-  spec.additions ??= [];
+  spec.subjects ??= [];
+  spec.nicheEquipment ??= [];
+  const route = spec.textSwaps.length > 0 ? "TEXT" : "VISUAL";
   console.log(
-    `[PatternProd] planMinimalEdit type=${spec.designType} ` +
-      `textSwaps=${spec.textSwaps.length} subjectSwaps=${spec.subjectSwaps.length} ` +
-      `additions=${spec.additions.length} preserve="${(spec.preserve || "").slice(0, 60)}…"`
+    `[PatternProd] planMinimalEdit type=${spec.designType} route=${route} niche="${spec.niche}" ` +
+      `textSwaps=${spec.textSwaps.length} subjects=${spec.subjects.length} ` +
+      `nicheEquipment=${spec.nicheEquipment.length} preserve="${(spec.preserve || "").slice(0, 60)}…"`
   );
   return spec;
 }
 
 /**
- * Render an EditSpec into a strict, deterministic Step-1 edit instruction.
- * Enumerates the literal swaps and explicitly locks everything else — the image
- * model is told exactly what to change and that nothing else may move.
+ * Render an EditSpec into a deterministic Step-1 edit instruction, routed by class.
+ *
+ * TEXT route (textSwaps present): change ONLY the words, add no visual elements —
+ * keeps figure designs like "Salty" clean (just the wordmark swap, no invented
+ * taglines/props). VISUAL route (no text): integrate the niche equipment into the
+ * existing subjects so a no-text illustration like the dino scene actually reads
+ * as the niche. Either way: never invent text, preserve everything else, DTF-safe.
+ *
+ * The free-form "additions" field was removed — it was where the LLM smuggled in
+ * taglines and stray props. Routing replaces it with bounded, class-specific rules.
  */
 function buildEditPrompt(spec: EditSpec): string {
-  const textLines = spec.textSwaps.length
-    ? spec.textSwaps
-        .map(
-          (s) =>
-            `  - change the text "${s.from}" to "${s.to}" — keep the identical font, size, weight, colour, position, and distressing`
-        )
-        .join("\n")
-    : "  - (no text changes)";
+  const preserveLine = `PRESERVE COMPLETELY (keep pixel-identical; do not redraw, restyle, recolour, reposition, or resize): ${spec.preserve}. Keep the shirt, fabric, background, lighting, and composition unchanged.`;
+  const noInventText = "NEVER invent text — no taglines, slogans, subtitles, brand names, or descriptive copy of any kind. The only text allowed is listed above (if any).";
+  const dtf = "PRINT CONSTRAINT (DTF): bold, solid shapes only — no thin hairlines, stipple, halftone, or small scattered dots; render any rain/sparkle/texture as a few BOLD solid strokes or omit it.";
 
-  const subjLines = spec.subjectSwaps.length
-    ? spec.subjectSwaps
-        .map(
-          (s) =>
-            `  - replace ${s.from} with ${s.to} — identical art style, position, and scale`
-        )
-        .join("\n")
-    : "  - (no subject changes)";
+  if (spec.textSwaps.length > 0) {
+    // TEXT route — change only the words, add nothing visual.
+    const textLines = spec.textSwaps
+      .map(
+        (s) =>
+          `  - change the text "${s.from}" to "${s.to}" — keep the identical font, size, weight, colour, position, and texture`
+      )
+      .join("\n");
+    return [
+      "Edit the printed graphic on this t-shirt IN PLACE — a surgical edit of the EXISTING design, NOT a redesign.",
+      "TEXT CHANGES are the ONLY changes allowed. Do not add, remove, redraw, or restyle any graphic, figure, or prop:",
+      textLines,
+      preserveLine,
+      noInventText,
+      dtf,
+    ].join("\n");
+  }
 
-  const addLines = spec.additions.length
-    ? spec.additions.map((a) => `  - ${a}`).join("\n")
-    : "  - nothing. Add NO new text, graphics, props, badges, mascots, or marks.";
-
+  // VISUAL route — no usable text: integrate niche gear into the existing subjects.
+  const gear = spec.nicheEquipment.length ? spec.nicheEquipment.join(", ") : `${spec.niche} equipment`;
+  const subjects = spec.subjects.length ? spec.subjects.join(", ") : "the existing subjects";
+  const NICHE = (spec.niche || "the niche").toUpperCase();
   return [
-    "Edit the printed graphic on this t-shirt IN PLACE. This is a surgical find-and-replace on the EXISTING design — NOT a redesign.",
-    `PRESERVE COMPLETELY — keep pixel-identical; do not redraw, restyle, recolour, reposition, or resize: ${spec.preserve}. Every element not explicitly listed below must remain exactly as in the original.`,
-    "TEXT CHANGES (the only text edits allowed):",
-    textLines,
-    "SUBJECT CHANGES (the only subject edits allowed):",
-    subjLines,
-    "ADD:",
-    addLines,
-    "Do NOT recompose, re-letter, redraw, or add anything beyond the explicit changes above. Someone seeing both designs must recognise them as the SAME design with only those swaps made.",
-    "PRINT CONSTRAINT (DTF): render every element as bold, solid shapes with generous width. No thin hairlines, stipple, halftone, or small scattered dots. Any rain, sparkle, or fine texture must be a few BOLD solid strokes or omitted entirely — never tiny isolated marks. (Texture as gaps within a solid filled shape is fine.)",
-    "Keep the shirt, fabric, background, lighting, folds, and photo composition completely unchanged.",
+    "Edit the printed graphic on this t-shirt IN PLACE — keep the original artwork and art style; only make it clearly about the niche.",
+    `MAKE IT UNMISTAKABLY ${NICHE}: integrate ${gear} into the existing subjects (${subjects}) — put the equipment in their hands and into the scene so a viewer instantly recognises ${spec.niche || "the niche"}. Keep every subject and the art style exactly as drawn.`,
+    "Add NO text or wordmark of any kind.",
+    preserveLine,
+    noInventText,
+    dtf,
   ].join("\n");
 }
 
