@@ -50,6 +50,7 @@ import {
   updateTrendPatternImage,
   updateTrendPatternProductionUrl,
 } from "./nicheHunterDb";
+import { invokeLLM } from "./_core/llm";
 
 // ─── Shared OpenAI /v1/images/edits caller ───────────────────────────────────
 
@@ -64,7 +65,7 @@ async function callImageEdit(
   sourceImg: Buffer,
   filename: string,
   prompt: string,
-  options: { transparent: boolean }
+  options: { transparent: boolean; inputFidelity?: "high" | "low" }
 ): Promise<Buffer> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
@@ -76,6 +77,13 @@ async function callImageEdit(
   formData.append("quality", "high");
   if (options.transparent) {
     formData.append("background", "transparent");
+  }
+  if (options.inputFidelity) {
+    // input_fidelity:"high" tells gpt-image-1 to preserve input features (faces,
+    // lettering, layout, art style) during a subtle edit — the API-level lever
+    // that stops it redrawing elements it was not asked to touch. Per OpenAI docs
+    // this is NOT valid on gpt-image-2; it is honored on gpt-image-1.
+    formData.append("input_fidelity", options.inputFidelity);
   }
   const blob = new Blob([new Uint8Array(sourceImg)], { type: "image/png" });
   formData.append("image[]", blob, filename);
@@ -105,6 +113,192 @@ async function callImageEdit(
   throw new Error("gpt-image-1 response has neither b64_json nor url");
 }
 
+// ─── Step 0: Vision-grounded minimal-edit planner ────────────────────────────
+
+/**
+ * A surgical edit plan derived by LOOKING at the actual source design.
+ *
+ * This replaces the prose `adaptedConcept` that used to drive Step 1. That field
+ * is a from-scratch redesign brief ("a stylized player with a salt shaker…",
+ * "…with the text 'Salty Dinker'", "evoking a vintage travel poster") generated
+ * from a TEXT description of the source — so it instructed the image model to ADD
+ * elements (paddles, wordmarks, props) and REDRAW figures. The result read as a
+ * new design, not the original with the niche swapped in.
+ *
+ * The planner instead enumerates only literal swaps and forbids additions, so
+ * "replace, don't redesign" is encoded as data rather than left to chance.
+ */
+export type EditSpec = {
+  /** "text-only" is routed to the guaranteed font-composite fallback downstream. */
+  designType: "text-only" | "text-and-graphic" | "illustration" | "other";
+  /** Everything in the source that must remain pixel-identical. */
+  preserve: string;
+  /** Exact visible words to change → niche equivalent, same font/size/position. */
+  textSwaps: Array<{ from: string; to: string }>;
+  /** Non-niche subjects/objects → niche equivalent, same art style/position/scale. */
+  subjectSwaps: Array<{ from: string; to: string }>;
+  /** New elements. MUST default to empty — at most one short text token if required. */
+  additions: string[];
+};
+
+/**
+ * Look at the ACTUAL source design and return the minimal set of swaps that make
+ * it niche-appropriate — grounded in pixels, not in a text description. The hard
+ * rule baked into the prompt: ADD NOTHING that is not already in the source
+ * (except, at most, one short text token the niche genuinely requires).
+ *
+ * `nicheContext` is used ONLY to choose replacement words/subjects; the planner is
+ * told explicitly not to import any object or scene mentioned in it.
+ */
+async function planMinimalEdit(
+  sourceImageUrl: string,
+  nicheContext: string
+): Promise<EditSpec> {
+  const response = await invokeLLM({
+    messages: [
+      {
+        role: "system",
+        content: [
+          "You are a print-on-demand design editor. You plan the MINIMAL edit that adapts an existing t-shirt design to a target niche while preserving the original design as faithfully as possible.",
+          "You are shown the ACTUAL source design. Base your plan ONLY on what is literally visible in it.",
+          "",
+          "HARD RULES:",
+          "1. PRESERVE everything by default — composition, layout, every figure/character, typography, font, lettering, colours, textures, art style. Describe what must stay unchanged in `preserve`.",
+          "2. CHANGE ONLY what is specific to the source's ORIGINAL theme and would not read as the target niche. Put exact word changes in `textSwaps` (copy the source words verbatim into `from`). Put subject/object changes in `subjectSwaps`.",
+          "3. NEVER redraw or restyle a figure/character that can simply stay. Example: a woman holding an umbrella stays EXACTLY as drawn — you do not redraw her; you only change text or add nothing.",
+          "4. ADD NOTHING. `additions` MUST be empty unless the niche is literally unreadable without one short text token — then at most ONE, and only text. No new graphics, props, paddles, balls, mascots, badges, or decorative wordmarks.",
+          "5. If the source has NO text, add NO text. If the source is a complex illustration, prefer a few subject swaps over rebuilding the scene.",
+          "6. Set `designType`: 'text-only' if essentially just lettering; 'text-and-graphic' if lettering plus a graphic; 'illustration' if a pictorial scene with little/no text; else 'other'.",
+        ].join("\n"),
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "image_url" as const,
+            image_url: { url: sourceImageUrl, detail: "high" as const },
+          },
+          {
+            type: "text" as const,
+            text: `Target niche context — use this ONLY to choose replacement words/subjects. It is NOT a design to draw; do NOT import any object, prop, or scene mentioned in it that is not already visible in the source: ${nicheContext}`,
+          },
+        ],
+      },
+    ],
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "minimal_edit_plan",
+        strict: true,
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            designType: {
+              type: "string",
+              enum: ["text-only", "text-and-graphic", "illustration", "other"],
+            },
+            preserve: { type: "string" },
+            textSwaps: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: { from: { type: "string" }, to: { type: "string" } },
+                required: ["from", "to"],
+              },
+            },
+            subjectSwaps: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: { from: { type: "string" }, to: { type: "string" } },
+                required: ["from", "to"],
+              },
+            },
+            additions: { type: "array", items: { type: "string" } },
+          },
+          required: ["designType", "preserve", "textSwaps", "subjectSwaps", "additions"],
+        },
+      },
+    },
+  });
+
+  const content = response.choices?.[0]?.message?.content;
+  const raw =
+    typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content.map((c) => ("text" in c ? c.text : "")).join("")
+        : "";
+  if (!raw.trim()) {
+    throw new Error("[PatternProd] planMinimalEdit: empty LLM response");
+  }
+
+  let spec: EditSpec;
+  try {
+    spec = JSON.parse(
+      raw.trim().replace(/^```json\s*/i, "").replace(/\s*```$/i, "")
+    ) as EditSpec;
+  } catch {
+    throw new Error(
+      `[PatternProd] planMinimalEdit: could not parse edit plan: ${raw.slice(0, 200)}`
+    );
+  }
+  spec.textSwaps ??= [];
+  spec.subjectSwaps ??= [];
+  spec.additions ??= [];
+  console.log(
+    `[PatternProd] planMinimalEdit type=${spec.designType} ` +
+      `textSwaps=${spec.textSwaps.length} subjectSwaps=${spec.subjectSwaps.length} ` +
+      `additions=${spec.additions.length} preserve="${(spec.preserve || "").slice(0, 60)}…"`
+  );
+  return spec;
+}
+
+/**
+ * Render an EditSpec into a strict, deterministic Step-1 edit instruction.
+ * Enumerates the literal swaps and explicitly locks everything else — the image
+ * model is told exactly what to change and that nothing else may move.
+ */
+function buildEditPrompt(spec: EditSpec): string {
+  const textLines = spec.textSwaps.length
+    ? spec.textSwaps
+        .map(
+          (s) =>
+            `  - change the text "${s.from}" to "${s.to}" — keep the identical font, size, weight, colour, position, and distressing`
+        )
+        .join("\n")
+    : "  - (no text changes)";
+
+  const subjLines = spec.subjectSwaps.length
+    ? spec.subjectSwaps
+        .map(
+          (s) =>
+            `  - replace ${s.from} with ${s.to} — identical art style, position, and scale`
+        )
+        .join("\n")
+    : "  - (no subject changes)";
+
+  const addLines = spec.additions.length
+    ? spec.additions.map((a) => `  - ${a}`).join("\n")
+    : "  - nothing. Add NO new text, graphics, props, badges, mascots, or marks.";
+
+  return [
+    "Edit the printed graphic on this t-shirt IN PLACE. This is a surgical find-and-replace on the EXISTING design — NOT a redesign.",
+    `PRESERVE COMPLETELY — keep pixel-identical; do not redraw, restyle, recolour, reposition, or resize: ${spec.preserve}. Every element not explicitly listed below must remain exactly as in the original.`,
+    "TEXT CHANGES (the only text edits allowed):",
+    textLines,
+    "SUBJECT CHANGES (the only subject edits allowed):",
+    subjLines,
+    "ADD:",
+    addLines,
+    "Do NOT recompose, re-letter, redraw, or add anything beyond the explicit changes above. Someone seeing both designs must recognise them as the SAME design with only those swaps made.",
+    "Keep the shirt, fabric, background, lighting, folds, and photo composition completely unchanged.",
+  ].join("\n");
+}
+
 // ─── Step 1: Replace design on full shirt photo ──────────────────────────────
 
 /**
@@ -120,7 +314,7 @@ async function callImageEdit(
  */
 async function replaceDesignOnShirt(
   sourceImageUrl: string,
-  promptDescription: string
+  editPrompt: string
 ): Promise<Buffer> {
   const imgResp = await fetch(sourceImageUrl);
   if (!imgResp.ok) {
@@ -130,24 +324,19 @@ async function replaceDesignOnShirt(
     .png()
     .toBuffer();
 
-  // SURGICAL EDIT, not redesign. The model can see the original printed design;
-  // tell it to preserve that design and change only the minimal elements needed
-  // to make it niche-appropriate. "Replace the entire design" licensed a redesign
-  // and destroyed fidelity to the original — that is the behavior this prompt fixes.
-  const prompt = [
-    "Edit the printed graphic on this t-shirt IN PLACE. This is a surgical find-and-replace on the existing design, NOT a redesign.",
-    "PRESERVE EXACTLY — do not alter: the composition, layout, the number and position of every element, the typography and font, the lettering style, line weight, distressing/texture, the color palette, and the overall art style of the existing printed design.",
-    "Make ONLY the minimal changes needed to adapt the existing design to pickleball:",
-    "1. TEXT: keep the same words wherever they already work; swap only the words that are niche-specific to their pickleball equivalent, set in the SAME font, size, position, weight, and distress as the original text.",
-    "2. SUBJECT/OBJECT: if a non-pickleball object or character is present, replace it with its pickleball equivalent (e.g. a wrench becomes a pickleball paddle), drawn in the SAME art style and placed in the SAME location and scale as the original.",
-    "3. ADD text only if a pickleball reference requires it, matched to the existing style — otherwise add nothing.",
-    `The target adaptation (use it only to choose the new words/subject, NOT as a new design to draw from scratch): ${promptDescription}.`,
-    "Do NOT recompose, restyle, re-letter, reposition, or redraw anything that is not one of the minimal swaps above. Someone who saw both shirts should recognise them as the same design with the subject swapped.",
-    "Keep the shirt, background, props, lighting, folds, and photo composition completely unchanged.",
-  ].join(" ");
-
-  console.log(`[PatternProd] Step 1 (replace). Prompt: "${prompt.substring(0, 120)}..."`);
-  return callImageEdit(sourcePng, "source_shirt.png", prompt, { transparent: false });
+  // The edit instruction is built upstream by buildEditPrompt() from a
+  // vision-grounded EditSpec: it enumerates the literal swaps and locks
+  // everything else. input_fidelity:"high" is the API-level lever that makes the
+  // model actually honour "preserve everything not listed" rather than silently
+  // re-rendering the whole canvas (the cause of the redrawn figure / re-lettered
+  // text the PO flagged).
+  console.log(
+    `[PatternProd] Step 1 (surgical replace, input_fidelity=high). Prompt: "${editPrompt.substring(0, 140)}..."`
+  );
+  return callImageEdit(sourcePng, "source_shirt.png", editPrompt, {
+    transparent: false,
+    inputFidelity: "high",
+  });
 }
 
 // ─── Step 2: Extract transparent design from edited shirt photo ──────────────
@@ -335,8 +524,15 @@ export async function processPatternProduction(
 ): Promise<{ productionDesignUrl: string; previewImageUrl: string }> {
   console.log(`[PatternProd] Processing pattern ${patternId}...`);
 
-  // Step 1: Edit source shirt photo, replacing the design
-  const shirtMockup = await replaceDesignOnShirt(sourceImageUrl, promptDescription);
+  // Step 0: Look at the ACTUAL source design and plan the minimal niche swaps.
+  // Replaces the prose adaptedConcept (a from-scratch brief that instructed the
+  // model to ADD paddles/wordmarks/props and REDRAW figures) with a pixel-grounded
+  // spec that forbids adding anything not already present in the source.
+  const editSpec = await planMinimalEdit(sourceImageUrl, promptDescription);
+  const editPrompt = buildEditPrompt(editSpec);
+
+  // Step 1: Surgically edit the source shirt photo using only the planned swaps.
+  const shirtMockup = await replaceDesignOnShirt(sourceImageUrl, editPrompt);
 
   // Step 2: Extract just the design onto a transparent canvas
   const rawTransparent = await extractTransparentFromShirt(shirtMockup);
