@@ -27,6 +27,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import type { NicheProfile } from "@/../../server/onboardingRouter";
+import CulturalMapEditor from "@/components/CulturalMapEditor";
 
 export default function WorkspaceSettings() {
   const { activeWorkspace, setActiveWorkspaceId } = useWorkspace();
@@ -130,7 +131,7 @@ export default function WorkspaceSettings() {
   // Array field helpers
   function updateProfileArray(field: keyof NicheProfile, index: number, value: string) {
     if (!profile) return;
-    const arr = [...(profile[field] as string[])];
+    const arr = [...((profile[field] as string[] | undefined) ?? [])];
     arr[index] = value;
     setProfile({ ...profile, [field]: arr });
     setDirty(true);
@@ -138,14 +139,14 @@ export default function WorkspaceSettings() {
 
   function removeProfileItem(field: keyof NicheProfile, index: number) {
     if (!profile) return;
-    const arr = (profile[field] as string[]).filter((_, i) => i !== index);
+    const arr = ((profile[field] as string[] | undefined) ?? []).filter((_, i) => i !== index);
     setProfile({ ...profile, [field]: arr });
     setDirty(true);
   }
 
   function addProfileItem(field: keyof NicheProfile) {
     if (!profile) return;
-    setProfile({ ...profile, [field]: [...(profile[field] as string[]), ""] });
+    setProfile({ ...profile, [field]: [...((profile[field] as string[] | undefined) ?? []), ""] });
     setDirty(true);
   }
 
@@ -380,6 +381,7 @@ export default function WorkspaceSettings() {
               [
                 { key: "subreddits", label: "Subreddits to Scan", hint: "Only subreddits directly about this niche" },
                 { key: "etsyKeywords", label: "Etsy In-Niche Keywords", hint: "Search terms buyers in this niche would type" },
+                { key: "generalBestSellerTerms", label: "General Best-Seller Search Terms", hint: "Broad product-type terms (e.g. 'funny shirt', 'graphic tee') — always scraped" },
                 { key: "crossNicheCategories", label: "Cross-Niche Scan Categories", hint: "Hot sellers in UNRELATED niches with transferable design patterns" },
                 { key: "culturalMoments", label: "Cultural Moments / Inside Jokes", hint: "Real phrases and memes insiders recognize" },
                 { key: "designStyles", label: "Design Styles", hint: "Visual styles that resonate with this audience" },
@@ -394,7 +396,7 @@ export default function WorkspaceSettings() {
                   <span className="text-[10px] text-muted-foreground">{hint}</span>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {(profile[key] as string[]).map((item, i) => (
+                  {((profile[key] as string[] | undefined) ?? []).map((item, i) => (
                     <div key={i} className="flex items-center gap-1 bg-muted rounded-md px-2 py-1">
                       <input
                         className="bg-transparent text-xs outline-none min-w-0 w-auto"
@@ -421,6 +423,17 @@ export default function WorkspaceSettings() {
             ))}
           </CardContent>
         </Card>
+      )}
+
+      {/* Deep Cultural Map — editable */}
+      {isNicheHunter && profile?.culturalMap && (
+        <CulturalMapEditor
+          culturalMap={profile.culturalMap}
+          onChange={(updated) => {
+            setProfile({ ...profile, culturalMap: updated });
+            setDirty(true);
+          }}
+        />
       )}
 
       {/* NYT workspace info */}

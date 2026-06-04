@@ -20,8 +20,11 @@ import {
   recordApprovalSignal,
   recordRejectionSignal,
   updateTrendPatternDtfUrl,
+  getStuckProductionPatterns,
+  countStuckProductionPatterns,
 } from "./nicheHunterDb";
 import { runNicheHunterScan } from "./nicheHunter";
+import { processPatternProduction } from "./patternProductionProcessor";
 import { getWorkspaceById } from "./workspaceDb";
 import { createConceptFromPattern } from "./db";
 import { computeSignalWeights } from "./signalWeights";
@@ -73,13 +76,8 @@ export const nicheHunterRouter = router({
 
       const scanRun = await createScanRun(input.workspaceId);
 
-      const rawEtsyKey = process.env.ETSY_API_KEY;
-      const rawEtsySecret = process.env.ETSY_API_SECRET;
-      const etsyApiKey = rawEtsyKey && rawEtsySecret
-        ? `${rawEtsyKey}:${rawEtsySecret}`
-        : rawEtsyKey || undefined;
-
-      runNicheHunterScan(workspace, scanRun.id, etsyApiKey).catch((err) =>
+      // Scraper-based pipeline: no Etsy API key needed
+      runNicheHunterScan(workspace, scanRun.id).catch((err) =>
         console.error("[NicheHunter] Scan failed:", err)
       );
 
@@ -107,6 +105,8 @@ export const nicheHunterRouter = router({
         scanId: run.id,
         errorLog: run.errorLog ?? null,
         completedAt: run.completedAt ? run.completedAt.getTime() : null,
+        createdAt: run.createdAt.getTime(),
+        searchLog: run.searchLog ?? [],
       };
     }),
 
@@ -158,14 +158,18 @@ export const nicheHunterRouter = router({
       const conceptId = await createConceptFromPattern(pattern, input.workspaceId);
 
       // 4. Deferred DTF extraction — fire and forget
-      if (pattern.previewImageUrl && !pattern.dtfImageUrl) {
+      // v2 path: use productionDesignUrl (transparent PNG) — skip flood-fill
+      // Legacy path: use previewImageUrl (shirt photo) — run flood-fill
+      const dtfSourceUrl = pattern.productionDesignUrl || pattern.previewImageUrl;
+      const isAlreadyTransparent = !!pattern.productionDesignUrl;
+      if (dtfSourceUrl && !pattern.dtfImageUrl) {
         void (async () => {
           try {
             const { processPatternForDtf } = await import("./patternDtfProcessor");
-            const dtfUrl = await processPatternForDtf(pattern.previewImageUrl!);
+            const dtfUrl = await processPatternForDtf(dtfSourceUrl, isAlreadyTransparent);
             if (dtfUrl) {
               await updateTrendPatternDtfUrl(input.patternId, dtfUrl);
-              console.log(`[NicheHunter] DTF extraction complete for pattern ${input.patternId}`);
+              console.log(`[NicheHunter] DTF extraction complete for pattern ${input.patternId} (${isAlreadyTransparent ? 'v2 transparent' : 'legacy'})`);
             }
           } catch (err) {
             console.warn(`[NicheHunter] DTF extraction failed for pattern ${input.patternId}:`, err);
@@ -227,5 +231,61 @@ export const nicheHunterRouter = router({
         adaptationMode: "style_reference_flagged",
       });
       return { success: true, message: "Pattern flagged for style_reference retry" };
+    }),
+
+  /**
+   * Regenerate the productionDesignUrl for an existing pattern.
+   * Calls processPatternProduction with the pattern's stored sourceImageUrl and promptDescription.
+   * This is the user-facing "regenerate" action for stale or failed production images.
+   */
+  regenerateProductionImage: protectedProcedure
+    .input(z.object({ patternId: z.string(), workspaceId: z.string() }))
+    .mutation(async ({ input }) => {
+      const patterns = await getTrendPatternsByWorkspace(input.workspaceId);
+      const pattern = patterns.find((p) => p.id === input.patternId);
+      if (!pattern) throw new TRPCError({ code: "NOT_FOUND", message: "Pattern not found" });
+      if (!pattern.sourceImageUrl) throw new TRPCError({ code: "BAD_REQUEST", message: "No source image URL" });
+      const promptDesc = (pattern as any).promptDescription ?? pattern.adaptedConcept ?? "";
+      const result = await processPatternProduction(
+        input.patternId,
+        input.workspaceId,
+        pattern.sourceImageUrl,
+        promptDesc
+      );
+      return result;
+    }),
+
+  /**
+   * Cloud-Run-safe production image retry.
+   * Picks ONE stuck pattern (has sourceImageUrl, no productionDesignUrl) and runs
+   * processPatternProduction on it synchronously within the request lifetime.
+   * Returns { processed: patternId | null, remaining: number }.
+   *
+   * The frontend polls this every 15s while remaining > 0, draining the queue
+   * one image per request — each call completes well within the 180s Cloud Run timeout.
+   */
+  retryStuckPatterns: protectedProcedure
+    .input(z.object({ workspaceId: z.string() }))
+    .mutation(async ({ input }) => {
+      const stuck = await getStuckProductionPatterns(input.workspaceId, 1);
+      if (stuck.length === 0) {
+        return { processed: null, remaining: 0 };
+      }
+      const pattern = stuck[0];
+      const promptDesc = (pattern as any).promptDescription ?? pattern.adaptedConcept ?? "";
+      try {
+        await processPatternProduction(
+          pattern.id,
+          input.workspaceId,
+          pattern.sourceImageUrl!,
+          promptDesc
+        );
+        console.log(`[retryStuckPatterns] ✅ Processed pattern ${pattern.id}: ${pattern.adaptedConcept?.slice(0, 60)}`);
+      } catch (err) {
+        console.error(`[retryStuckPatterns] ❌ Failed pattern ${pattern.id}:`, err instanceof Error ? err.message : err);
+        // Don't throw — return remaining count so frontend keeps polling
+      }
+      const remaining = await countStuckProductionPatterns(input.workspaceId);
+      return { processed: pattern.id, remaining };
     }),
 });

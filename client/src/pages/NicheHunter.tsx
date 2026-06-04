@@ -20,7 +20,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import {
   Crosshair, CheckCircle2, XCircle, Loader2, Zap, RefreshCw,
-  ExternalLink, AlertTriangle, ThumbsUp, ThumbsDown, Sparkles,
+  ExternalLink, AlertTriangle, ThumbsUp, ThumbsDown, Sparkles, ChevronDown, ChevronUp,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -61,11 +61,14 @@ type Pattern = {
   whyItWorks: string | null;
   adaptedConcept: string | null;
   previewImageUrl: string | null;
+  productionDesignUrl: string | null;
   sourcePlatform: string | null;
   sourceTitle: string | null;
   sourceUrl: string | null;
   sourceImageUrl: string | null;
   sourceSales: number | null;
+  sourceBadge: string | null;
+  sourceReviewCount: number | null;
   sourceCategory: string | null;
   transferValid: boolean | null;
   transferReasoning: string | null;
@@ -211,7 +214,11 @@ function PatternCard({
           <div className="mt-1">
             <p className="text-xs text-muted-foreground truncate">
               Source: {pattern.sourceTitle}
-              {pattern.sourceSales ? ` · ~${pattern.sourceSales} sales/mo` : ""}
+              {pattern.sourceReviewCount != null
+                ? ` · ${pattern.sourceReviewCount.toLocaleString()} reviews`
+                : pattern.sourceSales
+                ? ` · ~${pattern.sourceSales} sales/mo`
+                : ""}
             </p>
             <a
               href={
@@ -304,22 +311,65 @@ function PatternCard({
           </div>
         )}
 
-        {/* AI-generated adapted design preview */}
-        {pattern.previewImageUrl && (
+        {/* Loading indicator when production image is still generating */}
+        {pattern.sourceImageUrl && !pattern.productionDesignUrl && !pattern.previewImageUrl && pattern.adaptationMode === "edit_source" && (
+          <div className="rounded-md border border-dashed border-border bg-muted/50 p-4 flex flex-col items-center justify-center gap-2 min-h-[120px]">
+            <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+            <p className="text-xs text-muted-foreground text-center">Generating niche variation...</p>
+            <p className="text-[10px] text-muted-foreground/60 text-center">This takes 30–60 seconds. Page auto-refreshes.</p>
+          </div>
+        )}
+
+        {/* AI-generated adapted design — productionDesignUrl (transparent) is primary */}
+        {(pattern.productionDesignUrl || pattern.previewImageUrl) && (
           <div>
             {pattern.sourceImageUrl && (
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">
-                Adapted Design Preview
+                {pattern.productionDesignUrl ? "Production Design (Transparent)" : "Adapted Design Preview"}
               </p>
             )}
-            <div className="rounded-md overflow-hidden border border-border bg-muted w-full">
-              <img
-                src={pattern.previewImageUrl}
-                alt={pattern.patternName}
-                className="w-full h-auto block"
-                style={{ display: 'block', width: '100%', height: 'auto' }}
-              />
-            </div>
+            {/* Primary: transparent production design on checkerboard */}
+            {pattern.productionDesignUrl ? (
+              <div
+                className="rounded-md overflow-hidden border border-border w-full"
+                style={{
+                  backgroundImage: 'linear-gradient(45deg, #e0e0e0 25%, transparent 25%), linear-gradient(-45deg, #e0e0e0 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e0e0e0 75%), linear-gradient(-45deg, transparent 75%, #e0e0e0 75%)',
+                  backgroundSize: '16px 16px',
+                  backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0px',
+                  backgroundColor: '#f5f5f5',
+                }}
+              >
+                <img
+                  src={pattern.productionDesignUrl}
+                  alt={pattern.patternName}
+                  className="w-full h-auto block"
+                  style={{ display: 'block', width: '100%', height: 'auto' }}
+                />
+              </div>
+            ) : (
+              <div className="rounded-md overflow-hidden border border-border bg-muted w-full">
+                <img
+                  src={pattern.previewImageUrl!}
+                  alt={pattern.patternName}
+                  className="w-full h-auto block"
+                  style={{ display: 'block', width: '100%', height: 'auto' }}
+                />
+              </div>
+            )}
+            {/* Secondary: on-tee mockup thumbnail (only if different from production) */}
+            {pattern.productionDesignUrl && pattern.previewImageUrl && pattern.previewImageUrl !== pattern.productionDesignUrl && (
+              <div className="mt-2">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">On-Tee Preview</p>
+                <div className="rounded border border-border overflow-hidden w-20 h-20">
+                  <img
+                    src={pattern.previewImageUrl}
+                    alt="Mockup preview"
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              </div>
+            )}
+            <div className="hidden">legacy-fallback</div>
             {/* Flag edit-mode result button */}
             {pattern.adaptationMode === "edit_source" && pattern.status === "discovered" && (
               <Button
@@ -652,6 +702,9 @@ export default function NicheHunter() {
   const [activeScanId, setActiveScanId] = useState<string | null>(null);
   const [actingPatternId, setActingPatternId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"discovered" | "approved" | "dismissed" | undefined>(undefined);
+  const [showSearchLog, setShowSearchLog] = useState(false);
+  const [retryRemaining, setRetryRemaining] = useState(0);
+  const [isRetrying, setIsRetrying] = useState(false);
 
   // Signal dialog state
   const [approveDialogPatternId, setApproveDialogPatternId] = useState<string | null>(null);
@@ -685,8 +738,57 @@ export default function NicheHunter() {
   const { data: patterns = [], isLoading: patternsLoading } =
     trpc.nicheHunter.getPatterns.useQuery(
       { workspaceId, status: statusFilter },
-      { enabled: !!workspaceId }
+      {
+        enabled: !!workspaceId,
+        // Poll every 10s while any pattern has a sourceImageUrl but no productionDesignUrl
+        // (fire-and-forget image gen still in progress)
+        refetchInterval: (query) => {
+          const data = query.state.data;
+          if (!data || data.length === 0) return false;
+          const hasIncomplete = data.some(
+            (p: any) => p.sourceImageUrl && !p.productionDesignUrl && p.adaptationMode === "edit_source"
+          );
+          return hasIncomplete ? 10000 : false;
+        },
+      }
     );
+
+  const retryStuck = trpc.nicheHunter.retryStuckPatterns.useMutation({
+    onSuccess: (data) => {
+      setRetryRemaining(data.remaining);
+      if (data.remaining === 0) {
+        setIsRetrying(false);
+        utils.nicheHunter.getPatterns.invalidate({ workspaceId });
+      }
+    },
+    onError: () => {
+      setIsRetrying(false);
+    },
+  });
+
+  // Drain stuck patterns one-at-a-time via polling — Cloud Run safe (one image per request)
+  useEffect(() => {
+    if (!workspaceId || isRetrying) return;
+    const stuckCount = patterns.filter((p: any) => p.sourceImageUrl && !p.productionDesignUrl).length;
+    if (stuckCount === 0) {
+      setRetryRemaining(0);
+      return;
+    }
+    setRetryRemaining(stuckCount);
+    setIsRetrying(true);
+    retryStuck.mutate({ workspaceId });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [patterns, workspaceId]);
+
+  // After each retry completes, trigger the next one after a short pause
+  useEffect(() => {
+    if (!isRetrying || retryRemaining === 0 || !workspaceId) return;
+    const timer = setTimeout(() => {
+      retryStuck.mutate({ workspaceId });
+    }, 3000); // 3s gap between calls to avoid hammering the API
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRetrying, retryRemaining, workspaceId]);
 
   const triggerScan = trpc.nicheHunter.triggerScan.useMutation({
     onSuccess: (data) => {
@@ -812,6 +914,81 @@ export default function NicheHunter() {
             <Progress value={scanStatus.progress} className="h-2" />
             {scanStatus.status === "failed" && scanStatus.errorLog && (
               <p className="text-xs text-destructive mt-2">{scanStatus.errorLog}</p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Retry progress — shown while stuck patterns are being processed */}
+      {isRetrying && retryRemaining > 0 && (
+        <Card className="border border-amber-500/30 bg-amber-500/5">
+          <CardContent className="pt-3 pb-3">
+            <div className="flex items-center gap-2">
+              <Loader2 className="w-3.5 h-3.5 text-amber-500 animate-spin flex-shrink-0" />
+              <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">
+                Generating niche variations… {retryRemaining} remaining
+              </span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Search Log — collapsible, shown when scan has completed and has a searchLog */}
+      {scanStatus && scanStatus.status !== "none" && Array.isArray((scanStatus as { searchLog?: unknown }).searchLog) && ((scanStatus as { searchLog?: unknown[] }).searchLog?.length ?? 0) > 0 && (
+        <Card className="border border-border">
+          <CardContent className="pt-3 pb-3">
+            <button
+              className="flex items-center justify-between w-full text-left"
+              onClick={() => setShowSearchLog(v => !v)}
+            >
+              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                Search Log — {(scanStatus as { searchLog?: unknown[] }).searchLog?.length ?? 0} URLs pinged
+              </span>
+              {showSearchLog ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />}
+            </button>
+            {showSearchLog && (
+              <div className="mt-3 overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-border">
+                      <th className="text-left py-1.5 pr-3 font-medium text-muted-foreground w-[180px]">Date / Time</th>
+                      <th className="text-left py-1.5 pr-3 font-medium text-muted-foreground w-[90px]">Filter</th>
+                      <th className="text-left py-1.5 pr-3 font-medium text-muted-foreground w-[50px]">Results</th>
+                      <th className="text-left py-1.5 font-medium text-muted-foreground">Etsy URL</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {((scanStatus as { searchLog?: Array<{ query: string; url: string; filter: string; resultCount: number; searchedAt: string }> }).searchLog ?? []).map((entry, i) => (
+                      <tr key={i} className="border-b border-border/40 last:border-0 hover:bg-muted/30 transition-colors">
+                        <td className="py-1.5 pr-3 text-muted-foreground tabular-nums whitespace-nowrap">
+                          {new Date(entry.searchedAt).toLocaleString()}
+                        </td>
+                        <td className="py-1.5 pr-3">
+                          <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                            entry.filter === "is_best_seller"
+                              ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                              : "bg-blue-500/15 text-blue-600 dark:text-blue-400"
+                          }`}>
+                            {entry.filter === "is_best_seller" ? "Best Seller" : "Popular Now"}
+                          </span>
+                        </td>
+                        <td className="py-1.5 pr-3 tabular-nums text-muted-foreground">{entry.resultCount}</td>
+                        <td className="py-1.5">
+                          <a
+                            href={entry.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-primary hover:underline flex items-center gap-1 min-w-0"
+                          >
+                            <span className="truncate max-w-[320px]">{entry.url}</span>
+                            <ExternalLink className="w-3 h-3 flex-shrink-0" />
+                          </a>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </CardContent>
         </Card>

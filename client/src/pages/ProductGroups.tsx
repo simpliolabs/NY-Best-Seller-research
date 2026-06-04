@@ -291,11 +291,28 @@ function MockupUploadCard({ groupId, onUploaded }: { groupId: string; onUploaded
   );
 }
 
-// ─── Print Zone Section ───────────────────────────────────────────────────────
-function PrintZoneSection({ groupId, currentZone, firstMockupUrl }: {
+// ─── Coordinate helpers ────────────────────────────────────────────────────────
+/** Convert garment-relative zone to photo-relative for display in the editor.
+ * Inverse of the server-side photo→garment conversion in productGroupRouter.ts. */
+function garmentToPhoto(
+  zone: PrintZoneCoords,
+  bbox: { x: number; y: number; width: number; height: number }
+): PrintZoneCoords {
+  return {
+    x: bbox.x + zone.x * bbox.width,
+    y: bbox.y + zone.y * bbox.height,
+    width: zone.width * bbox.width,
+    height: zone.height * bbox.height,
+  };
+}
+
+// ─── Print Zone Section ─────────────────────────────────────────────────────────────────────────
+function PrintZoneSection({ groupId, currentZone, firstMockupUrl, firstTemplateId, firstGarmentBbox }: {
   groupId: string;
   currentZone: PrintZoneCoords | null;
   firstMockupUrl: string | null;
+  firstTemplateId: string | null;
+  firstGarmentBbox: { x: number; y: number; width: number; height: number } | null;
 }) {
   const [editing, setEditing] = useState(false);
   const utils = trpc.useUtils();
@@ -317,13 +334,23 @@ function PrintZoneSection({ groupId, currentZone, firstMockupUrl }: {
     );
   }
 
+  // Convert stored garment-relative zone → photo-relative for display.
+  // The DB stores garment-relative fractions (portable across templates).
+  // The editor works in photo-relative fractions (what the user sees on screen).
+  // Without this conversion, the editor shows the wrong rectangle and every save
+  // compounds the error (photo-relative → garment-relative → wrong display → save again).
+  const displayZone: PrintZoneCoords | null =
+    currentZone && firstGarmentBbox
+      ? garmentToPhoto(currentZone, firstGarmentBbox)
+      : currentZone; // fallback: no bbox cached yet, show raw (legacy behavior)
+
   if (!editing) {
     return (
       <div className="flex items-center justify-between">
         <div className="text-sm">
-          {currentZone ? (
+          {displayZone ? (
             <span className="font-mono text-xs text-muted-foreground">
-              {Math.round(currentZone.width * 100)}% × {Math.round(currentZone.height * 100)}% at ({Math.round(currentZone.x * 100)}%, {Math.round(currentZone.y * 100)}%)
+              {Math.round(displayZone.width * 100)}% × {Math.round(displayZone.height * 100)}% at ({Math.round(displayZone.x * 100)}%, {Math.round(displayZone.y * 100)}%)
             </span>
           ) : (
             <span className="text-xs text-amber-600">Using default zone — click Edit to customize</span>
@@ -331,7 +358,7 @@ function PrintZoneSection({ groupId, currentZone, firstMockupUrl }: {
         </div>
         <Button variant="outline" size="sm" onClick={() => setEditing(true)} className="gap-1.5 text-xs">
           <Target className="w-3 h-3" />
-          {currentZone ? "Edit Zone" : "Set Zone"}
+          {displayZone ? "Edit Zone" : "Set Zone"}
         </Button>
       </div>
     );
@@ -340,8 +367,8 @@ function PrintZoneSection({ groupId, currentZone, firstMockupUrl }: {
   return (
     <PrintZoneEditor
       imageUrl={firstMockupUrl}
-      initialZone={currentZone}
-      onSave={(zone) => updateMutation.mutate({ groupId, printZone: zone })}
+      initialZone={displayZone}
+      onSave={(zone) => updateMutation.mutate({ groupId, printZone: zone, referenceTemplateId: firstTemplateId ?? undefined })}
       onCancel={() => setEditing(false)}
       saving={updateMutation.isPending}
     />
@@ -362,8 +389,11 @@ function ProductGroupCard({ groupId }: { groupId: string }) {
 
   if (isLoading || !data) return <div className="h-20 bg-muted/30 rounded-lg animate-pulse" />;
 
-  const firstMockupUrl = data.mockups.length > 0 ? data.mockups[0].imageUrl : null;
+  const firstMockup = data.mockups.length > 0 ? data.mockups[0] : null;
+  const firstMockupUrl = firstMockup?.imageUrl ?? null;
   const currentZone = data.printZone as PrintZoneCoords | null;
+  // garmentBbox is needed so PrintZoneSection can convert garment-relative → photo-relative for display
+  const firstGarmentBbox = (firstMockup?.garmentBbox as { x: number; y: number; width: number; height: number } | null) ?? null;
 
   return (
     <Card className="overflow-hidden">
@@ -397,6 +427,8 @@ function ProductGroupCard({ groupId }: { groupId: string }) {
               groupId={groupId}
               currentZone={currentZone}
               firstMockupUrl={firstMockupUrl}
+              firstTemplateId={firstMockup?.id ?? null}
+              firstGarmentBbox={firstGarmentBbox}
             />
           </div>
 

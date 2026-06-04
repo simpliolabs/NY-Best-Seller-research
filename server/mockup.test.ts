@@ -207,17 +207,19 @@ describe("productGroup print zone", () => {
     ).rejects.toThrow();
   });
 
-  it("DEFAULT_PRINT_ZONE values match expected chest placement", () => {
-    // Verify the default zone represents a centered chest area
-    const zone = DEFAULT_PRINT_ZONE;
+  it("DEFAULT_PRINT_AREA values match converged chest print zone (~40%x32%)", () => {
+    // Verify the default area represents the converged chest print zone
+    const area = DEFAULT_PRINT_ZONE; // alias still exported for compat
     // Horizontal center should be roughly 0.5
-    const centerX = zone.x + zone.width / 2;
+    const centerX = area.x + area.width / 2;
     expect(centerX).toBeCloseTo(0.5, 1);
-    // Zone should start in upper portion (top 25%)
-    expect(zone.y).toBeLessThan(0.25);
-    // Zone should be at least 40% of image width
-    expect(zone.width).toBeGreaterThan(0.4);
-    // Zone should be at least 40% of image height
-    expect(zone.height).toBeGreaterThan(0.4);
+    // Area should start in upper portion (top 15%)
+    expect(area.y).toBeLessThan(0.15);
+    // Area should be ~40% of garment width (converged chest print)
+    expect(area.width).toBeGreaterThanOrEqual(0.35);
+    expect(area.width).toBeLessThanOrEqual(0.50);
+    // Area should be ~32% of garment height (converged top-anchored)
+    expect(area.height).toBeGreaterThanOrEqual(0.25);
+    expect(area.height).toBeLessThanOrEqual(0.40);
   });
 });

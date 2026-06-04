@@ -154,13 +154,21 @@ export function ImageLightbox({ isOpen, onClose, conceptId, conceptName, images,
     try {
       const result = await exportMutation.mutateAsync({ conceptId, variation });
       if (result.success && result.url) {
+        // Fetch the file through the browser so we get a same-origin blob URL.
+        // Direct S3 links are cross-origin — browsers ignore the `download` attribute
+        // for cross-origin URLs and open them in a new tab instead of downloading.
+        const fetchRes = await fetch(result.url);
+        if (!fetchRes.ok) throw new Error(`Failed to fetch file: ${fetchRes.status}`);
+        const blob = await fetchRes.blob();
+        const blobUrl = URL.createObjectURL(blob);
         const link = document.createElement("a");
-        link.href = result.url;
+        link.href = blobUrl;
         link.download = `${conceptName.replace(/[^a-zA-Z0-9]/g, "_")}_${variation}_production.png`;
-        link.target = "_blank";
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+        // Revoke after a short delay to allow the download to start
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
       } else {
         alert(result.message || "Export failed");
       }

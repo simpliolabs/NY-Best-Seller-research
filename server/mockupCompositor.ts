@@ -7,29 +7,38 @@
 import sharp from "sharp";
 import { generateImage } from "./_core/imageGeneration";
 
-export interface PrintZone {
-  x: number;      // ratio 0-1 (left offset)
-  y: number;      // ratio 0-1 (top offset)
+export interface PrintArea {
+  x: number;      // ratio 0-1 (left offset within garment bbox)
+  y: number;      // ratio 0-1 (top offset within garment bbox)
   width: number;  // ratio 0-1
   height: number; // ratio 0-1
 }
 
+/** @deprecated Use PrintArea instead */
+export type PrintZone = PrintArea;
+
 export interface CompositeConfig {
   designUrl: string;   // Transparent PNG from S3
   mockupUrl: string;   // Blank shirt photo from S3
-  printZone: PrintZone;
+  printZone: PrintArea;
 }
 
-/** Default print zone — centered chest area for a standard t-shirt blank.
- * Sized to match real DTG print areas (~14" x 16" on a standard tee).
- * Reference: Etsy best-seller mockups typically fill 75-90% of the visible chest.
+/** Default print AREA — converged placement for realistic DTF/DTG mockups.
+ * Expressed as fractions of the garment bbox (NOT the photo — Bug 3 lesson).
+ * Geometry: 40% width × 32% height of garment, centered horizontally, 10% below neckline.
+ * This produces a natural chest-print look (not oversized full-front).
+ * Reference: standard DTF chest print is ~10"×8" on a 20"×28" front ≈ 40%×32%.
+ * Placement within area: contain-fit + top-anchor (not center-anchor).
  */
-export const DEFAULT_PRINT_ZONE: PrintZone = {
-  x: 0.22,
-  y: 0.15,
-  width: 0.56,
-  height: 0.60,
+export const DEFAULT_PRINT_AREA: PrintArea = {
+  x: 0.30,
+  y: 0.10,
+  width: 0.40,
+  height: 0.32,
 };
+
+/** @deprecated Use DEFAULT_PRINT_AREA instead */
+export const DEFAULT_PRINT_ZONE = DEFAULT_PRINT_AREA;
 
 async function downloadImage(url: string): Promise<Buffer> {
   const res = await fetch(url);
@@ -55,6 +64,7 @@ export async function removeBackground(imageBuf: Buffer): Promise<Buffer> {
 
     const { width, height, channels } = info;
     const edgeSize = 20; // Check 20px border
+    // Match the flood-fill threshold: 235 catches near-white AI backgrounds (r≈219-252)
     const THRESHOLD = 235;
 
     let whiteEdgePixels = 0;
@@ -163,12 +173,13 @@ async function cropToColoredContent(imageBuf: Buffer): Promise<Buffer> {
  * Edge-connected flood-fill white removal.
  * Only removes white pixels that are reachable from the image border.
  * This preserves white elements INSIDE the design (e.g., white net fills, white text).
- * Threshold 220 catches near-white backgrounds (r≈235) that AI image generators
- * produce instead of pure white (r=255).
+ * Threshold 235 catches near-white backgrounds (r≈219-252) that AI image generators
+ * produce instead of pure white (r=255). Edge-connected fill means interior white
+ * design elements are never touched regardless of threshold.
  */
 function simpleWhiteRemoval(data: Buffer, info: { width: number; height: number; channels: number }): Promise<Buffer> {
   const { width, height, channels } = info;
-  const THRESHOLD = 220;
+  const THRESHOLD = 235;
 
   const output = Buffer.from(data);
   const visited = new Uint8Array(width * height);
@@ -402,13 +413,10 @@ export async function compositeDesignOnMockup(config: CompositeConfig): Promise<
   const designW = designMeta.width!;
   const designH = designMeta.height!;
 
-  // 5. Scale design to FILL the print zone WIDTH.
-  // The user drew the zone — the design should fill its width edge-to-edge.
-  // Anchor to TOP-CENTER (not center-center) — this matches real DTF placement
-  // where designs sit at the top of the print area, not floating in the middle.
+  // 5. Scale design to CONTAIN within the print zone (aspect-ratio preserved).
+  // The zone is the source of truth — the design fits inside it, never overflows.
   const scaleByWidth = zoneW / designW;
   const scaleByHeight = zoneH / designH;
-  // Prefer width-fill. Only use height if the scaled design would overflow the zone.
   const scale = Math.min(scaleByWidth, scaleByHeight);
   let finalW = Math.round(designW * scale);
   let finalH = Math.round(designH * scale);
@@ -417,9 +425,12 @@ export async function compositeDesignOnMockup(config: CompositeConfig): Promise<
     .resize(finalW, finalH, { fit: "fill", background: { r: 0, g: 0, b: 0, alpha: 0 } })
     .toBuffer();
 
-  // 6. Position design: horizontally centered, vertically anchored to TOP of print zone
-  const offsetX = zoneX + Math.round((zoneW - finalW) / 2);
-  const offsetY = zoneY; // TOP anchor — not centered vertically
+  // 6. Position design: CONTAIN-FIT + TOP-ANCHOR within the print area.
+  // Horizontal: centered (portrait designs get equal side margins).
+  // Vertical: top-anchored (landscape designs sit at top, empty space below).
+  // This ensures designs are as large as possible and never drift toward the navel.
+  const offsetX = zoneX + Math.round((zoneW - finalW) / 2); // center horizontally
+  const offsetY = zoneY; // TOP-ANCHOR vertically (no centering)
 
   // 7. Composite design onto mockup, output as WebP (compressed, max 1000x1000)
   const composite = sharp(mockupBuf)

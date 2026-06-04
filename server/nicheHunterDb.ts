@@ -22,7 +22,7 @@ export async function createScanRun(workspaceId: string): Promise<NicheScanRun> 
 
 export async function updateScanRun(
   id: string,
-  fields: Partial<Pick<NicheScanRun, "status" | "progress" | "patternsFound" | "errorLog" | "completedAt">>
+  fields: Partial<Pick<NicheScanRun, "status" | "progress" | "patternsFound" | "errorLog" | "completedAt" | "searchLog">>
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -162,6 +162,53 @@ export async function updateTrendPatternDtfUrl(
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.update(trendPatterns).set({ dtfImageUrl }).where(eq(trendPatterns.id, id));
+}
+
+/**
+ * Update the productionDesignUrl for a pattern — the canonical transparent PNG asset.
+ */
+export async function updateTrendPatternProductionUrl(
+  id: string,
+  productionDesignUrl: string
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(trendPatterns).set({ productionDesignUrl }).where(eq(trendPatterns.id, id));
+}
+
+/**
+ * Get patterns that have a sourceImageUrl but no productionDesignUrl.
+ * Used by the retry endpoint to process stuck production jobs one at a time.
+ * Returns oldest-first so earlier scans are resolved before newer ones.
+ */
+export async function getStuckProductionPatterns(
+  workspaceId: string,
+  limit = 1
+): Promise<TrendPattern[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select()
+    .from(trendPatterns)
+    .where(eq(trendPatterns.workspaceId, workspaceId))
+    .orderBy(desc(trendPatterns.createdAt));
+  // Filter in JS: has sourceImageUrl but no productionDesignUrl
+  return rows.filter(r => r.sourceImageUrl && !r.productionDesignUrl).slice(0, limit);
+}
+
+/**
+ * Count patterns that have a sourceImageUrl but no productionDesignUrl.
+ */
+export async function countStuckProductionPatterns(
+  workspaceId: string
+): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await db
+    .select()
+    .from(trendPatterns)
+    .where(eq(trendPatterns.workspaceId, workspaceId));
+  return rows.filter(r => r.sourceImageUrl && !r.productionDesignUrl).length;
 }
 
 /**

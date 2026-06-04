@@ -42,7 +42,7 @@ import {
   updateConceptImages,
 } from "./db";
 import { runPipeline, recoverStaleRuns, regenerateImagesForRun } from "./pipeline";
-import { processConceptProductionImages } from "./productionImageProcessor";
+import { processConceptProductionImages, processDesignForProduction } from "./productionImageProcessor";
 import { refreshBook, getRefreshStatus } from "./bookRefresh";
 import { workspaceRouter } from "./workspaceRouter";
 import { onboardingRouter } from "./onboardingRouter";
@@ -56,7 +56,9 @@ import { invokeLLM } from "./_core/llm";
 import { storagePut } from "./storage";
 import { checkHealth, getCircuitState } from "./selfHeal";
 import { healingLog } from "../drizzle/schema";
-import { desc } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
+import { designConcepts } from "../drizzle/schema";
+import { getDb } from "./db";
 
 // Track running pipeline to prevent concurrent runs
 let pipelineRunning = false;
@@ -294,6 +296,51 @@ export const appRouter = router({
           processed: totalProcessed,
           skipped: totalSkipped,
           failed: totalFailed,
+        };
+      }),
+
+    /**
+     * Re-process production image for a single concept.
+     * Clears existing productionUrl* and regenerates using the v2 magenta chromakey pipeline.
+     * Use this to upgrade a single concept without running the full backfill.
+     */
+    reprocessProductionImage: protectedProcedure
+      .input(z.object({
+        conceptId: z.number(),
+        variation: z.enum(["A", "B", "C"]).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const concept = await getConceptById(input.conceptId);
+        if (!concept) return { success: false, message: "Concept not found" };
+
+        // Clear existing production URLs to force regeneration
+        const db = await getDb();
+        if (!db) return { success: false, message: "DB unavailable" };
+
+        if (input.variation) {
+          // Single variation
+          const field = input.variation === "A" ? { productionUrlA: null }
+            : input.variation === "B" ? { productionUrlB: null }
+            : { productionUrlC: null };
+          await db.update(designConcepts).set(field as any).where(eq(designConcepts.id, input.conceptId));
+        } else {
+          // All variations
+          await db.update(designConcepts).set({
+            productionUrlA: null,
+            productionUrlB: null,
+            productionUrlC: null,
+          } as any).where(eq(designConcepts.id, input.conceptId));
+        }
+
+        // Re-fetch to get cleared state
+        const refreshed = await getConceptById(input.conceptId);
+        if (!refreshed) return { success: false, message: "Concept not found after clear" };
+
+        const result = await processConceptProductionImages(refreshed);
+        return {
+          success: true,
+          message: `Reprocessed: ${result.processed} done, ${result.failed} failed.`,
+          ...result,
         };
       }),
 
@@ -760,23 +807,20 @@ Font: ${concept.fontSuggestion ?? "not specified"}`;
         }
 
         try {
-          // Use image generation service in edit mode to remove background
-          const result = await generateImage({
-            prompt: "Remove the background completely. Isolate only the main design element (text, illustration, graphic) on a fully transparent background. The result should be a clean, print-ready design with no background whatsoever — just the design floating on transparency. Maintain all original colors, details, and quality of the design element.",
-            originalImages: [{
-              url: sourceUrl,
-              mimeType: "image/png",
-            }],
-          });
+          // v2 pipeline: generate standalone design on magenta BG, chromakey to transparent
+          const promptDesc = (input.variation === "A" ? concept.imagePromptA
+            : input.variation === "B" ? concept.imagePromptB
+            : concept.imagePromptC)
+            || `${concept.conceptName || "design"} in ${concept.style || "graphic tee"} style`;
 
-          if (!result.url) {
-            return { success: false, message: "Background removal failed — no output.", url: null };
-          }
+          const url = await processDesignForProduction(
+            sourceUrl,
+            input.conceptId,
+            input.variation,
+            promptDesc
+          );
 
-          // Cache the production URL
-          await updateConceptProductionUrl(input.conceptId, input.variation, result.url);
-
-          return { success: true, message: "Production file ready.", url: result.url };
+          return { success: true, message: "Production file ready.", url };
         } catch (err: any) {
           console.error(`[ProductionExport] Failed for concept ${input.conceptId} variation ${input.variation}:`, err);
           return { success: false, message: err?.message ?? "Export failed.", url: null };

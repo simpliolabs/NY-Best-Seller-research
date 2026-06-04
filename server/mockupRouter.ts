@@ -6,7 +6,8 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "./_core/trpc";
-import { compositeDesignOnMockup, DEFAULT_PRINT_ZONE } from "./mockupCompositor";
+import { compositeDesignOnMockup, DEFAULT_PRINT_AREA } from "./mockupCompositor";
+import { getGarmentBbox, resolveZoneToPhoto } from "./garmentDetector";
 import { pickBestColors } from "./mockupColorMatcher";
 import {
   createMockupRender,
@@ -95,13 +96,19 @@ export const mockupRouter = router({
         templates = await pickBestColors(designUrl, templates, input.colorCount);
       }
 
-      // 4. Get print zone from product group (or use default)
-      const printZone = (group.printZone as { x: number; y: number; width: number; height: number } | null) ?? DEFAULT_PRINT_ZONE;
+      // 4. Get print area from product group (or use default).
+      // Print area = max ink envelope, expressed as fractions of the GARMENT bbox (not the photo).
+      const printAreaRelGarment = (group.printZone as { x: number; y: number; width: number; height: number } | null) ?? DEFAULT_PRINT_AREA;
 
       // 5. Composite each template and store result
       const renders = [];
       for (const template of templates) {
         try {
+          // Detect garment bbox for this template (cached after first call)
+          const garmentBbox = await getGarmentBbox(template.id, template.imageUrl);
+          // Resolve print area from garment-relative to photo-relative
+          const printZone = resolveZoneToPhoto(printAreaRelGarment, garmentBbox);
+
           const compositeBuffer = await compositeDesignOnMockup({
             designUrl,
             mockupUrl: template.imageUrl,

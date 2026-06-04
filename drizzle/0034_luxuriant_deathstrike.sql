@@ -1,0 +1,1 @@
+ALTER TABLE `mockup_templates` ADD `garmentBbox` json;
