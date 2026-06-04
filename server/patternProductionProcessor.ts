@@ -9,8 +9,10 @@
  *     Output: opaque shirt mockup with new design printed on it.
  *
  *   Step 2 — EXTRACT: gpt-image-1 /edits on the Step 1 output, with background:"transparent".
- *     Prompt: "REMOVE ALL BACKGROUND LEAVE ONLY THE DESIGN ON THE SHIRT TRIMMED TO CANVAS."
- *     (Verbatim PO prompt — proven to work, eight words.)
+ *     Prompt explicitly removes the GARMENT (not just the photo background): "Extract
+ *     ONLY the printed graphic artwork ... Remove the t-shirt garment entirely ... Do NOT
+ *     keep the shirt." (The PO's original "...design on the shirt..." phrasing let the
+ *     model keep the tee as the subject for poster-style designs.)
  *     Output: native transparent PNG of the design only.
  *
  *   Step 3 — cropToContent: trim transparent padding.
@@ -141,13 +143,27 @@ async function replaceDesignOnShirt(
  * Take the edited shirt photo from Step 1 and extract just the printed design
  * onto a transparent canvas.
  *
- * Prompt is the PO's verbatim eight-word instruction proven to work in ChatGPT.
+ * The prompt must explicitly remove the GARMENT, not just the photo background.
+ * The PO's original "...leave only the design on the shirt..." phrasing is
+ * ambiguous — "on the shirt" lets the model keep the t-shirt as the subject.
+ * That produced a shirt-on-transparent output for framed/poster-style designs
+ * (e.g. the Dinosaur row: a cream tee silhouette extracted instead of the print).
+ * The validation gate cannot catch this — a garment-on-transparent passes every
+ * transparency check. So the disambiguation has to happen in the prompt: name
+ * the garment and the fabric parts explicitly and tell the model to drop them.
+ *
  * `background: "transparent"` is the API parameter that makes gpt-image-1
  * return a native RGBA PNG with alpha=0 outside the design.
  */
 async function extractTransparentFromShirt(shirtMockup: Buffer): Promise<Buffer> {
-  const prompt = "REMOVE ALL BACKGROUND LEAVE ONLY THE DESIGN ON THE SHIRT TRIMMED TO CANVAS";
-  console.log(`[PatternProd] Step 2 (extract). Prompt: "${prompt}"`);
+  const prompt = [
+    "Extract ONLY the printed graphic artwork from this t-shirt mockup.",
+    "Remove the t-shirt garment entirely — no fabric, no collar, no sleeves, no seams, no shirt silhouette.",
+    "Remove all photo background.",
+    "Output only the flat 2D printed design itself on a fully transparent background, trimmed tightly to the artwork.",
+    "Do NOT keep the shirt. The shirt is not part of the design.",
+  ].join(" ");
+  console.log(`[PatternProd] Step 2 (extract). Prompt: "${prompt.substring(0, 100)}..."`);
   return callImageEdit(shirtMockup, "shirt_with_design.png", prompt, { transparent: true });
 }
 
