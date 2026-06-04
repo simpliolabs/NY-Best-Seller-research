@@ -1,29 +1,37 @@
 /**
- * Pattern Production Processor — v3 (Magenta Chromakey)
+ * Pattern Production Processor — v4 (Two-Call Edit→Extract)
  *
- * Two-step pipeline for trend_patterns:
- * 1. generateStandaloneDesign — gpt-image-2 /edits with solid magenta background.
- *    The source image is passed as a style reference (image[]), NOT as the edit canvas.
- *    The model generates a NEW standalone artwork on a flat magenta background.
- * 2. chromakeyFromCorners — corner-sampled flood-fill removes the magenta background,
- *    producing a clean transparent PNG with no halos.
- * 3. cropToContent — trims transparent padding.
- * 4. assertTransparentPng — validates the result before upload (throws on opaque output).
- * 5. storagePut → productionDesignUrl (canonical transparent asset).
- * 6. compositeDesignOnMockup → previewImageUrl (shirt thumbnail).
+ * Two-step pipeline mirroring the PO's proven ChatGPT workflow:
  *
- * Why magenta background (not transparent):
- * gpt-image-1 background:"transparent" is unreliable — it fails consistently on dark-shirt
- * source images (heather navy, dark grey) because the model sees no distinct background
- * region to make transparent. gpt-image-2 + magenta BG is deterministic: we inject a
- * known-color background, then remove it programmatically via chromakey. The chromakey
- * keys off the ACTUAL corner color (not hardcoded #FF00FF) to handle the model's muted
- * pink/magenta variance (r≈200-220, g≈60-100, b≈120-170).
+ *   Step 1 — REPLACE: gpt-image-1 /edits on the FULL uncropped shirt photo.
+ *     Prompt: "Edit this t-shirt mockup. Replace the design with: {promptDescription}.
+ *              Keep the shirt, background, props, and lighting unchanged."
+ *     Output: opaque shirt mockup with new design printed on it.
  *
- * Why gpt-image-2 (not gpt-image-1):
- * gpt-image-1 does not reliably honor the magenta background instruction — it sometimes
- * ignores it and returns a white or shirt-colored background. gpt-image-2 reliably
- * produces a flat colored background when instructed. Spike-validated 5/5.
+ *   Step 2 — EXTRACT: gpt-image-1 /edits on the Step 1 output, with background:"transparent".
+ *     Prompt: "REMOVE ALL BACKGROUND LEAVE ONLY THE DESIGN ON THE SHIRT TRIMMED TO CANVAS."
+ *     (Verbatim PO prompt — proven to work, eight words.)
+ *     Output: native transparent PNG of the design only.
+ *
+ *   Step 3 — cropToContent: trim transparent padding.
+ *   Step 4 — assertTransparentPng: validate (corner alpha < 16, transparent ≥ 20%,
+ *            opaque ≥ 5%). Throws on failure — no silent bad writes.
+ *   Step 5 — storagePut → productionDesignUrl (canonical transparent asset).
+ *   Step 6 — compositeDesignOnMockup → previewImageUrl (shirt thumbnail).
+ *
+ * Why this replaces the prior magenta-chromakey approach:
+ * The magenta+chromakey path was a workaround for gpt-image-1 background:"transparent"
+ * being unreliable when generating from scratch. But the PO's ChatGPT workflow
+ * demonstrates that gpt-image-1 background:"transparent" IS reliable when applied to
+ * a shirt photo with a clear "remove background, keep design" instruction — the model
+ * has concrete pixels to extract from, not a synthesis problem. The magenta path also
+ * introduced its own failure mode (model generates a full scene filling the canvas,
+ * leaving no magenta to key) which the Dinosaur row exposed.
+ *
+ * Why gpt-image-1 (not gpt-image-2) for both calls:
+ * gpt-image-2 returns HTTP 400 for background:"transparent" on /v1/images/edits
+ * ("Transparent background is not supported for this model"). gpt-image-1 honors it.
+ * Verified by direct API capability test.
  */
 import sharp from "sharp";
 import { storagePut } from "./storage";
@@ -40,83 +48,35 @@ import {
   updateTrendPatternImage,
   updateTrendPatternProductionUrl,
 } from "./nicheHunterDb";
-import { chromakeyFromCorners } from "./chromakey";
 
-// ─── Artwork extraction ─────────────────────────────────────────────────────────
-
-/**
- * Extract the artwork/print area from a shirt product photo.
- * Etsy source images are typically shirt flat-lays (~2000x2000px).
- * The print area is in the center of the image.
- * Cropping prevents gpt-image-2 from treating the shirt as part of the subject.
- *
- * Crop region: 25% from each side, 25% from top, 50% height.
- * This eliminates shirt necklines, collars, and labels on all flat-lay styles.
- */
-async function extractArtworkArea(imgBuf: Buffer): Promise<Buffer> {
-  const metadata = await sharp(imgBuf).metadata();
-  const w = metadata.width ?? 1000;
-  const h = metadata.height ?? 1000;
-
-  const left = Math.round(w * 0.25);
-  const top = Math.round(h * 0.25);
-  const cropWidth = Math.round(w * 0.50);
-  const cropHeight = Math.round(h * 0.50);
-
-  console.log(`[PatternProd] extractArtworkArea: ${w}x${h} → crop(${left}, ${top}, ${cropWidth}, ${cropHeight})`);
-
-  return sharp(imgBuf)
-    .extract({ left, top, width: cropWidth, height: cropHeight })
-    .png()
-    .toBuffer();
-}
-
-// ─── Standalone design generation (Step 1) ────────────────────────────────────
+// ─── Shared OpenAI /v1/images/edits caller ───────────────────────────────────
 
 /**
- * Generate a standalone design on a solid magenta background using gpt-image-2.
- * The source image is passed as a style reference (image[]) — NOT as the edit canvas.
- * Returns the raw PNG buffer from the API (magenta background, not yet transparent).
+ * Call gpt-image-1 /v1/images/edits with a source image and a prompt.
+ * Returns the raw PNG buffer from the API.
  *
- * The incoming promptDescription is the adaptedConcept or characterSwap edit instruction.
- * We wrap it with magenta-BG framing here so callers don't need to know the pipeline detail.
+ * If `transparent` is true, requests a transparent background (Step 2 extract).
+ * Otherwise the model returns an opaque output (Step 1 replace).
  */
-async function generateStandaloneDesign(
-  sourceImageUrl: string,
-  promptDescription: string
+async function callImageEdit(
+  sourceImg: Buffer,
+  filename: string,
+  prompt: string,
+  options: { transparent: boolean }
 ): Promise<Buffer> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
 
-  const imgResp = await fetch(sourceImageUrl);
-  if (!imgResp.ok) throw new Error(`Failed to download source image: ${imgResp.status}`);
-  const imgBuf = Buffer.from(await imgResp.arrayBuffer());
-
-  // Pre-step: Extract artwork from product photo (shirt mockup).
-  const imgPng = await extractArtworkArea(imgBuf);
-
-  // Build the standalone generation prompt with magenta background instruction.
-  // The promptDescription is the adapted concept / swap instruction from the caller.
-  const prompt = [
-    `Create a standalone t-shirt graphic design artwork.`,
-    `Subject and style: ${promptDescription}`,
-    `BACKGROUND: Solid hot pink/magenta (#FF00FF) background filling the entire canvas.`,
-    `The artwork must have a hard, clean edge against the magenta background — no blending, no gradient, no soft edges.`,
-    `Use ONLY the colors described in the style within the artwork itself. The magenta is ONLY for the background.`,
-    `NO shirt, NO garment, NO fabric texture visible. Just the flat 2D artwork on solid magenta.`,
-    `The design should be centered and fill approximately 60-70% of the canvas.`,
-  ].join(" ");
-
-  console.log(`[PatternProd] Generating standalone design (gpt-image-2, magenta BG). Prompt: "${prompt.substring(0, 120)}..."`);
-
   const formData = new FormData();
-  formData.append("model", "gpt-image-2");
+  formData.append("model", "gpt-image-1");
   formData.append("prompt", prompt);
   formData.append("size", "1024x1024");
   formData.append("quality", "high");
-  // Pass source image as style reference (image[] — NOT the edit canvas)
-  const blob = new Blob([new Uint8Array(imgPng)], { type: "image/png" });
-  formData.append("image[]", blob, "style_reference.png");
+  if (options.transparent) {
+    formData.append("background", "transparent");
+  }
+  const blob = new Blob([new Uint8Array(sourceImg)], { type: "image/png" });
+  formData.append("image[]", blob, filename);
 
   const resp = await fetch("https://api.openai.com/v1/images/edits", {
     method: "POST",
@@ -126,12 +86,12 @@ async function generateStandaloneDesign(
 
   if (!resp.ok) {
     const errText = await resp.text();
-    throw new Error(`gpt-image-2 API error (${resp.status}): ${errText.substring(0, 300)}`);
+    throw new Error(`gpt-image-1 API error (${resp.status}): ${errText.substring(0, 300)}`);
   }
 
   const data = await resp.json() as { data: Array<{ b64_json?: string; url?: string }> };
   const item = data.data?.[0];
-  if (!item) throw new Error("gpt-image-2 returned no image data");
+  if (!item) throw new Error("gpt-image-1 returned no image data");
 
   if (item.b64_json) {
     return Buffer.from(item.b64_json, "base64");
@@ -140,11 +100,62 @@ async function generateStandaloneDesign(
     if (!dlResp.ok) throw new Error(`Failed to download generated image: ${dlResp.status}`);
     return Buffer.from(await dlResp.arrayBuffer());
   }
-  throw new Error("gpt-image-2 response has neither b64_json nor url");
+  throw new Error("gpt-image-1 response has neither b64_json nor url");
 }
 
+// ─── Step 1: Replace design on full shirt photo ──────────────────────────────
+
 /**
- * Crop to bounding box of non-transparent content.
+ * Edit the source shirt photo, replacing the existing design with the new one.
+ * Output is an opaque shirt mockup — same shirt, same background, new design.
+ *
+ * Full uncropped photo is fed to the model: the shirt context is what makes
+ * gpt-image-1 understand "replace the design on the shirt" as a localized
+ * edit rather than a from-scratch generation.
+ */
+async function replaceDesignOnShirt(
+  sourceImageUrl: string,
+  promptDescription: string
+): Promise<Buffer> {
+  const imgResp = await fetch(sourceImageUrl);
+  if (!imgResp.ok) {
+    throw new Error(`Failed to download source image: ${imgResp.status}`);
+  }
+  const sourcePng = await sharp(Buffer.from(await imgResp.arrayBuffer()))
+    .png()
+    .toBuffer();
+
+  const prompt = [
+    `Edit this t-shirt mockup. Replace the entire printed design on the shirt with: ${promptDescription}.`,
+    `Keep the shirt itself, the background, props, lighting, folds, and overall photo composition completely unchanged.`,
+    `Only the printed design on the shirt changes. The new design should occupy the same area as the original design.`,
+  ].join(" ");
+
+  console.log(`[PatternProd] Step 1 (replace). Prompt: "${prompt.substring(0, 120)}..."`);
+  return callImageEdit(sourcePng, "source_shirt.png", prompt, { transparent: false });
+}
+
+// ─── Step 2: Extract transparent design from edited shirt photo ──────────────
+
+/**
+ * Take the edited shirt photo from Step 1 and extract just the printed design
+ * onto a transparent canvas.
+ *
+ * Prompt is the PO's verbatim eight-word instruction proven to work in ChatGPT.
+ * `background: "transparent"` is the API parameter that makes gpt-image-1
+ * return a native RGBA PNG with alpha=0 outside the design.
+ */
+async function extractTransparentFromShirt(shirtMockup: Buffer): Promise<Buffer> {
+  const prompt = "REMOVE ALL BACKGROUND LEAVE ONLY THE DESIGN ON THE SHIRT TRIMMED TO CANVAS";
+  console.log(`[PatternProd] Step 2 (extract). Prompt: "${prompt}"`);
+  return callImageEdit(shirtMockup, "shirt_with_design.png", prompt, { transparent: true });
+}
+
+// ─── Step 3: Crop to content bounding box ────────────────────────────────────
+
+/**
+ * Crop the transparent PNG to the bounding box of non-transparent content.
+ * Removes any residual transparent padding around the design.
  */
 async function cropToContent(imageBuf: Buffer): Promise<Buffer> {
   try {
@@ -188,17 +199,18 @@ async function cropToContent(imageBuf: Buffer): Promise<Buffer> {
   }
 }
 
-// ─── Output validation ───────────────────────────────────────────────────────
+// ─── Step 4: Output validation ───────────────────────────────────────────────
 
 /**
- * Assert that a PNG buffer has a transparent background.
- * Two checks must both pass:
+ * Assert that a PNG buffer has a transparent background AND actual design content.
+ *
+ * Three checks must all pass:
  *   1. Corner pixels: all 4 corners must have alpha < 16 (nearly transparent)
  *   2. Transparent pixel ratio: ≥ 20% of pixels must have alpha < 128
+ *   3. Non-transparent pixel ratio: ≥ 5% must be opaque (catches blank-canvas outputs)
  *
- * If either check fails, throws an error with the patternId for log tracing.
- * This is the final safety net — catches edge cases where the chromakey color
- * appears in the design itself (e.g., a magenta-heavy design that partially keys out).
+ * If any check fails, throws an error with the patternId for log tracing.
+ * This is the final safety net — no silent bad writes to productionDesignUrl.
  */
 export async function assertTransparentPng(buf: Buffer, patternId: string): Promise<void> {
   const { data, info } = await sharp(buf)
@@ -219,7 +231,7 @@ export async function assertTransparentPng(buf: Buffer, patternId: string): Prom
     const alpha = data[(cy * width + cx) * channels + 3];
     if (alpha >= 16) {
       throw new Error(
-        `[PatternProd] VALIDATION FAIL pattern=${patternId}: corner pixel (${cx},${cy}) has alpha=${alpha} (expected <16). Chromakey did not remove background. Aborting storagePut.`
+        `[PatternProd] VALIDATION FAIL pattern=${patternId}: corner pixel (${cx},${cy}) has alpha=${alpha} (expected <16). Extract step did not produce transparent background. Aborting storagePut.`
       );
     }
   }
@@ -233,12 +245,12 @@ export async function assertTransparentPng(buf: Buffer, patternId: string): Prom
   const ratio = transparentCount / totalPixels;
   if (ratio < 0.20) {
     throw new Error(
-      `[PatternProd] VALIDATION FAIL pattern=${patternId}: transparent pixel ratio=${(ratio * 100).toFixed(1)}% (expected ≥20%). Chromakey did not remove enough background. Aborting storagePut.`
+      `[PatternProd] VALIDATION FAIL pattern=${patternId}: transparent pixel ratio=${(ratio * 100).toFixed(1)}% (expected ≥20%). Extract step did not remove enough background. Aborting storagePut.`
     );
   }
 
   // Check 3: design must have content — non-transparent pixels must be ≥ 5% of total
-  // Catches blank or near-blank outputs (model returned empty canvas after chromakey).
+  // Catches blank or near-blank outputs (model returned empty canvas after extract).
   const opaqueCount = totalPixels - transparentCount;
   const opaqueRatio = opaqueCount / totalPixels;
   if (opaqueRatio < 0.05) {
@@ -250,7 +262,7 @@ export async function assertTransparentPng(buf: Buffer, patternId: string): Prom
   console.log(`[PatternProd] assertTransparentPng PASS pattern=${patternId}: ratio=${(ratio * 100).toFixed(1)}% transparent, ${(opaqueRatio * 100).toFixed(1)}% design content`);
 }
 
-// ─── Default template selection ───────────────────────────────────────────────
+// ─── Default template selection ──────────────────────────────────────────────
 
 /**
  * Get the first mockup template for a workspace (by createdAt ASC, then sortOrder ASC).
@@ -270,21 +282,21 @@ async function getFirstWorkspaceTemplate(workspaceId: string) {
   return { template: templates[0], group: firstGroup };
 }
 
-// ─── Main entry point ─────────────────────────────────────────────────────────
+// ─── Main entry point ────────────────────────────────────────────────────────
 
 /**
  * Full production pipeline for a single trend pattern.
  *
- * Steps:
- * 1. gpt-image-2 /edits + magenta BG → raw magenta-background PNG
- * 2. chromakeyFromCorners → transparent PNG (programmatic, deterministic)
- * 3. cropToContent → trim transparent padding → productionDesignUrl candidate
- * 4. assertTransparentPng → validate before upload (throws on failure, no bad writes)
- * 5. storagePut + updateTrendPatternProductionUrl → productionDesignUrl
- * 6. compositeDesignOnMockup → previewImageUrl (shirt thumbnail)
+ * Pipeline:
+ *   1. Step 1 — replaceDesignOnShirt (gpt-image-1 /edits on full shirt photo)
+ *   2. Step 2 — extractTransparentFromShirt (gpt-image-1 /edits + transparent BG)
+ *   3. Step 3 — cropToContent (trim transparent padding)
+ *   4. Step 4 — assertTransparentPng (validate or throw)
+ *   5. Step 5 — storagePut + updateTrendPatternProductionUrl
+ *   6. Step 6 — compositeDesignOnMockup → previewImageUrl
  *
- * Writes both productionDesignUrl and previewImageUrl to DB.
- * Returns { productionDesignUrl, previewImageUrl }.
+ * Writes both productionDesignUrl and previewImageUrl to DB on success.
+ * Throws if the validation gate rejects the extract output — no silent bad writes.
  */
 export async function processPatternProduction(
   patternId: string,
@@ -294,16 +306,16 @@ export async function processPatternProduction(
 ): Promise<{ productionDesignUrl: string; previewImageUrl: string }> {
   console.log(`[PatternProd] Processing pattern ${patternId}...`);
 
-  // Step 1: Generate standalone design on magenta background (gpt-image-2)
-  const rawMagenta = await generateStandaloneDesign(sourceImageUrl, promptDescription);
+  // Step 1: Edit source shirt photo, replacing the design
+  const shirtMockup = await replaceDesignOnShirt(sourceImageUrl, promptDescription);
 
-  // Step 2: Chromakey — remove magenta background via corner-sampled flood-fill
-  const keyed = await chromakeyFromCorners(rawMagenta);
+  // Step 2: Extract just the design onto a transparent canvas
+  const rawTransparent = await extractTransparentFromShirt(shirtMockup);
 
   // Step 3: Crop to content bounding box
-  const transparentPng = await cropToContent(keyed);
+  const transparentPng = await cropToContent(rawTransparent);
 
-  // Step 4: Validate transparency before upload — throws if opaque (no silent bad writes)
+  // Step 4: Validate transparency + content presence (throws on failure)
   await assertTransparentPng(transparentPng, patternId);
 
   // Step 5: Upload transparent PNG as productionDesignUrl
