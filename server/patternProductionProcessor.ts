@@ -286,7 +286,11 @@ async function nicheExpertPlan(
   const brainModel = process.env.BRAIN_MODEL || "gpt-5";
   const openaiBody = {
     model: brainModel,
-    reasoning_effort: "high",
+    // "medium" reasoning (~20-40s) vs "high" (~60-80s) — needed to keep total round-trip
+    // under Cloudflare's ~100s edge timeout. Fire-and-forget didn't work on Cloud Run
+    // (container scaled down after fast-return killed the background work), so the
+    // architecture is back to sync; cutting the brain's reasoning time is the lever.
+    reasoning_effort: "medium",
     messages: [
       {
         role: "system",

@@ -20,6 +20,7 @@ import {
   recordApprovalSignal,
   recordRejectionSignal,
   updateTrendPatternDtfUrl,
+  updateTrendPatternProductionUrl,
   getStuckProductionPatterns,
   countStuckProductionPatterns,
 } from "./nicheHunterDb";
@@ -234,19 +235,19 @@ export const nicheHunterRouter = router({
     }),
 
   /**
-   * Regenerate the productionDesignUrl for an existing pattern — FIRE-AND-FORGET.
+   * Regenerate the productionDesignUrl for an existing pattern.
    *
-   * Returns immediately with the current (stale) URLs + `queued: true`. The actual
-   * regen happens in the background via `void (async () => ...)()` — same pattern as
-   * `approvePattern`'s deferred DTF extraction. The frontend should poll `getPatterns`
-   * after `queued: true` and detect a hash change in `productionDesignUrl` to know it
-   * completed.
+   * Cloud-Run-safe pattern: NULL OUT productionDesignUrl first (marks the pattern as
+   * "needs regen"), THEN call processPatternProduction synchronously. If sync completes,
+   * processPatternProduction writes the new URL — done. If sync hits Cloudflare's ~100s
+   * edge timeout (524 to client), the productionDesignUrl stays null in the DB, and
+   * `retryStuckPatterns` (which the frontend already polls) will pick it up and finish
+   * the regen within its own request lifetime (which holds the Cloud Run container alive).
    *
-   * Why: synchronous calls were taking ~125s (GPT-5 reasoning ~60-80s + gpt-image-1
-   * edit ~40-60s) → always hit Cloudflare's ~100s edge timeout → client always got 524
-   * (60% of regens also failed silently server-side when the request handler was killed
-   * mid-flight). Verified the server continues processing after client disconnect:
-   * Tiger's regen 524'd at 100s but completed at 125s and wrote the new URL anyway.
+   * Why the previous fire-and-forget pattern failed: Cloud Run kills the container when
+   * the request handler returns and no other requests are in-flight. The `void async`
+   * background work was killed before completion. The retryStuckPatterns mirror reuses
+   * existing infra and works because each retry call IS a real request.
    */
   regenerateProductionImage: protectedProcedure
     .input(z.object({ patternId: z.string(), workspaceId: z.string() }))
@@ -257,29 +258,18 @@ export const nicheHunterRouter = router({
       if (!pattern.sourceImageUrl) throw new TRPCError({ code: "BAD_REQUEST", message: "No source image URL" });
       const promptDesc = (pattern as any).promptDescription ?? pattern.adaptedConcept ?? "";
 
-      // Fire-and-forget: kick off the regen in the background; return immediately.
-      void (async () => {
-        try {
-          await processPatternProduction(
-            input.patternId,
-            input.workspaceId,
-            pattern.sourceImageUrl!,
-            promptDesc
-          );
-          console.log(`[NicheHunter] regenerateProductionImage complete for ${input.patternId}`);
-        } catch (err) {
-          console.warn(`[NicheHunter] regenerateProductionImage failed for ${input.patternId}:`, err);
-        }
-      })();
+      // Mark for regen FIRST so retryStuckPatterns will pick it up if the sync call 524s.
+      await updateTrendPatternProductionUrl(input.patternId, null);
 
-      // Return immediately with the current URLs + queued:true. Frontend polls getPatterns
-      // to detect when productionDesignUrl hash changes (= regen complete).
-      return {
-        queued: true as const,
-        patternId: input.patternId,
-        productionDesignUrl: pattern.productionDesignUrl,
-        previewImageUrl: pattern.previewImageUrl,
-      };
+      // Sync call — likely completes if reasoning_effort+edit total <100s. On 524 the
+      // client sees an error but the null in DB ensures retryStuckPatterns recovers.
+      const result = await processPatternProduction(
+        input.patternId,
+        input.workspaceId,
+        pattern.sourceImageUrl,
+        promptDesc
+      );
+      return result;
     }),
 
   /**

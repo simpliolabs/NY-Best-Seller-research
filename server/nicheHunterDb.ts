@@ -169,7 +169,7 @@ export async function updateTrendPatternDtfUrl(
  */
 export async function updateTrendPatternProductionUrl(
   id: string,
-  productionDesignUrl: string
+  productionDesignUrl: string | null
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
