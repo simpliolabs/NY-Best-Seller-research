@@ -340,87 +340,64 @@ describe("assertTransparentPng", () => {
 import { buildEditPrompt, aggregateAvoidList, type EditSpec } from "./patternProductionProcessor";
 import type { TrendPattern } from "../drizzle/schema";
 
-const TEXT_SPEC: EditSpec = {
+// Sample of the kind of rich, image-model-ready prompt the brain (nicheExpertPlan)
+// now writes itself: scene-lock + edit + new-design vividness + style-lock + preserve-lock.
+const BRAIN_PROMPT =
+  "Edit this t-shirt mockup directly. Keep the exact flat-lay composition: the heather " +
+  "navy v-neck tee with rolled sleeves, the wicker placemat, the white wood floor, the " +
+  "pale jeans at lower left and white slip-ons at lower right. " +
+  "Only change the printed shirt graphic. Replace the woman holding the umbrella with the " +
+  "same woman, in the same pose and yellow dress, with a pickleball paddle added in her hand. " +
+  "Keep the print as a subtle vintage distressed two-colour screen-print in navy ink with " +
+  "soft worn edges, so it looks printed INTO the fabric rather than pasted on top. " +
+  "Do not change the shirt colour, background, props, lighting, or anything else in the scene.";
+
+const SAMPLE_SPEC: EditSpec = {
   canConvert: true,
-  fitReason: "wordmark maps to a pickleball pun",
-  bestMatch: { type: "insideJoke", item: "Salty Dinker", why: "salty + dink pun" },
-  designType: "text-and-graphic",
-  preserve: "the woman with the umbrella",
-  niche: "pickleball",
-  nicheEquipment: ["a solid pickleball paddle"],
-  textSwaps: [{ from: "SALTY", to: "SALTY DINKER" }],
-  objectSwaps: [],
-  addText: [],
-  subjects: ["a woman with an umbrella"],
+  fitReason: "wordmark and figure both map to on-brand pickleball mascots",
+  bestMatch: { type: "mascot", item: "Capybara — zen dinker", why: "calm dink energy maps to the woman's pose" },
+  editPrompt: BRAIN_PROMPT,
 };
-const VISUAL_SPEC: EditSpec = {
-  canConvert: true,
-  fitReason: "T-Rex is an on-brand mascot",
-  bestMatch: { type: "mascot", item: "T-Rex", why: "tiny arms, big dink energy" },
-  designType: "illustration",
-  preserve: "the vintage dinosaur scene",
-  niche: "pickleball",
-  nicheEquipment: ["a solid pickleball paddle", "a pickleball net"],
-  textSwaps: [],
-  objectSwaps: [],
-  addText: [],
-  subjects: ["T-Rex", "stegosaurus"],
+
+const SKIP_SPEC: EditSpec = {
+  canConvert: false,
+  fitReason: "specific pop-culture reference outside the knowledge base",
+  bestMatch: { type: "none", item: "-", why: "no on-brand angle" },
+  editPrompt: "",
 };
-const OBJECT_SPEC: EditSpec = {
-  canConvert: true,
-  fitReason: "frog can hold a paddle instead of a sword",
-  bestMatch: { type: "mascot", item: "playful frog with a paddle", why: "swap sword for paddle" },
-  designType: "text-and-graphic",
-  preserve: "the frog and its cape",
-  niche: "pickleball",
-  nicheEquipment: [],
-  textSwaps: [{ from: "HUZZAH", to: "DINKER" }],
-  objectSwaps: [{ from: "the sword", to: "a solid pickleball paddle" }],
-  addText: ["DINK RESPONSIBLY"],
-  subjects: ["a frog with a cape"],
-};
+
 const dp = (o: Partial<TrendPattern>): TrendPattern =>
   ({ status: "dismissed", rejectionReason: null, rejectionTags: null, ...o }) as unknown as TrendPattern;
 
-describe("buildEditPrompt — routing", () => {
-  it("TEXT route applies the word swap and adds NO visual equipment", () => {
-    const p = buildEditPrompt(TEXT_SPEC, []);
-    expect(p).toContain('TEXT: change "SALTY" to "SALTY DINKER"');
-    expect(p.toLowerCase()).not.toContain("integrate");
-    expect(p).not.toContain("AVOID —");
+describe("buildEditPrompt — assembles the brain prompt + guardrails", () => {
+  it("emits the brain's rich editPrompt verbatim (no template flattening)", () => {
+    const p = buildEditPrompt(SAMPLE_SPEC, []);
+    expect(p).toContain(BRAIN_PROMPT.trim());
+    // The brain's specific anchors must survive end-to-end (this is the whole point —
+    // no per-image vividness gets dropped by the templater the way the old code did).
+    expect(p).toContain("wicker placemat");
+    expect(p).toContain("printed INTO the fabric");
   });
-  it("equipment-only spec renders ADD GEAR and keeps the proven design", () => {
-    const p = buildEditPrompt(VISUAL_SPEC, []);
-    expect(p).toContain("ADD GEAR: place a solid pickleball paddle");
-    expect(p).toContain("PRESERVE THE PROVEN DESIGN");
-    expect(p).toContain("Do NOT add any border, badge");
+  it("appends the DTF print constraint", () => {
+    const p = buildEditPrompt(SAMPLE_SPEC, []);
+    expect(p).toContain("PRINT CONSTRAINT (DTF)");
+    expect(p).toContain("bold, solid shapes only");
   });
-  it("composes text + object swaps + addText, with the concept, no recompose", () => {
-    const p = buildEditPrompt(OBJECT_SPEC, []);
-    expect(p).toContain('TEXT: change "HUZZAH" to "DINKER"');
-    expect(p).toContain("REPLACE: the sword -> a solid pickleball paddle");
-    expect(p).toContain("1:1 replacement");
-    expect(p).toContain('ADD TEXT: "DINK RESPONSIBLY"');
-    expect(p).toContain("ADAPTATION CONCEPT");
-    expect(p).toContain("Do NOT recompose");
-  });
-});
-
-describe("buildEditPrompt — reject-feedback (AVOID injection)", () => {
-  it("injects the AVOID block with the reasons on the TEXT route", () => {
-    const p = buildEditPrompt(TEXT_SPEC, ["salt shaker again", "too generic"]);
-    expect(p).toContain("AVOID —");
+  it("appends the AVOID block when there are rejection reasons", () => {
+    const p = buildEditPrompt(SAMPLE_SPEC, ["salt shaker again", "too generic"]);
+    expect(p).toContain("AVOID");
     expect(p).toContain("salt shaker again");
     expect(p).toContain("too generic");
   });
-  it("injects the AVOID block on the VISUAL route too", () => {
-    const p = buildEditPrompt(VISUAL_SPEC, ["no volcano"]);
-    expect(p).toContain("AVOID —");
-    expect(p).toContain("no volcano");
-  });
   it("omits the AVOID block entirely when there is nothing to avoid", () => {
-    expect(buildEditPrompt(TEXT_SPEC, [])).not.toContain("AVOID —");
-    expect(buildEditPrompt(VISUAL_SPEC, [])).not.toContain("AVOID —");
+    expect(buildEditPrompt(SAMPLE_SPEC, [])).not.toMatch(/AVOID\b/);
+  });
+  it("handles SKIP spec (empty editPrompt) without crashing", () => {
+    // Defensive: buildEditPrompt should never be called for a skip in the orchestrator,
+    // but if it is, return only the guardrails — no brain prompt to emit.
+    const p = buildEditPrompt(SKIP_SPEC, []);
+    expect(p).toContain("PRINT CONSTRAINT (DTF)");
+    expect(p).not.toContain("Edit this t-shirt mockup");
   });
 });
 

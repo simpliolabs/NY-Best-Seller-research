@@ -203,22 +203,21 @@ export type EditSpec = {
   fitReason: string;
   /** The single best-matching knowledge-base item the adaptation is built around. */
   bestMatch: { type: string; item: string; why: string };
-  designType: "text-only" | "text-and-graphic" | "illustration" | "other";
-  /** Everything in the source that must remain pixel-identical. */
-  preserve: string;
-  /** The target niche, e.g. "pickleball". */
-  niche: string;
-  /** Niche signature gear (paddle, net, ball) — integrated only when there are no swaps. */
-  nicheEquipment: string[];
-  /** Literal text edits from the source (e.g. SALTY -> SALTY DINKER). */
-  textSwaps: Array<{ from: string; to: string }>;
-  /** 1:1 object REPLACEMENTS of an existing source object (e.g. sword -> paddle). Never additions. */
-  objectSwaps: Array<{ from: string; to: string }>;
-  /** At most one short ON-BRAND text line to add (real niche vocabulary), in the source's
-   *  lettering style. Allowed even on no-text sources. NEVER a badge/banner/frame. */
-  addText: string[];
-  /** Main subjects/characters visible in the source (for equipment integration). */
-  subjects: string[];
+  /**
+   * The rich, image-model-ready edit instruction the brain WRITES ITSELF after looking
+   * at the source image — the same kind of detailed prompt a human craftsperson writes
+   * to ChatGPT. Names the scene elements (shirt + props), specifies the new design
+   * vividly (pose, action, details), and style-locks the print medium ("printed INTO
+   * the fabric, not pasted on top"). buildEditPrompt only appends AVOID + DTF tail.
+   *
+   * Replaces the old structured fields (textSwaps/objectSwaps/addText/preserve/etc.) —
+   * those required a template that flattened the brain's per-image specificity into
+   * generic prose, which Kontext rendered as recompositions. Skipped (empty) when
+   * canConvert is false.
+   *
+   * Legacy fields removed: the per-image vividness lives in this string now.
+   */
+  editPrompt: string;
 };
 
 /**
@@ -280,28 +279,45 @@ async function nicheExpertPlan(
       {
         role: "system",
         content: [
-          `You are the CREATIVE DIRECTOR for the "${niche}" niche — a print-on-demand expert. The source ${product} design is a PROVEN bestseller: its composition, layout, and art style are the value. Make it niche-relevant with the MINIMUM change. Your creativity is in CHOOSING the best on-brand swap — NOT in redesigning. The result must look like the SAME proven design with a swap, never a new design.`,
+          `You are an expert print-on-demand designer for the "${niche}" niche. A skilled human in your seat receives a simple intent and writes a single rich, image-model-ready prompt that produces a faithful edit on the first try. That is exactly your job here.`,
           "",
-          "=== YOUR NICHE KNOWLEDGE BASE (your creative palette) ===",
+          "You are shown the ACTUAL source ${product} mockup image. Reason through three steps and respond as JSON:",
+          "  1. canConvert — can the source genuinely become an on-brand niche design? Almost always yes. canConvert=false ONLY for an AVOID TOPIC or when there is truly nothing to swap. Explain in `fitReason`.",
+          "  2. bestMatch — pick the SINGLE knowledge-base item the adaptation will build on (mascot / inside joke / pain point / rivalry / transferable concept). {type, item, why}. Your creative call.",
+          "  3. editPrompt — WRITE the rich prompt yourself, as a human craftsperson would write to ChatGPT. NOT a structured spec. NOT a bullet list of fields. A flowing, image-model-ready paragraph. Empty string when canConvert is false.",
+          "",
+          "=== NICHE KNOWLEDGE BASE (your creative palette) ===",
           knowledge || `Niche: ${niche}. (No detailed profile available; use general expert judgement.)`,
           "=== END KNOWLEDGE BASE ===",
           "",
-          "Look at the ACTUAL source design and reason through three questions:",
-          "1. CAN I CONVERT IT? Could a MINIMAL swap make this on-brand? Almost always yes. Set `canConvert=false` ONLY for an AVOID TOPIC, or when there is genuinely nothing to swap. Explain in `fitReason`.",
-          "2. BEST MATCH. Which SINGLE knowledge-base item fits THIS design best — a mascot, inside joke, pain point, rivalry, or transferable concept? Put it in `bestMatch` {type, item, why}. Your creative call.",
-          "3. PLAN THE MINIMAL EDIT. Express ONLY the changes needed, and set `designType` + `preserve`:",
-          "   - `objectSwaps`: replace an existing subject/object with its on-brand equivalent in the SAME pose, position, scale, and art style (e.g. swap an off-brand animal for an on-brand mascot). A 1:1 replacement.",
-          "   - `textSwaps`: change ONLY the niche-specific word(s) inside existing text, keeping the rest of each phrase AND the layout (e.g. 'Shirt' -> 'Dink' in place). Do NOT rewrite whole lines.",
-          "   - `addText`: OPTIONAL — at most ONE short on-brand line using REAL niche vocabulary from your knowledge base, set in the source's existing lettering style and placed simply. Allowed even if the source had no text.",
-          "   - `nicheEquipment` + `subjects`: optional gear to place in an existing subject's hand (e.g. a paddle).",
+          "HOW TO WRITE `editPrompt` — this is the whole game. Follow this recipe exactly:",
           "",
-          "GUARDRAILS — PRESERVE THE PROVEN DESIGN (this is the entire point):",
-          "1. KEEP the EXACT composition, layout, element count and arrangement, framing, and art style of the source. A viewer must instantly recognise it as the SAME design.",
-          "2. Do NOT add badges, borders, frames, banners, ribbons, or backgrounds the source didn't have. Do NOT rearrange or recompose. Do NOT redraw, restyle, or recolour anything you are keeping.",
-          "3. STAY ON-BRAND: every swapped word, character, and any `addText` must come from YOUR knowledge base. NEVER invent fake brand names or off-niche copy (a past output hallucinated a 'PARODY BY …' brand — never do that).",
-          "4. Respect AVOID TOPICS.",
-          "5. Always fill `bestMatch` (type 'none' with a short why when canConvert is false).",
-        ].join("\n"),
+          "  A. SCENE LOCK (open the prompt by ENUMERATING what is in the source so the model has anchors to hold):",
+          `       \"Edit this ${product} mockup directly. Keep the exact flat-lay composition: [describe the ${product} colour and style + every prop visible + the surface/background + lighting/folds/shadows + camera angle].\"`,
+          "     Be specific — not 'preserve composition' but 'the cream/ivory tee with rolled sleeves, the wicker placemat, the pale wood floor, the laces at lower right'.",
+          "",
+          "  B. THE EDIT (one clear sentence — what changes and only what changes):",
+          "       \"Only change the printed shirt graphic. Replace the [exact thing in source] with [your bestMatch subject], in the same size and centered chest placement.\"",
+          "",
+          "  C. NEW-DESIGN VIVIDNESS (paint a picture of the new subject — pose, action, details, a real visual sentence):",
+          "       \"The new design should show a [subject] [doing a specific thing: pose + action + small detail], [optional: a few real niche words from the knowledge base as small text in the source's existing lettering style].\"",
+          "     Use REAL niche vocabulary from the knowledge base — never invent fake brand names, mock nutrition labels, or hallucinated copy.",
+          "",
+          "  D. STYLE LOCK (the killer move — describe the source's PRINT MEDIUM so the new graphic matches):",
+          "       \"Keep the print as a [describe the source print exactly: ink count, colour, distress level, line quality, texture], with [softness/weight/edge quality], so it looks printed INTO the fabric rather than pasted on top.\"",
+          "     Examples of style descriptors: 'subtle vintage distressed single-ink in light tan/cream', 'bold gold distressed serif with worn edges', 'flat 2-colour cartoon line-art with no shading'. NAME the medium — Kontext defaults to 'clean illustration' without this line.",
+          "",
+          "  E. PRESERVATION LOCK (close with a single firm sentence):",
+          `       \"Do not change the ${product} colour, background, props, lighting, camera angle, or anything else in the scene. No new borders, badges, banners, frames, or wordmarks.\"`,
+          "",
+          "Write all five parts as one flowing prompt (no headings, no bullet points in the output — that is what makes it look human-written). Output strict JSON.",
+          "",
+          "HARD RULES:",
+          "1. Always fill `bestMatch` (use {type:'none', item:'-', why:'...'} when canConvert is false).",
+          "2. Respect AVOID TOPICS in the knowledge base.",
+          "3. Never invent off-brand copy or fake brand names. Every word in the prompt's design copy must come from the knowledge base or be a literal source word being preserved.",
+          "4. editPrompt must be empty string when canConvert is false.",
+        ].join("\n").replace(/\$\{product\}/g, product),
       },
       {
         role: "user",
@@ -312,7 +328,7 @@ async function nicheExpertPlan(
           },
           {
             type: "text" as const,
-            text: `Evaluate this source design for the "${niche}" niche using ONLY the knowledge base above. Be honest about fit — a clean skip beats a forced, off-brand adaptation.`,
+            text: `Look at this source ${product} mockup. Decide canConvert + bestMatch, then WRITE the rich editPrompt yourself following the five-part recipe (SCENE LOCK → THE EDIT → NEW-DESIGN VIVIDNESS → STYLE LOCK → PRESERVATION LOCK). Target niche: "${niche}".`,
           },
         ],
       },
@@ -334,35 +350,9 @@ async function nicheExpertPlan(
               properties: { type: { type: "string" }, item: { type: "string" }, why: { type: "string" } },
               required: ["type", "item", "why"],
             },
-            designType: {
-              type: "string",
-              enum: ["text-only", "text-and-graphic", "illustration", "other"],
-            },
-            preserve: { type: "string" },
-            niche: { type: "string" },
-            nicheEquipment: { type: "array", items: { type: "string" } },
-            textSwaps: {
-              type: "array",
-              items: {
-                type: "object",
-                additionalProperties: false,
-                properties: { from: { type: "string" }, to: { type: "string" } },
-                required: ["from", "to"],
-              },
-            },
-            objectSwaps: {
-              type: "array",
-              items: {
-                type: "object",
-                additionalProperties: false,
-                properties: { from: { type: "string" }, to: { type: "string" } },
-                required: ["from", "to"],
-              },
-            },
-            addText: { type: "array", items: { type: "string" } },
-            subjects: { type: "array", items: { type: "string" } },
+            editPrompt: { type: "string" },
           },
-          required: ["canConvert", "fitReason", "bestMatch", "designType", "preserve", "niche", "nicheEquipment", "textSwaps", "objectSwaps", "addText", "subjects"],
+          required: ["canConvert", "fitReason", "bestMatch", "editPrompt"],
         },
       },
     },
@@ -389,77 +379,37 @@ async function nicheExpertPlan(
       `[PatternProd] nicheExpertPlan: could not parse plan: ${raw.slice(0, 200)}`
     );
   }
-  spec.textSwaps ??= [];
-  spec.objectSwaps ??= [];
-  spec.addText ??= [];
-  spec.subjects ??= [];
-  spec.nicheEquipment ??= [];
+  spec.editPrompt ??= "";
   console.log(
     `[PatternProd] nicheExpertPlan canConvert=${spec.canConvert} ` +
-      `match="${spec.bestMatch?.item ?? ""}" textSwaps=${spec.textSwaps.length} ` +
-      `objectSwaps=${spec.objectSwaps.length} addText=${spec.addText.length} reason="${(spec.fitReason || "").slice(0, 80)}"`
+      `match="${spec.bestMatch?.item ?? ""}" editPromptChars=${spec.editPrompt.length} ` +
+      `reason="${(spec.fitReason || "").slice(0, 80)}"`
   );
   return spec;
 }
 
 /**
- * Render an EditSpec into a deterministic Step-1 edit instruction, routed by class.
+ * Append the workspace-level guardrails (AVOID + DTF print constraint) to the rich
+ * prompt the brain wrote in `spec.editPrompt`.
  *
- * TEXT route (textSwaps present): change ONLY the words, add no visual elements —
- * keeps figure designs like "Salty" clean (just the wordmark swap, no invented
- * taglines/props). VISUAL route (no text): integrate the niche equipment into the
- * existing subjects so a no-text illustration like the dino scene actually reads
- * as the niche. Either way: never invent text, preserve everything else, DTF-safe.
- *
- * The free-form "additions" field was removed — it was where the LLM smuggled in
- * taglines and stray props. Routing replaces it with bounded, class-specific rules.
+ * The brain (nicheExpertPlan) does the heavy lifting: it looks at the source image,
+ * consults the knowledge base, and writes the SCENE/EDIT/NEW-DESIGN/STYLE/PRESERVATION
+ * recipe directly — the way a human craftsperson writes one rich prompt to ChatGPT.
+ * This function just adds the cross-cutting concerns the brain shouldn't know about:
+ * the AVOID list (from prior rejections) and the DTF print constraint (printability).
+ * No more structured-spec-to-prose templating — that template flattened the per-image
+ * specificity which is exactly what Kontext needs to preserve composition.
  */
-export function buildEditPrompt(spec: EditSpec, avoid: string[] = [], product: string = "t-shirt"): string {
-  const preserveLine = `PRESERVE THE PROVEN DESIGN — keep the EXACT composition, layout, element count and arrangement, framing, and art style. Do not redraw, restyle, recolour, reposition, resize, drop, or duplicate anything not explicitly changed below: ${spec.preserve}. Keep every other figure exactly (same count, poses, colours). Keep the ${product} and background unchanged.`;
-  const noRedesign = "Do NOT recompose or rearrange the layout. Do NOT add any border, badge, frame, banner, ribbon, or background the source did not have.";
-  const noFakeText = "Do NOT invent fake brand names or off-brand copy. The ONLY text changes are those listed above.";
-  const sameDesign = "A viewer must recognise the result as the SAME design as the original, with only the listed changes — never a new design.";
-  const dtf = "PRINT CONSTRAINT (DTF): bold, solid shapes only — no thin hairlines, stipple, halftone, or small scattered dots; render any rain/sparkle/texture as a few BOLD solid strokes or omit it.";
-  // Reject-feedback: prior rejected reasons/tags, injected so we stop repeating them.
+export function buildEditPrompt(spec: EditSpec, avoid: string[] = [], _product: string = "t-shirt"): string {
+  const dtf = "PRINT CONSTRAINT (DTF): the printed graphic must use bold, solid shapes only — no thin hairlines, stipple, halftone, or small scattered dots; any rain/sparkle/texture must be a few BOLD solid strokes or omitted entirely.";
   const avoidLine = avoid.length
-    ? `AVOID — these were rejected on previous designs in this shop; do NOT repeat them: ${avoid.join("; ")}.`
+    ? `AVOID (these were rejected on previous designs in this shop; do NOT repeat them): ${avoid.join("; ")}.`
     : null;
-  const concept = spec.bestMatch?.item
-    ? `ADAPTATION CONCEPT (the single idea this edit serves): ${spec.bestMatch.item}${spec.bestMatch.why ? ` — ${spec.bestMatch.why}` : ""}.`
-    : null;
-  const tail = [preserveLine, noRedesign, noFakeText, sameDesign, ...(avoidLine ? [avoidLine] : []), dtf];
-
-  // The minimal changes — a design may combine several. Everything else is preserved.
-  const changes: string[] = [];
-  for (const s of spec.textSwaps)
-    changes.push(`  - TEXT: change "${s.from}" to "${s.to}" — same font, size, weight, colour, position, and texture; change nothing else in that text.`);
-  for (const s of spec.objectSwaps)
-    changes.push(`  - REPLACE: ${s.from} -> ${s.to} — a 1:1 replacement in the SAME pose, position, scale, and art style; add nothing else.`);
-  for (const t of spec.addText)
-    changes.push(`  - ADD TEXT: "${t}" — in the source's existing lettering style, placed simply (NO badge, banner, ribbon, or frame).`);
-  for (const g of spec.nicheEquipment)
-    changes.push(`  - ADD GEAR: place ${g} with an existing subject (in their hand or beside them), drawn in the source's art style.`);
-
-  if (changes.length > 0) {
-    return [
-      `Edit the printed graphic on this ${product} IN PLACE — a surgical edit of the EXISTING design, NOT a redesign.`,
-      ...(concept ? [concept] : []),
-      "Make ONLY these changes; everything else stays exactly as in the original:",
-      ...changes,
-      ...tail,
-    ].join("\n");
-  }
-
-  // Degenerate fallback: the plan named no concrete change — make the niche read via the
-  // existing subjects without recomposing.
-  const subjects = spec.subjects.length ? spec.subjects.join(", ") : "the existing subjects";
-  const NICHE = (spec.niche || "the niche").toUpperCase();
   return [
-    `Edit the printed graphic on this ${product} IN PLACE — keep the original artwork and art style.`,
-    ...(concept ? [concept] : []),
-    `Make it read as ${NICHE} by giving ${subjects} ${spec.niche || "niche"} gear (e.g. a paddle) in hand — without recomposing.`,
-    ...tail,
-  ].join("\n");
+    (spec.editPrompt || "").trim(),
+    ...(avoidLine ? [avoidLine] : []),
+    dtf,
+  ].filter(Boolean).join("\n\n");
 }
 
 /**
