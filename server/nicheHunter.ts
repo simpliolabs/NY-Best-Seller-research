@@ -999,6 +999,57 @@ function deriveSearchTermsFromProductTypes(productTypes: string[]): string[] {
 const MAX_PATTERNS_PER_SCAN = 20;
 const MAX_PATTERNS_PER_CATEGORY = 4;
 
+// ─── Theme-level dedup (vs Concept Library) ──────────────────────────────────
+// PO directive: the Concept Library = winning designs we've already explored.
+// The scan should skip Etsy sources whose theme overlaps an existing pattern.
+// Exact-string match on sourceTitle/patternName misses near-duplicates like
+// "Funny Salty Girl Shirt | Women Graphic Tee ..." vs "Salty Girl Tee: Women's
+// Vintage Cotton Blend T-Shirt" — both are the same Salty theme, different shops.
+// Tier A: extract non-stopword tokens; if ≥2 specific words overlap an existing
+// pattern's tokens, skip. Catches Salty/Salty without needing LLM semantic match.
+const TITLE_STOPWORDS = new Set([
+  "shirt","tee","tshirt","hoodie","sweatshirt","sweater","top","apparel",
+  "women","womens","woman","men","mens","man","unisex","ladies","adult","adults",
+  "kid","kids","toddler","toddlers","baby","child","children","youth",
+  "graphic","funny","vintage","retro","custom","cute","cool","classic","modern",
+  "cotton","polyester","poly","heather","blend","soft","comfort","comfy","comfortable",
+  "navy","black","white","grey","gray","cream","ivory","tan","red","blue","green",
+  "style","styles","design","designs","print","printed","quality","best","top","premium",
+  "gift","gifts","for","her","his","him","to","with","and","the","a","an","of","is","in","on","or","by","at",
+  "neck","vneck","crew","crewneck","sleeve","sleeves","short","long","fit","fitted","relaxed","oversized","boxy",
+  "size","sizes","xl","xxl","xxxl","xs","sm","md","lg","small","medium","large","plus",
+  "made","printed","seller","etsy","listing","item","product","shop","store",
+  "more","less","new","old","day","days","year","years","time","times",
+]);
+
+function extractFingerprint(text: string): Set<string> {
+  return new Set(
+    (text || "")
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length >= 3 && !TITLE_STOPWORDS.has(w))
+  );
+}
+
+/**
+ * True if `candidate` and `existing` share at least `minOverlap` distinct
+ * non-stopword tokens. Default min=2: "Funny Salty Girl Shirt..." ∩ "Salty Girl
+ * Tee..." → {salty, girl} → match. Conservative enough to not over-dedup
+ * unrelated patterns that happen to share 1 generic word.
+ */
+function sharesTheme(candidate: Set<string>, existing: Set<string>, minOverlap = 2): boolean {
+  if (candidate.size === 0 || existing.size === 0) return false;
+  const words = Array.from(candidate);
+  let count = 0;
+  for (const w of words) {
+    if (existing.has(w)) {
+      count++;
+      if (count >= minOverlap) return true;
+    }
+  }
+  return false;
+}
+
 export async function runNicheHunterScan(
   workspace: Workspace,
   scanId: string,
@@ -1040,7 +1091,7 @@ export async function runNicheHunterScan(
     const patterns = await deconstructAndAdapt(hotSellers, nicheSignals, profile, sourceStyles);
     await updateScanRun(scanId, { progress: 70 });
 
-    // Cross-scan deduplication
+    // Cross-scan deduplication — exact-string + theme-fingerprint match.
     const existingPatterns = await getTrendPatternsByWorkspace(workspace.id);
     const existingSourceTitles = new Set(
       existingPatterns.map(ep => (ep.sourceTitle ?? "").toLowerCase().trim()).filter(Boolean)
@@ -1048,6 +1099,12 @@ export async function runNicheHunterScan(
     const existingPatternNames = new Set(
       existingPatterns.map(ep => (ep.patternName ?? "").toLowerCase().trim()).filter(Boolean)
     );
+    // Theme-fingerprints from BOTH sourceTitle and patternName per existing pattern —
+    // catches "same Concept Library theme, different Etsy shop" duplicates (Salty case).
+    const existingFingerprints: Set<string>[] = existingPatterns
+      .map(ep => extractFingerprint(`${ep.sourceTitle ?? ""} ${ep.patternName ?? ""}`))
+      .filter(fp => fp.size > 0);
+    console.log(`[NicheHunter] Dedup baseline: ${existingPatterns.length} existing patterns, ${existingFingerprints.length} fingerprints`);
 
     let saved = 0;
     // Per-category counter for the 4-designs-per-category cap (PO spec).
@@ -1083,8 +1140,20 @@ export async function runNicheHunterScan(
         console.log(`[NicheHunter] Skipping duplicate pattern: "${patName.slice(0, 60)}"`);
         continue;
       }
+      // Theme-fingerprint dedup (PO: respect Concept Library "winning designs").
+      // Builds the fingerprint from both the source title AND the LLM-generated pattern
+      // name so we catch BOTH "same Etsy theme, different listing" (Salty Girl Shirt vs
+      // Salty Girl Tee) AND "same LLM concept, different source" (Salty Dinker reused).
+      const candidateFp = extractFingerprint(`${srcTitle} ${patName}`);
+      const overlapIdx = existingFingerprints.findIndex(ef => sharesTheme(candidateFp, ef));
+      if (overlapIdx >= 0) {
+        const overlap = Array.from(candidateFp).filter(w => existingFingerprints[overlapIdx].has(w)).slice(0, 5);
+        console.log(`[NicheHunter] Skipping "${srcTitle.slice(0, 60)}" — theme overlap with existing pattern (shared: ${overlap.join(", ")})`);
+        continue;
+      }
       if (srcTitle) existingSourceTitles.add(srcTitle);
       if (patName) existingPatternNames.add(patName);
+      if (candidateFp.size > 0) existingFingerprints.push(candidateFp);
 
       // Determine adaptation mode
       const mode = determineAdaptationMode(hotSeller?.sourceImageUrl, sourceStyle);
