@@ -57,6 +57,7 @@ import {
 } from "./nicheHunterDb";
 import { invokeLLM } from "./_core/llm";
 import type { TrendPattern } from "../drizzle/schema";
+import { getWorkspaceById } from "./workspaceDb";
 
 // ─── Shared OpenAI /v1/images/edits caller ───────────────────────────────────
 
@@ -192,52 +193,105 @@ async function callFalKontextEdit(imageUrl: string, prompt: string): Promise<Buf
  * "replace, don't redesign" is encoded as data rather than left to chance.
  */
 export type EditSpec = {
+  /** FIT GATE: can this source genuinely be converted to the niche? If false, skip — don't force it. */
+  canConvert: boolean;
+  /** Why it does / doesn't fit (shown to the PO when skipped). */
+  fitReason: string;
+  /** The single best-matching knowledge-base item the adaptation is built around. */
+  bestMatch: { type: string; item: string; why: string };
   designType: "text-only" | "text-and-graphic" | "illustration" | "other";
   /** Everything in the source that must remain pixel-identical. */
   preserve: string;
   /** The target niche, e.g. "pickleball". */
   niche: string;
-  /** Niche signature gear (paddle, net, ball) — integrated ONLY on the VISUAL route. */
+  /** Niche signature gear (paddle, net, ball) — integrated only when there are no swaps. */
   nicheEquipment: string[];
-  /** Literal text edits from the source (e.g. SALTY -> SALTY DINKER). The ONLY text
-   *  changes; empty on the VISUAL route. */
+  /** Literal text edits from the source (e.g. SALTY -> SALTY DINKER). */
   textSwaps: Array<{ from: string; to: string }>;
-  /** Main subjects/characters visible in the source (for VISUAL-route integration). */
+  /** 1:1 object REPLACEMENTS of an existing source object (e.g. sword -> paddle). Never additions. */
+  objectSwaps: Array<{ from: string; to: string }>;
+  /** Main subjects/characters visible in the source (for equipment integration). */
   subjects: string[];
 };
 
 /**
- * Look at the ACTUAL source design and return the minimal set of swaps that make
- * it niche-appropriate — grounded in pixels, not in a text description. The hard
- * rule baked into the prompt: ADD NOTHING that is not already in the source
- * (except, at most, one short text token the niche genuinely requires).
- *
- * `nicheContext` is used ONLY to choose replacement words/subjects; the planner is
- * told explicitly not to import any object or scene mentioned in it.
+ * Turn the workspace nicheProfile into a compact "expert knowledge base" the
+ * brain LLM reasons over: mascots (on-brand characters), transferable concepts
+ * (source-style -> niche adaptation), inside jokes, pain points, rivalries,
+ * catchphrases, plus audience / styles / avoid-topics.
  */
-async function planMinimalEdit(
+function formatNicheKnowledge(profile: any): string {
+  if (!profile) return "";
+  const cm = (profile.culturalMap ?? {}) as any;
+  const L: string[] = [];
+  L.push(`NICHE: ${profile.summary || profile.niche || "the niche"}`);
+  if (profile.targetAudience) L.push(`AUDIENCE: ${profile.targetAudience}`);
+  if (Array.isArray(profile.designStyles) && profile.designStyles.length)
+    L.push(`PREFERRED STYLES: ${profile.designStyles.join(", ")}`);
+  if (Array.isArray(profile.avoidTopics) && profile.avoidTopics.length)
+    L.push(`AVOID TOPICS (never build an adaptation around these): ${profile.avoidTopics.join(", ")}`);
+  if (Array.isArray(cm.animalMascots) && cm.animalMascots.length)
+    L.push("ON-BRAND MASCOTS (the only on-brand characters; if the design's main subject is an animal/character NOT in this list, it usually does NOT fit):\n" +
+      cm.animalMascots.map((m: any) => `  - ${m.animal}: ${m.visualTreatment}`).join("\n"));
+  if (Array.isArray(cm.transferableVisualConcepts) && cm.transferableVisualConcepts.length)
+    L.push("TRANSFERABLE CONCEPTS (source style -> niche adaptation):\n" +
+      cm.transferableVisualConcepts.map((t: any) => `  - ${t.sourcePattern} -> ${t.targetAdaptation}`).join("\n"));
+  if (Array.isArray(cm.insideJokes) && cm.insideJokes.length)
+    L.push("INSIDE JOKES: " + cm.insideJokes.map((j: any) => j.joke).join(" | "));
+  if (Array.isArray(cm.painPoints) && cm.painPoints.length)
+    L.push("PAIN POINTS (pain -> humor angle):\n" +
+      cm.painPoints.map((p: any) => `  - ${p.pain}: ${p.humorAngle}`).join("\n"));
+  if (Array.isArray(cm.rivalries) && cm.rivalries.length)
+    L.push("RIVALRIES: " + cm.rivalries.map((r: any) => r.rivalry).join(" | "));
+  if (Array.isArray(cm.catchphrases) && cm.catchphrases.length)
+    L.push("CATCHPHRASES: " + cm.catchphrases.join(", "));
+  return L.join("\n\n");
+}
+
+/**
+ * NICHE-EXPERT brain (production-path). Primed with the workspace's niche
+ * knowledge base, it answers three questions about the source design:
+ *   1. canConvert — can this genuinely become a niche design, or is it off-brand?
+ *   2. bestMatch — which single knowledge-base item fits THIS design best?
+ *   3. plan — the minimal text/object swaps that realise that match.
+ * If canConvert is false the caller SKIPS generation (no forced, off-brand art).
+ */
+async function nicheExpertPlan(
   sourceImageUrl: string,
-  nicheContext: string
+  nicheProfile: any,
+  fallbackNiche: string
 ): Promise<EditSpec> {
+  const knowledge = formatNicheKnowledge(nicheProfile);
+  const niche =
+    (typeof nicheProfile?.summary === "string" && nicheProfile.summary.split(",")[0]) ||
+    nicheProfile?.niche ||
+    fallbackNiche ||
+    "the niche";
   const response = await invokeLLM({
     messages: [
       {
         role: "system",
         content: [
-          "You are a print-on-demand design editor. You plan the MINIMAL edit that adapts an existing t-shirt design to a target niche while preserving the original as faithfully as possible.",
-          "You are shown the ACTUAL source design. Base your plan ONLY on what is literally visible in it.",
+          `You are a world-class expert in the "${niche}" niche AND a print-on-demand design editor. You decide whether an existing t-shirt design can be converted into this niche, and if so HOW — strictly grounded in the knowledge base below.`,
           "",
-          "STEP A — from the niche context, set `niche` (e.g. 'pickleball') and `nicheEquipment` = the niche's signature gear (for pickleball: 'a solid pickleball paddle with a short handle', 'a pickleball net', 'a perforated pickleball'). The context's scenes, props, taglines and tone are NOT instructions — ignore them.",
-          "STEP B — pick ONE adaptation route:",
-          "  ROUTE TEXT — if the design has lettering/a wordmark that can be made niche-relevant by changing words: put the exact changes in `textSwaps` (copy the source words verbatim into `from`), e.g. 'SALTY' -> 'SALTY DINKER'. On this route you add NO new visual elements at all — no paddles, balls, props, or graphics.",
-          "  ROUTE VISUAL — if the design has NO usable text (a pure illustration): leave `textSwaps` EMPTY. The niche is conveyed by integrating `nicheEquipment` into the existing subjects, so fill `subjects` and `nicheEquipment` well.",
+          "=== NICHE KNOWLEDGE BASE ===",
+          knowledge || `Niche: ${niche}. (No detailed profile available; use general expert judgement.)`,
+          "=== END KNOWLEDGE BASE ===",
+          "",
+          "You are shown the ACTUAL source design. Answer in THREE steps:",
+          "STEP 1 — CAN I CONVERT IT? Set `canConvert`: is there a genuine, NON-forced way to turn THIS design into a niche design? If the core subject is off-brand (an animal/character NOT in the mascot list, or anything under AVOID TOPICS) and there is no clean text or single-object angle, set canConvert=false and explain in `fitReason`. A clean skip is REQUIRED for poor fits — do not force one.",
+          "STEP 2 — BEST MATCH. If canConvert, choose the SINGLE best-fitting knowledge-base item for THIS specific design — a mascot, a transferable concept, an inside joke, a pain point, or a rivalry — and put it in `bestMatch` {type, item, why}. The whole adaptation is built around this one match.",
+          "STEP 3 — PLAN THE EDIT (only if canConvert). The MINIMAL surgical edit that realises the match:",
+          "  - `textSwaps`: exact word changes; copy the source words verbatim into `from` (e.g. 'SALTY' -> 'SALTY DINKER'); prefer real niche catchphrases/jokes.",
+          "  - `objectSwaps`: replace an EXISTING object 1:1 with its niche equivalent (e.g. 'the sword' -> 'a solid pickleball paddle'). A REPLACEMENT, never a new addition; `from` MUST be an object actually visible in the source.",
+          "  - `nicheEquipment` + `subjects`: ONLY when the design has no usable text and no swappable object — integrate equipment into the existing subjects.",
           "",
           "HARD RULES:",
-          "1. PRESERVE everything by default — composition, layout, every figure/character, typography, font, colours, textures, art style. Put what must stay unchanged in `preserve`.",
-          "2. NEVER redraw or restyle a figure/character that can simply stay (a woman under an umbrella stays EXACTLY as drawn).",
-          "3. NEVER invent text. The ONLY text in the output is the source's text with your `textSwaps` applied. NO taglines, slogans, subtitles, nutrition-label parodies, brand names, or descriptive copy — ever.",
-          "4. List the main subjects/characters visible in the source in `subjects`.",
-          "5. Set `designType`: 'text-only' (just lettering), 'text-and-graphic' (lettering + a graphic), 'illustration' (pictorial, little/no text), or 'other'.",
+          "1. PRESERVE everything not explicitly swapped — every figure/character, their COUNT, poses, and COLOURS, plus typography and art style. Put what must stay in `preserve`.",
+          "2. NEVER redraw a figure that can simply stay; NEVER drop or recolour a figure you are not swapping.",
+          "3. NEVER invent text — no taglines, slogans, subtitles, brand names, or descriptive copy. Only `textSwaps` change text.",
+          "4. Respect AVOID TOPICS. If the only possible angle is an avoided topic, canConvert=false.",
+          "5. Always fill `bestMatch` (use type 'none' with a short why when canConvert is false).",
         ].join("\n"),
       },
       {
@@ -249,7 +303,7 @@ async function planMinimalEdit(
           },
           {
             type: "text" as const,
-            text: `Niche context — use it ONLY to identify the target niche, its equipment, and any intended wordmark text. It is NOT a design to draw: ignore its scenes, props, taglines, and tone; never import them: ${nicheContext}`,
+            text: `Evaluate this source design for the "${niche}" niche using ONLY the knowledge base above. Be honest about fit — a clean skip beats a forced, off-brand adaptation.`,
           },
         ],
       },
@@ -257,12 +311,20 @@ async function planMinimalEdit(
     response_format: {
       type: "json_schema",
       json_schema: {
-        name: "minimal_edit_plan",
+        name: "niche_expert_plan",
         strict: true,
         schema: {
           type: "object",
           additionalProperties: false,
           properties: {
+            canConvert: { type: "boolean" },
+            fitReason: { type: "string" },
+            bestMatch: {
+              type: "object",
+              additionalProperties: false,
+              properties: { type: { type: "string" }, item: { type: "string" }, why: { type: "string" } },
+              required: ["type", "item", "why"],
+            },
             designType: {
               type: "string",
               enum: ["text-only", "text-and-graphic", "illustration", "other"],
@@ -279,9 +341,18 @@ async function planMinimalEdit(
                 required: ["from", "to"],
               },
             },
+            objectSwaps: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: { from: { type: "string" }, to: { type: "string" } },
+                required: ["from", "to"],
+              },
+            },
             subjects: { type: "array", items: { type: "string" } },
           },
-          required: ["designType", "preserve", "niche", "nicheEquipment", "textSwaps", "subjects"],
+          required: ["canConvert", "fitReason", "bestMatch", "designType", "preserve", "niche", "nicheEquipment", "textSwaps", "objectSwaps", "subjects"],
         },
       },
     },
@@ -295,7 +366,7 @@ async function planMinimalEdit(
         ? content.map((c) => ("text" in c ? c.text : "")).join("")
         : "";
   if (!raw.trim()) {
-    throw new Error("[PatternProd] planMinimalEdit: empty LLM response");
+    throw new Error("[PatternProd] nicheExpertPlan: empty LLM response");
   }
 
   let spec: EditSpec;
@@ -305,17 +376,17 @@ async function planMinimalEdit(
     ) as EditSpec;
   } catch {
     throw new Error(
-      `[PatternProd] planMinimalEdit: could not parse edit plan: ${raw.slice(0, 200)}`
+      `[PatternProd] nicheExpertPlan: could not parse plan: ${raw.slice(0, 200)}`
     );
   }
   spec.textSwaps ??= [];
+  spec.objectSwaps ??= [];
   spec.subjects ??= [];
   spec.nicheEquipment ??= [];
-  const route = spec.textSwaps.length > 0 ? "TEXT" : "VISUAL";
   console.log(
-    `[PatternProd] planMinimalEdit type=${spec.designType} route=${route} niche="${spec.niche}" ` +
-      `textSwaps=${spec.textSwaps.length} subjects=${spec.subjects.length} ` +
-      `nicheEquipment=${spec.nicheEquipment.length} preserve="${(spec.preserve || "").slice(0, 60)}…"`
+    `[PatternProd] nicheExpertPlan canConvert=${spec.canConvert} ` +
+      `match="${spec.bestMatch?.item ?? ""}" textSwaps=${spec.textSwaps.length} ` +
+      `objectSwaps=${spec.objectSwaps.length} reason="${(spec.fitReason || "").slice(0, 80)}"`
   );
   return spec;
 }
@@ -333,38 +404,43 @@ async function planMinimalEdit(
  * taglines and stray props. Routing replaces it with bounded, class-specific rules.
  */
 export function buildEditPrompt(spec: EditSpec, avoid: string[] = []): string {
-  const preserveLine = `PRESERVE COMPLETELY (keep pixel-identical; do not redraw, restyle, recolour, reposition, or resize): ${spec.preserve}. Keep the shirt, fabric, background, lighting, and composition unchanged.`;
-  const noInventText = "NEVER invent text — no taglines, slogans, subtitles, brand names, or descriptive copy of any kind. The only text allowed is listed above (if any).";
+  const preserveLine = `PRESERVE COMPLETELY (do not redraw, restyle, recolour, reposition, resize, drop, or duplicate anything not explicitly changed below): ${spec.preserve}. Keep every other figure exactly — same COUNT, poses, and COLOURS. Keep the shirt, fabric, background, and composition unchanged.`;
+  const noInventText = "NEVER invent text — no taglines, slogans, subtitles, brand names, or descriptive copy. Only the listed text changes (if any) are allowed.";
   const dtf = "PRINT CONSTRAINT (DTF): bold, solid shapes only — no thin hairlines, stipple, halftone, or small scattered dots; render any rain/sparkle/texture as a few BOLD solid strokes or omit it.";
   // Reject-feedback: prior rejected reasons/tags, injected so we stop repeating them.
   const avoidLine = avoid.length
     ? `AVOID — these were rejected on previous designs in this shop; do NOT repeat them: ${avoid.join("; ")}.`
     : null;
+  const concept = spec.bestMatch?.item
+    ? `ADAPTATION CONCEPT (the single idea this edit serves): ${spec.bestMatch.item}${spec.bestMatch.why ? ` — ${spec.bestMatch.why}` : ""}.`
+    : null;
   const tail = [preserveLine, noInventText, ...(avoidLine ? [avoidLine] : []), dtf];
 
-  if (spec.textSwaps.length > 0) {
-    // TEXT route — change only the words, add nothing visual.
-    const textLines = spec.textSwaps
-      .map(
-        (s) =>
-          `  - change the text "${s.from}" to "${s.to}" — keep the identical font, size, weight, colour, position, and texture`
-      )
-      .join("\n");
+  // Explicit swaps — a design may have BOTH text and object swaps.
+  const changes: string[] = [];
+  for (const s of spec.textSwaps)
+    changes.push(`  - TEXT: change "${s.from}" to "${s.to}" — identical font, size, weight, colour, position, and texture.`);
+  for (const s of spec.objectSwaps)
+    changes.push(`  - OBJECT: replace ${s.from} with ${s.to} — a 1:1 replacement in the SAME position, scale, and art style. Do not add anything else.`);
+
+  if (changes.length > 0) {
     return [
       "Edit the printed graphic on this t-shirt IN PLACE — a surgical edit of the EXISTING design, NOT a redesign.",
-      "TEXT CHANGES are the ONLY changes allowed. Do not add, remove, redraw, or restyle any graphic, figure, or prop:",
-      textLines,
+      ...(concept ? [concept] : []),
+      "Make ONLY these changes; everything else stays exactly as in the original:",
+      ...changes,
       ...tail,
     ].join("\n");
   }
 
-  // VISUAL route — no usable text: integrate niche gear into the existing subjects.
+  // No explicit swaps: integrate niche equipment into the existing subjects (pure illustration).
   const gear = spec.nicheEquipment.length ? spec.nicheEquipment.join(", ") : `${spec.niche} equipment`;
   const subjects = spec.subjects.length ? spec.subjects.join(", ") : "the existing subjects";
   const NICHE = (spec.niche || "the niche").toUpperCase();
   return [
     "Edit the printed graphic on this t-shirt IN PLACE — keep the original artwork and art style; only make it clearly about the niche.",
-    `MAKE IT UNMISTAKABLY ${NICHE}: integrate ${gear} into the existing subjects (${subjects}) — put the equipment in their hands and into the scene so a viewer instantly recognises ${spec.niche || "the niche"}. Keep every subject and the art style exactly as drawn.`,
+    ...(concept ? [concept] : []),
+    `MAKE IT UNMISTAKABLY ${NICHE}: integrate ${gear} into the existing subjects (${subjects}) — put equipment in their hands and into the scene. Keep every subject and the art style exactly as drawn.`,
     "Add NO text or wordmark of any kind.",
     ...tail,
   ].join("\n");
@@ -390,6 +466,8 @@ export function buildEditPrompt(spec: EditSpec, avoid: string[] = []): string {
  * testing (Karpathy P2: pure, no I/O).
  */
 export function aggregateAvoidList(patterns: TrendPattern[]): string[] {
+  // Meta-tags that aren't actionable design guidance — drop them from the prompt.
+  const NOISE = new Set(["transfer failed", "transfer invalid"]);
   const seen = new Set<string>();
   const out: string[] = [];
   for (const p of patterns) {
@@ -401,7 +479,7 @@ export function aggregateAvoidList(patterns: TrendPattern[]): string[] {
     }
     for (const tag of ((p.rejectionTags as string[] | null) ?? [])) {
       const label = tag.replace(/_/g, " ").trim();
-      if (label && !seen.has(label)) {
+      if (label && !NOISE.has(label) && !seen.has(label)) {
         seen.add(label);
         out.push(label);
       }
@@ -690,11 +768,17 @@ export async function processPatternProduction(
 ): Promise<{ productionDesignUrl: string; previewImageUrl: string }> {
   console.log(`[PatternProd] Processing pattern ${patternId}...`);
 
-  // Step 0: Look at the ACTUAL source design and plan the minimal niche swaps.
-  // Replaces the prose adaptedConcept (a from-scratch brief that instructed the
-  // model to ADD paddles/wordmarks/props and REDRAW figures) with a pixel-grounded
-  // spec that forbids adding anything not already present in the source.
-  const editSpec = await planMinimalEdit(sourceImageUrl, promptDescription);
+  // Step 0: NICHE-EXPERT evaluation — primed with the workspace's niche knowledge
+  // base, it decides (1) can this be converted at all, (2) which knowledge-base
+  // item fits this design best, (3) the minimal swaps. If it does NOT fit, SKIP:
+  // leave the old image and report the reason (no forced, off-brand art).
+  const ws = await getWorkspaceById(workspaceId);
+  const editSpec = await nicheExpertPlan(sourceImageUrl, ws?.nicheProfile ?? null, promptDescription);
+  if (!editSpec.canConvert) {
+    throw new Error(
+      `NICHE_FIT_SKIP pattern=${patternId}: ${editSpec.fitReason || "source does not fit the niche"}`
+    );
+  }
   // Reject-feedback: inject the workspace's previously-rejected reasons so the
   // regeneration avoids repeating mistakes the PO already dismissed.
   const avoid = await getWorkspaceAvoidList(workspaceId);

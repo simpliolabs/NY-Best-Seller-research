@@ -341,20 +341,40 @@ import { buildEditPrompt, aggregateAvoidList, type EditSpec } from "./patternPro
 import type { TrendPattern } from "../drizzle/schema";
 
 const TEXT_SPEC: EditSpec = {
+  canConvert: true,
+  fitReason: "wordmark maps to a pickleball pun",
+  bestMatch: { type: "insideJoke", item: "Salty Dinker", why: "salty + dink pun" },
   designType: "text-and-graphic",
   preserve: "the woman with the umbrella",
   niche: "pickleball",
   nicheEquipment: ["a solid pickleball paddle"],
   textSwaps: [{ from: "SALTY", to: "SALTY DINKER" }],
+  objectSwaps: [],
   subjects: ["a woman with an umbrella"],
 };
 const VISUAL_SPEC: EditSpec = {
+  canConvert: true,
+  fitReason: "T-Rex is an on-brand mascot",
+  bestMatch: { type: "mascot", item: "T-Rex", why: "tiny arms, big dink energy" },
   designType: "illustration",
   preserve: "the vintage dinosaur scene",
   niche: "pickleball",
   nicheEquipment: ["a solid pickleball paddle", "a pickleball net"],
   textSwaps: [],
+  objectSwaps: [],
   subjects: ["T-Rex", "stegosaurus"],
+};
+const OBJECT_SPEC: EditSpec = {
+  canConvert: true,
+  fitReason: "frog can hold a paddle instead of a sword",
+  bestMatch: { type: "mascot", item: "playful frog with a paddle", why: "swap sword for paddle" },
+  designType: "text-and-graphic",
+  preserve: "the frog and its cape",
+  niche: "pickleball",
+  nicheEquipment: [],
+  textSwaps: [{ from: "HUZZAH", to: "DINKER" }],
+  objectSwaps: [{ from: "the sword", to: "a solid pickleball paddle" }],
+  subjects: ["a frog with a cape"],
 };
 const dp = (o: Partial<TrendPattern>): TrendPattern =>
   ({ status: "dismissed", rejectionReason: null, rejectionTags: null, ...o }) as unknown as TrendPattern;
@@ -362,7 +382,7 @@ const dp = (o: Partial<TrendPattern>): TrendPattern =>
 describe("buildEditPrompt — routing", () => {
   it("TEXT route applies the word swap and adds NO visual equipment", () => {
     const p = buildEditPrompt(TEXT_SPEC, []);
-    expect(p).toContain('change the text "SALTY" to "SALTY DINKER"');
+    expect(p).toContain('TEXT: change "SALTY" to "SALTY DINKER"');
     expect(p.toLowerCase()).not.toContain("integrate");
     expect(p).not.toContain("AVOID —");
   });
@@ -371,6 +391,14 @@ describe("buildEditPrompt — routing", () => {
     expect(p).toContain("UNMISTAKABLY PICKLEBALL");
     expect(p).toContain("a solid pickleball paddle");
     expect(p).toContain("Add NO text or wordmark");
+  });
+  it("applies text AND object swaps together as 1:1 replacements, with the concept", () => {
+    const p = buildEditPrompt(OBJECT_SPEC, []);
+    expect(p).toContain('TEXT: change "HUZZAH" to "DINKER"');
+    expect(p).toContain("OBJECT: replace the sword with a solid pickleball paddle");
+    expect(p).toContain("1:1 replacement");
+    expect(p).toContain("ADAPTATION CONCEPT");
+    expect(p.toLowerCase()).not.toContain("integrate"); // swaps present -> not the equipment path
   });
 });
 
@@ -413,5 +441,13 @@ describe("aggregateAvoidList", () => {
   it("caps the list at 8", () => {
     const many = Array.from({ length: 20 }, (_, i) => dp({ rejectionReason: `reason ${i}` }));
     expect(aggregateAvoidList(many)).toHaveLength(8);
+  });
+  it("filters out the 'transfer failed' meta-tag noise but keeps real signals", () => {
+    const out = aggregateAvoidList([
+      dp({ rejectionTags: ["transfer_failed", "too_generic"] }),
+      dp({ rejectionTags: ["transfer_failed"] }),
+    ]);
+    expect(out).not.toContain("transfer failed");
+    expect(out).toContain("too generic");
   });
 });
