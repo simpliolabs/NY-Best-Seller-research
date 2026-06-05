@@ -350,6 +350,7 @@ const TEXT_SPEC: EditSpec = {
   nicheEquipment: ["a solid pickleball paddle"],
   textSwaps: [{ from: "SALTY", to: "SALTY DINKER" }],
   objectSwaps: [],
+  addText: [],
   subjects: ["a woman with an umbrella"],
 };
 const VISUAL_SPEC: EditSpec = {
@@ -362,6 +363,7 @@ const VISUAL_SPEC: EditSpec = {
   nicheEquipment: ["a solid pickleball paddle", "a pickleball net"],
   textSwaps: [],
   objectSwaps: [],
+  addText: [],
   subjects: ["T-Rex", "stegosaurus"],
 };
 const OBJECT_SPEC: EditSpec = {
@@ -374,6 +376,7 @@ const OBJECT_SPEC: EditSpec = {
   nicheEquipment: [],
   textSwaps: [{ from: "HUZZAH", to: "DINKER" }],
   objectSwaps: [{ from: "the sword", to: "a solid pickleball paddle" }],
+  addText: ["DINK RESPONSIBLY"],
   subjects: ["a frog with a cape"],
 };
 const dp = (o: Partial<TrendPattern>): TrendPattern =>
@@ -386,19 +389,20 @@ describe("buildEditPrompt — routing", () => {
     expect(p.toLowerCase()).not.toContain("integrate");
     expect(p).not.toContain("AVOID —");
   });
-  it("VISUAL route integrates niche equipment into the subjects, no text", () => {
+  it("equipment-only spec renders ADD GEAR and keeps the proven design", () => {
     const p = buildEditPrompt(VISUAL_SPEC, []);
-    expect(p).toContain("UNMISTAKABLY PICKLEBALL");
-    expect(p).toContain("a solid pickleball paddle");
-    expect(p).toContain("Add NO text or wordmark");
+    expect(p).toContain("ADD GEAR: place a solid pickleball paddle");
+    expect(p).toContain("PRESERVE THE PROVEN DESIGN");
+    expect(p).toContain("Do NOT add any border, badge");
   });
-  it("applies text AND object swaps together as 1:1 replacements, with the concept", () => {
+  it("composes text + object swaps + addText, with the concept, no recompose", () => {
     const p = buildEditPrompt(OBJECT_SPEC, []);
     expect(p).toContain('TEXT: change "HUZZAH" to "DINKER"');
-    expect(p).toContain("OBJECT: replace the sword with a solid pickleball paddle");
+    expect(p).toContain("REPLACE: the sword -> a solid pickleball paddle");
     expect(p).toContain("1:1 replacement");
+    expect(p).toContain('ADD TEXT: "DINK RESPONSIBLY"');
     expect(p).toContain("ADAPTATION CONCEPT");
-    expect(p.toLowerCase()).not.toContain("integrate"); // swaps present -> not the equipment path
+    expect(p).toContain("Do NOT recompose");
   });
 });
 
