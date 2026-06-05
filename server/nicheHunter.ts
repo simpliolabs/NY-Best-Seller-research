@@ -25,7 +25,7 @@ import {
   fetchEtsySearchPage,
   type EtsySearchFilter,
 } from "./etsyScraper";
-import { selectGraphicTeeTiles } from "./visionTileSelector";
+import { selectGraphicTeeTiles, type NicheContext } from "./visionTileSelector";
 import type { SourceStyleJSON } from "../shared/sourceStyleJson";
 import {
   createTrendPattern,
@@ -112,7 +112,8 @@ async function fetchCrossNicheHotSellers(
   crossNicheCategories: string[],
   _etsyApiKey?: string,       // retained for signature compatibility; unused
   _etsyKeywords?: string[],
-  generalBestSellerTerms?: string[]
+  generalBestSellerTerms?: string[],
+  nicheContext?: NicheContext
 ): Promise<{ sellers: HotSeller[]; instrumentation: SourceInstrumentation; searchLog: Array<{ query: string; url: string; filter: "is_best_seller" | "is_popular_now"; resultCount: number; searchedAt: string }> }> {
   // Prepend general best-seller terms BEFORE cross-niche categories
   // Cap general terms at 2 (1-2 broad market searches, not the whole list)
@@ -178,8 +179,8 @@ async function fetchCrossNicheHotSellers(
         continue;
       }
 
-      // Vision LLM selection
-      const { selectedIds, rejectionNotes } = await selectGraphicTeeTiles(category, searchResult.tiles);
+      // Vision LLM selection (niche-aware: prefers mascot/catchphrase fit, rejects costume gimmicks)
+      const { selectedIds, rejectionNotes } = await selectGraphicTeeTiles(category, searchResult.tiles, nicheContext);
       console.log(`[NicheHunter][CATEGORY] "${category}" (pass 1) → scraped=${searchResult.tiles.length} | selected=${selectedIds.length} | notes: ${rejectionNotes.slice(0, 80)}`);
 
       let addedForCategory = 0;
@@ -232,7 +233,7 @@ async function fetchCrossNicheHotSellers(
           continue;
         }
 
-        const { selectedIds, rejectionNotes } = await selectGraphicTeeTiles(category, searchResult.tiles);
+        const { selectedIds, rejectionNotes } = await selectGraphicTeeTiles(category, searchResult.tiles, nicheContext);
         console.log(`[NicheHunter][CATEGORY] "${category}" (pass 2) → scraped=${searchResult.tiles.length} | selected=${selectedIds.length} | notes: ${rejectionNotes.slice(0, 80)}`);
 
         for (const tile of searchResult.tiles) {
@@ -925,19 +926,31 @@ Be harsh. Most concepts should score 40-70. Only truly exceptional ones get 80+.
  *
  * Priority order:
  *   1. Explicit generalBestSellerTerms in nicheProfile (user-configured in workspace settings)
- *   2. Auto-derived from workspace product groups (productType field → search terms)
- *   3. Default fallback for graphic tee businesses
+ *   2. SKIP auto-derivation if the user has explicit crossNicheCategories — their
+ *      category budget is finite (5 slots) and auto-injected terms ("funny shirt",
+ *      "graphic tee") would crowd out the categories the user actually chose.
+ *   3. Auto-derived from workspace product groups (productType field → search terms)
+ *   4. Default fallback for graphic tee businesses (only when user gave no signal at all)
  */
 async function resolveGeneralBestSellerTerms(
   profile: NicheProfile,
   workspaceId: string
 ): Promise<string[]> {
-  // Priority 1: Explicit user-configured terms
+  // Priority 1: Explicit user-configured terms always win
   if (profile.generalBestSellerTerms && profile.generalBestSellerTerms.length > 0) {
     return profile.generalBestSellerTerms;
   }
 
-  // Priority 2: Derive from product groups
+  // Priority 2: User has explicit cross-niche categories → respect their scrape
+  // budget. Auto-injecting "funny shirt"/"graphic tee" here was crowding out
+  // user-chosen categories (each general term eats 1 of 5 budget slots), and
+  // "funny shirt" Etsy results skew toward costume gimmicks (e.g. 3D-printed
+  // fake-hairy-chest tees) that have no transferable design language.
+  if ((profile.crossNicheCategories ?? []).length > 0) {
+    return [];
+  }
+
+  // Priority 3: Derive from product groups
   try {
     const groups = await getProductGroupsByWorkspace(workspaceId);
     if (groups.length > 0) {
@@ -950,7 +963,7 @@ async function resolveGeneralBestSellerTerms(
     console.warn(`[NicheHunter] Failed to fetch product groups for general terms: ${err}`);
   }
 
-  // Priority 3: Default for graphic tee businesses
+  // Priority 4: Default for graphic tee businesses (no user signal at all)
   return ["funny shirt", "graphic tee"];
 }
 
@@ -1067,10 +1080,21 @@ export async function runNicheHunterScan(
   const generalTerms = await resolveGeneralBestSellerTerms(profile, workspace.id);
   console.log(`[NicheHunter] General best-seller terms: [${generalTerms.join(", ")}]`);
 
+  // Build a compact niche context for the vision tile selector. Lets the selector
+  // PREFER niche-fit tiles over equally-valid graphic tees that are off-brand
+  // (e.g. on a "funny shirt" page, pick the raccoon tee over the costume-gimmick
+  // tee) and REJECT failure modes that pass the generic graphic-tee classifier
+  // (3D body-illusion costume tees, historical-figure designs).
+  const nicheContext: NicheContext = {
+    niche: profile.summary || profile.targetAudience || "the niche",
+    mascots: (profile.culturalMap?.animalMascots ?? []).map(m => m.animal).filter(Boolean),
+    catchphrases: profile.culturalMap?.catchphrases ?? [],
+  };
+
   try {
     // Step 1: Real Etsy hot sellers (scrape-based, no fallback, no fiction)
     await updateScanRun(scanId, { progress: 10 });
-    const { sellers: hotSellers, instrumentation, searchLog } = await fetchCrossNicheHotSellers(crossNicheCategories, etsyApiKey, etsyKeywords, generalTerms);
+    const { sellers: hotSellers, instrumentation, searchLog } = await fetchCrossNicheHotSellers(crossNicheCategories, etsyApiKey, etsyKeywords, generalTerms, nicheContext);
     // Log instrumentation to scan for transparency
     const instrLog = `[Source: ${instrumentation.mode}] Live results: ${instrumentation.liveResultCount}/${instrumentation.categoriesSearched} categories${instrumentation.fallbackReason ? ` | Fallback: ${instrumentation.fallbackReason}` : ""}${instrumentation.httpErrors.length ? ` | HTTP errors: ${instrumentation.httpErrors.map(e => `${e.category}:${e.status}`).join(", ")}` : ""}`;
     console.log(`[NicheHunter] ${instrLog}`);
