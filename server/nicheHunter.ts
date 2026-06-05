@@ -116,9 +116,10 @@ async function fetchCrossNicheHotSellers(
 ): Promise<{ sellers: HotSeller[]; instrumentation: SourceInstrumentation; searchLog: Array<{ query: string; url: string; filter: "is_best_seller" | "is_popular_now"; resultCount: number; searchedAt: string }> }> {
   // Prepend general best-seller terms BEFORE cross-niche categories
   // Cap general terms at 2 (1-2 broad market searches, not the whole list)
-  // Total category budget: 8 (2 general + 6 cross-niche) — keeps scan under 10 min
+  // Total category budget: 5 per PO spec (e.g. 2 general + 3 cross-niche, or 0 general
+  // + 5 cross-niche) — paired with the 4-designs-per-category cap (max 5×4 = 20 saved).
   const generalTerms = (generalBestSellerTerms ?? []).slice(0, 2);
-  const crossNiche = crossNicheCategories.slice(0, 8 - generalTerms.length);
+  const crossNiche = crossNicheCategories.slice(0, 5 - generalTerms.length);
   const categories = [...generalTerms, ...crossNiche];
   const searchLog: Array<{ query: string; url: string; filter: "is_best_seller" | "is_popular_now"; resultCount: number; searchedAt: string }> = [];
   const instrumentation: SourceInstrumentation = {
@@ -993,9 +994,10 @@ function deriveSearchTermsFromProductTypes(productTypes: string[]): string[] {
 
 // ─── Main scan orchestrator ───────────────────────────────────────────────────
 
-// Reduced to 3 for fast first-result time (~5-8 min total scan)
-// Increase back to 8 when ready for production volume
-const MAX_PATTERNS_PER_SCAN = 3;
+// PO spec: 5 categories MAX × 4 designs per category = 20 total per scan.
+// Combined with MAX_PATTERNS_PER_CATEGORY enforcement in the save loop below.
+const MAX_PATTERNS_PER_SCAN = 20;
+const MAX_PATTERNS_PER_CATEGORY = 4;
 
 export async function runNicheHunterScan(
   workspace: Workspace,
@@ -1048,10 +1050,12 @@ export async function runNicheHunterScan(
     );
 
     let saved = 0;
+    // Per-category counter for the 4-designs-per-category cap (PO spec).
+    const savedPerCategory: Record<string, number> = {};
     const totalPatterns = Math.min(patterns.length, hotSellers.length);
 
     for (let i = 0; i < totalPatterns; i++) {
-      // Hard cap: max 8 patterns per scan
+      // Hard cap: max 20 patterns per scan (5 categories × 4 designs)
       if (saved >= MAX_PATTERNS_PER_SCAN) {
         console.log(`[NicheHunter] Reached ${MAX_PATTERNS_PER_SCAN}-pattern cap — stopping`);
         break;
@@ -1060,6 +1064,13 @@ export async function runNicheHunterScan(
       const p = patterns[i];
       const hotSeller = hotSellers[i];
       const sourceStyle = sourceStyles[i] ?? null;
+
+      // Per-category cap: skip if this category already has MAX_PATTERNS_PER_CATEGORY saves
+      const category = hotSeller?.category ?? "(uncategorized)";
+      if ((savedPerCategory[category] ?? 0) >= MAX_PATTERNS_PER_CATEGORY) {
+        console.log(`[NicheHunter] Skipping "${(hotSeller?.title ?? "").slice(0, 50)}" — category "${category}" already at ${MAX_PATTERNS_PER_CATEGORY} saved`);
+        continue;
+      }
 
       // Skip duplicates
       const srcTitle = (hotSeller?.title ?? "").toLowerCase().trim();
@@ -1107,8 +1118,10 @@ export async function runNicheHunterScan(
         adaptationMode: mode,
       });
 
-      if (isTransferValid) saved++;
-      else {
+      if (isTransferValid) {
+        saved++;
+        savedPerCategory[category] = (savedPerCategory[category] ?? 0) + 1;
+      } else {
         console.log(`[NicheHunter] Auto-dismissed pattern "${p.patternName}" — transfer invalid: ${p.transferReasoning}`);
         continue;
       }
