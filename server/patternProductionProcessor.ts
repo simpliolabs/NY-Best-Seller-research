@@ -259,7 +259,8 @@ function formatNicheKnowledge(profile: any): string {
 async function nicheExpertPlan(
   sourceImageUrl: string,
   nicheProfile: any,
-  fallbackNiche: string
+  fallbackNiche: string,
+  product: string = "t-shirt"
 ): Promise<EditSpec> {
   const knowledge = formatNicheKnowledge(nicheProfile);
   const niche =
@@ -272,7 +273,7 @@ async function nicheExpertPlan(
       {
         role: "system",
         content: [
-          `You are a world-class expert in the "${niche}" niche AND a print-on-demand design editor. You decide whether an existing t-shirt design can be converted into this niche, and if so HOW — strictly grounded in the knowledge base below.`,
+          `You are a world-class expert in the "${niche}" niche AND a print-on-demand design editor. You decide whether an existing ${product} design can be converted into this niche, and if so HOW — strictly grounded in the knowledge base below.`,
           "",
           "=== NICHE KNOWLEDGE BASE ===",
           knowledge || `Niche: ${niche}. (No detailed profile available; use general expert judgement.)`,
@@ -403,8 +404,8 @@ async function nicheExpertPlan(
  * The free-form "additions" field was removed — it was where the LLM smuggled in
  * taglines and stray props. Routing replaces it with bounded, class-specific rules.
  */
-export function buildEditPrompt(spec: EditSpec, avoid: string[] = []): string {
-  const preserveLine = `PRESERVE COMPLETELY (do not redraw, restyle, recolour, reposition, resize, drop, or duplicate anything not explicitly changed below): ${spec.preserve}. Keep every other figure exactly — same COUNT, poses, and COLOURS. Keep the shirt, fabric, background, and composition unchanged.`;
+export function buildEditPrompt(spec: EditSpec, avoid: string[] = [], product: string = "t-shirt"): string {
+  const preserveLine = `PRESERVE COMPLETELY (do not redraw, restyle, recolour, reposition, resize, drop, or duplicate anything not explicitly changed below): ${spec.preserve}. Keep every other figure exactly — same COUNT, poses, and COLOURS. Keep the ${product}, background, and composition unchanged.`;
   const noInventText = "NEVER invent text — no taglines, slogans, subtitles, brand names, or descriptive copy. Only the listed text changes (if any) are allowed.";
   const dtf = "PRINT CONSTRAINT (DTF): bold, solid shapes only — no thin hairlines, stipple, halftone, or small scattered dots; render any rain/sparkle/texture as a few BOLD solid strokes or omit it.";
   // Reject-feedback: prior rejected reasons/tags, injected so we stop repeating them.
@@ -425,7 +426,7 @@ export function buildEditPrompt(spec: EditSpec, avoid: string[] = []): string {
 
   if (changes.length > 0) {
     return [
-      "Edit the printed graphic on this t-shirt IN PLACE — a surgical edit of the EXISTING design, NOT a redesign.",
+      `Edit the printed graphic on this ${product} IN PLACE — a surgical edit of the EXISTING design, NOT a redesign.`,
       ...(concept ? [concept] : []),
       "Make ONLY these changes; everything else stays exactly as in the original:",
       ...changes,
@@ -438,7 +439,7 @@ export function buildEditPrompt(spec: EditSpec, avoid: string[] = []): string {
   const subjects = spec.subjects.length ? spec.subjects.join(", ") : "the existing subjects";
   const NICHE = (spec.niche || "the niche").toUpperCase();
   return [
-    "Edit the printed graphic on this t-shirt IN PLACE — keep the original artwork and art style; only make it clearly about the niche.",
+    `Edit the printed graphic on this ${product} IN PLACE — keep the original artwork and art style; only make it clearly about the niche.`,
     ...(concept ? [concept] : []),
     `MAKE IT UNMISTAKABLY ${NICHE}: integrate ${gear} into the existing subjects (${subjects}) — put equipment in their hands and into the scene. Keep every subject and the art style exactly as drawn.`,
     "Add NO text or wordmark of any kind.",
@@ -502,6 +503,25 @@ async function getWorkspaceAvoidList(workspaceId: string): Promise<string[]> {
   }
 }
 
+/**
+ * The product type for this workspace (e.g. "t-shirt", "mug", "tote bag"), read
+ * from the first product group's `productType` config. Keeps the pipeline
+ * product-agnostic — the edit/extract prompts are templated on this, so adding a
+ * new product is config, not code. Defaults to "t-shirt".
+ */
+async function getWorkspaceProductType(workspaceId: string): Promise<string> {
+  try {
+    const groups = await getProductGroupsByWorkspace(workspaceId);
+    const first = groups
+      .slice()
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())[0];
+    const pt = (first?.productType ?? "").trim();
+    return (pt || "T-Shirt").toLowerCase();
+  } catch {
+    return "t-shirt";
+  }
+}
+
 // ─── Step 1: Replace design on full shirt photo ──────────────────────────────
 
 /**
@@ -551,15 +571,21 @@ async function replaceDesignOnShirt(
  * `background: "transparent"` is the API parameter that makes gpt-image-1
  * return a native RGBA PNG with alpha=0 outside the design.
  */
-async function extractTransparentFromShirt(shirtMockup: Buffer): Promise<Buffer> {
+async function extractTransparentFromShirt(shirtMockup: Buffer, product: string = "t-shirt"): Promise<Buffer> {
+  // Apparel keeps the proven garment-specific hints (collar/sleeves); other product
+  // types (mug, tote, etc.) use a generic "remove all of the product" phrasing.
+  const isApparel = /shirt|tee|hoodie|sweat|tank|apparel|garment|jersey|sleeve/i.test(product);
+  const removal = isApparel
+    ? `Remove the ${product} garment entirely — no fabric, no collar, no sleeves, no seams, no ${product} silhouette.`
+    : `Remove the ${product} entirely — every part of the physical ${product} (all material, edges, seams, handles, rims, and silhouette).`;
   const prompt = [
-    "Extract ONLY the printed graphic artwork from this t-shirt mockup.",
-    "Remove the t-shirt garment entirely — no fabric, no collar, no sleeves, no seams, no shirt silhouette.",
+    `Extract ONLY the printed graphic artwork from this ${product} mockup.`,
+    removal,
     "Remove all photo background.",
     "Output only the flat 2D printed design itself on a fully transparent background, trimmed tightly to the artwork.",
-    "Do NOT keep the shirt. The shirt is not part of the design.",
+    `Do NOT keep the ${product}. The ${product} is not part of the design.`,
   ].join(" ");
-  console.log(`[PatternProd] Step 2 (extract). Prompt: "${prompt.substring(0, 100)}..."`);
+  console.log(`[PatternProd] Step 2 (extract, product=${product}). Prompt: "${prompt.substring(0, 100)}..."`);
   return callImageEdit(shirtMockup, "shirt_with_design.png", prompt, { transparent: true });
 }
 
@@ -773,7 +799,8 @@ export async function processPatternProduction(
   // item fits this design best, (3) the minimal swaps. If it does NOT fit, SKIP:
   // leave the old image and report the reason (no forced, off-brand art).
   const ws = await getWorkspaceById(workspaceId);
-  const editSpec = await nicheExpertPlan(sourceImageUrl, ws?.nicheProfile ?? null, promptDescription);
+  const product = await getWorkspaceProductType(workspaceId); // agentic: "t-shirt", "mug", etc.
+  const editSpec = await nicheExpertPlan(sourceImageUrl, ws?.nicheProfile ?? null, promptDescription, product);
   if (!editSpec.canConvert) {
     throw new Error(
       `NICHE_FIT_SKIP pattern=${patternId}: ${editSpec.fitReason || "source does not fit the niche"}`
@@ -782,13 +809,13 @@ export async function processPatternProduction(
   // Reject-feedback: inject the workspace's previously-rejected reasons so the
   // regeneration avoids repeating mistakes the PO already dismissed.
   const avoid = await getWorkspaceAvoidList(workspaceId);
-  const editPrompt = buildEditPrompt(editSpec, avoid);
+  const editPrompt = buildEditPrompt(editSpec, avoid, product);
 
-  // Step 1: Surgically edit the source shirt photo using only the planned swaps.
+  // Step 1: Surgically edit the source product photo using only the planned swaps.
   const shirtMockup = await replaceDesignOnShirt(sourceImageUrl, editPrompt);
 
   // Step 2: Extract just the design onto a transparent canvas
-  const rawTransparent = await extractTransparentFromShirt(shirtMockup);
+  const rawTransparent = await extractTransparentFromShirt(shirtMockup, product);
 
   // Step 3a: DTF despeckle — drop un-printable isolated specks before cropping
   // (so a stray dot in a corner doesn't inflate the crop bbox).
