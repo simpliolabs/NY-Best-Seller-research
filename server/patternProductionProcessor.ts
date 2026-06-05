@@ -53,6 +53,8 @@ import { getGarmentBbox, resolveZoneToPhoto } from "./garmentDetector";
 import {
   updateTrendPatternImage,
   updateTrendPatternProductionUrl,
+  updateTrendPatternStatus,
+  recordRejectionSignal,
   getTrendPatternsByWorkspace,
 } from "./nicheHunterDb";
 import { invokeLLM } from "./_core/llm";
@@ -797,20 +799,33 @@ export async function processPatternProduction(
   workspaceId: string,
   sourceImageUrl: string,
   promptDescription: string
-): Promise<{ productionDesignUrl: string; previewImageUrl: string }> {
+): Promise<{ productionDesignUrl: string | null; previewImageUrl: string | null }> {
   console.log(`[PatternProd] Processing pattern ${patternId}...`);
 
   // Step 0: NICHE-EXPERT evaluation — primed with the workspace's niche knowledge
   // base, it decides (1) can this be converted at all, (2) which knowledge-base
-  // item fits this design best, (3) the minimal swaps. If it does NOT fit, SKIP:
-  // leave the old image and report the reason (no forced, off-brand art).
+  // item fits this design best, (3) the minimal swaps.
   const ws = await getWorkspaceById(workspaceId);
   const product = await getWorkspaceProductType(workspaceId); // agentic: "t-shirt", "mug", etc.
   const editSpec = await nicheExpertPlan(sourceImageUrl, ws?.nicheProfile ?? null, promptDescription, product);
+
+  // If the brain decides the source doesn't fit (canConvert=false), AUTO-DISMISS
+  // the pattern with the fit reason — DO NOT throw. The previous behavior of
+  // throwing NICHE_FIT_SKIP caused an infinite re-process loop: retryStuckPatterns
+  // would catch the error silently, return "processed:id, remaining:N", but the
+  // pattern stayed in stuck state. Next poll → same throw → same silent catch.
+  // Patterns sat null prodHash for 37+ minutes (PO-confirmed: the poppy flowers).
+  //
+  // Auto-dismissing moves the pattern to status='dismissed' with the brain's
+  // fitReason captured as rejectionReason. getStuckProductionPatterns excludes
+  // dismissed (same commit), so retryStuckPatterns stops re-picking it. The
+  // dismiss also feeds aggregateAvoidList for future scans/regens.
   if (!editSpec.canConvert) {
-    throw new Error(
-      `NICHE_FIT_SKIP pattern=${patternId}: ${editSpec.fitReason || "source does not fit the niche"}`
-    );
+    const reason = editSpec.fitReason || "Source does not fit the niche";
+    console.log(`[PatternProd] AUTO-DISMISS pattern=${patternId}: ${reason}`);
+    await updateTrendPatternStatus(patternId, "dismissed");
+    await recordRejectionSignal(patternId, reason, ["off_brand"]);
+    return { productionDesignUrl: null, previewImageUrl: null };
   }
   // Reject-feedback: inject the workspace's previously-rejected reasons so the
   // regeneration avoids repeating mistakes the PO already dismissed.

@@ -193,7 +193,9 @@ export async function getStuckProductionPatterns(
     .where(eq(trendPatterns.workspaceId, workspaceId))
     .orderBy(desc(trendPatterns.createdAt));
   // Filter in JS: has sourceImageUrl but no productionDesignUrl
-  return rows.filter(r => r.sourceImageUrl && !r.productionDesignUrl).slice(0, limit);
+  // Exclude dismissed: auto-dismissed-on-no-fit patterns intentionally have null
+  // productionDesignUrl and must NOT be re-picked (would cause an infinite re-process loop).
+  return rows.filter(r => r.sourceImageUrl && !r.productionDesignUrl && r.status !== "dismissed").slice(0, limit);
 }
 
 /**
@@ -208,7 +210,7 @@ export async function countStuckProductionPatterns(
     .select()
     .from(trendPatterns)
     .where(eq(trendPatterns.workspaceId, workspaceId));
-  return rows.filter(r => r.sourceImageUrl && !r.productionDesignUrl).length;
+  return rows.filter(r => r.sourceImageUrl && !r.productionDesignUrl && r.status !== "dismissed").length;
 }
 
 /**
