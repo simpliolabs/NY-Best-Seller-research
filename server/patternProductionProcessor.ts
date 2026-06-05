@@ -3,7 +3,7 @@
  *
  * Two-step pipeline (edit → extract):
  *
- *   Step 1 — REPLACE: FLUX.1 Kontext [pro] (via fal) edits the printed graphic on
+ *   Step 1 — REPLACE: FLUX.1 Kontext [max] (via fal) edits the printed graphic on
  *     the FULL uncropped shirt photo IN PLACE. Kontext is an instruction-edit model
  *     that preserves the rest of the image by design — it does not re-render the
  *     whole canvas the way gpt-image-1 did (which redrew figures and invented props
@@ -120,10 +120,10 @@ async function callImageEdit(
   throw new Error("gpt-image-1 response has neither b64_json nor url");
 }
 
-// ─── FLUX.1 Kontext [pro] caller (fal queue API) ─────────────────────────────
+// ─── FLUX.1 Kontext [max] caller (fal queue API) ─────────────────────────────
 
 /**
- * Edit an image with FLUX.1 Kontext [pro] via the fal queue API; return the
+ * Edit an image with FLUX.1 Kontext [max] via the fal queue API; return the
  * result as a Buffer.
  *
  * Kontext is an instruction-driven image EDITOR: given a source image + a prompt,
@@ -138,7 +138,11 @@ async function callFalKontextEdit(imageUrl: string, prompt: string): Promise<Buf
   if (!key) throw new Error("FAL_KEY is not configured");
   const headers = { Authorization: `Key ${key}`, "Content-Type": "application/json" };
 
-  const submit = await fetch("https://queue.fal.run/fal-ai/flux-pro/kontext", {
+  // Kontext [max] (was [pro]): per fal docs, [max] has "improved prompt adherence
+  // and typography integration" — needed because [pro] kept recomposing/adding badges
+  // despite repeated minimal-edit guardrail prompts. $0.08/img vs $0.04. Same
+  // request/response shape, so this is a one-line endpoint swap.
+  const submit = await fetch("https://queue.fal.run/fal-ai/flux-pro/kontext/max", {
     method: "POST",
     headers,
     body: JSON.stringify({ prompt, image_url: imageUrl }),
@@ -550,7 +554,7 @@ async function replaceDesignOnShirt(
   sourceImageUrl: string,
   editPrompt: string
 ): Promise<Buffer> {
-  // Step 1 uses FLUX.1 Kontext [pro] (via fal): an instruction-edit model that
+  // Step 1 uses FLUX.1 Kontext [max] (via fal): an instruction-edit model that
   // changes only the printed graphic and preserves the rest of the photo by
   // design. This replaces gpt-image-1, which re-rendered the whole canvas and
   // would redraw figures / invent props (the redrawn-lady, salt-shaker, and
@@ -559,7 +563,7 @@ async function replaceDesignOnShirt(
   // The edit instruction comes from planMinimalEdit() + buildEditPrompt(); fal
   // fetches `sourceImageUrl` server-side, so no local download is needed.
   console.log(
-    `[PatternProd] Step 1 (Kontext [pro] in-place edit). Prompt: "${editPrompt.substring(0, 140)}..."`
+    `[PatternProd] Step 1 (Kontext [max] in-place edit). Prompt: "${editPrompt.substring(0, 140)}..."`
   );
   return callFalKontextEdit(sourceImageUrl, editPrompt);
 }
