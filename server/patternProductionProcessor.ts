@@ -279,44 +279,44 @@ async function nicheExpertPlan(
       {
         role: "system",
         content: [
-          `You are an expert print-on-demand designer for the "${niche}" niche. A skilled human in your seat receives a simple intent and writes a single rich, image-model-ready prompt that produces a faithful edit on the first try. That is exactly your job here.`,
+          `You are an expert print-on-demand designer for the "${niche}" niche. A skilled human receives a simple intent and writes a single rich, image-model-ready prompt that produces a faithful edit on the first try. That is your job.`,
           "",
-          "You are shown the ACTUAL source ${product} mockup image. Reason through three steps and respond as JSON:",
-          "  1. canConvert — can the source genuinely become an on-brand niche design? Almost always yes. canConvert=false ONLY for an AVOID TOPIC or when there is truly nothing to swap. Explain in `fitReason`.",
-          "  2. bestMatch — pick the SINGLE knowledge-base item the adaptation will build on (mascot / inside joke / pain point / rivalry / transferable concept). {type, item, why}. Your creative call.",
-          "  3. editPrompt — WRITE the rich prompt yourself, as a human craftsperson would write to ChatGPT. NOT a structured spec. NOT a bullet list of fields. A flowing, image-model-ready paragraph. Empty string when canConvert is false.",
+          `You are shown the ACTUAL source ${product} mockup image. Reason through three steps and respond as JSON:`,
+          "  1. canConvert — STRICT GATE (read carefully): set TRUE only when BOTH conditions hold:",
+          "       (a) The source contains a SPECIFIC concrete element you can name and swap (a character/animal you replace, an object you replace, source text whose niche-specific WORDS you swap in place); AND",
+          "       (b) The replacement is a SPECIFIC item from the knowledge base below (a named mascot, a literal catchphrase/inside-joke phrase, a named transferable-concept adaptation).",
+          "     Set FALSE when: (i) the source is built on an AVOID TOPIC, OR (ii) the only way to 'convert' would be to INVENT a new subject/scene not present in the source (e.g. replacing the whole composition with a generic landscape, mascot you made up, or copy that isn't in the KB). A clean SKIP is REQUIRED for forced conversions. The previous bad output replaced a Dr-Seuss-style 'One Shirt / Two Shirts' design with an unrelated bear + 'STAY WILD' landscape — that is a manufactured conversion and MUST be canConvert=false.",
+          "     Explain in `fitReason` with the specific source element + the specific KB item, OR the specific reason no clean swap exists.",
+          "  2. bestMatch — the SINGLE knowledge-base item the adaptation is built on (mascot / inside joke / pain point / rivalry / transferable concept). {type, item, why}. Must literally appear in the KB below.",
+          "  3. editPrompt — WRITE the rich Kontext-ready prompt as one flowing paragraph (no headings, no bullets in the output). Empty string when canConvert is false.",
           "",
-          "=== NICHE KNOWLEDGE BASE (your creative palette) ===",
+          "=== NICHE KNOWLEDGE BASE (your ONLY creative palette — every mascot/word/concept you use must literally come from here) ===",
           knowledge || `Niche: ${niche}. (No detailed profile available; use general expert judgement.)`,
           "=== END KNOWLEDGE BASE ===",
           "",
-          "HOW TO WRITE `editPrompt` — this is the whole game. Follow this recipe exactly:",
+          "HOW TO WRITE `editPrompt` — five parts as one paragraph:",
           "",
-          "  A. SCENE LOCK (open the prompt by ENUMERATING what is in the source so the model has anchors to hold):",
-          `       \"Edit this ${product} mockup directly. Keep the exact flat-lay composition: [describe the ${product} colour and style + every prop visible + the surface/background + lighting/folds/shadows + camera angle].\"`,
-          "     Be specific — not 'preserve composition' but 'the cream/ivory tee with rolled sleeves, the wicker placemat, the pale wood floor, the laces at lower right'.",
+          `  A. SCENE LOCK — open by enumerating what is in the source so the model has anchors: "Edit this ${product} mockup directly. Keep the exact flat-lay composition: [the ${product} colour/style + every prop visible + surface/background + lighting/folds + camera angle]." Be specific — not 'preserve composition' but 'the cream tee with rolled sleeves, the wicker placemat, the pale wood floor, the laces at lower right'.`,
           "",
-          "  B. THE EDIT (one clear sentence — what changes and only what changes):",
-          "       \"Only change the printed shirt graphic. Replace the [exact thing in source] with [your bestMatch subject], in the same size and centered chest placement.\"",
+          "  B. THE EDIT — one sentence: \"Only change the printed shirt graphic. Replace [exact thing in source — name it concretely, e.g. 'the two fighting tigers', 'the wordmark SALTY', 'the swords held by the frog'] with [your bestMatch swap], in the same size and centered chest placement.\"",
           "",
-          "  C. NEW-DESIGN VIVIDNESS (paint a picture of the new subject — pose, action, details, a real visual sentence):",
-          "       \"The new design should show a [subject] [doing a specific thing: pose + action + small detail], [optional: a few real niche words from the knowledge base as small text in the source's existing lettering style].\"",
-          "     Use REAL niche vocabulary from the knowledge base — never invent fake brand names, mock nutrition labels, or hallucinated copy.",
+          "  C. SOURCE-ANCHORED VIVIDNESS — describe the new subject IN THE SAME STRUCTURE AS THE SOURCE. The new subject inherits the source's POSE, COUNT, ARRANGEMENT, and LAYOUT — only its identity changes. Examples of correct anchoring:",
+          "       - Source: two tigers in a circular fighting pose -> 'two raccoons IN THE SAME CIRCULAR FIGHTING POSE, paws locked, mid-pounce, in the source's red line-art style.'  NOT 'two raccoons standing facing each other.'",
+          "       - Source: 4 figures stacked vertically with a colour-word each ('One Shirt / Two Shirts / Red Shirt / Blue Shirt') -> '4 figures stacked vertically in the SAME ARRANGEMENT, with the words swapped to a real pickleball catchphrase from the KB — e.g. One Dink / Two Dinks / Red Dink / Blue Dink — each figure holding a paddle.'  NOT 'a bear with mountains.'",
+          "     If you cannot describe the new subject by reusing the source's structure, the source does NOT genuinely fit — go back and set canConvert=false.",
           "",
-          "  D. STYLE LOCK (the killer move — describe the source's PRINT MEDIUM so the new graphic matches):",
-          "       \"Keep the print as a [describe the source print exactly: ink count, colour, distress level, line quality, texture], with [softness/weight/edge quality], so it looks printed INTO the fabric rather than pasted on top.\"",
-          "     Examples of style descriptors: 'subtle vintage distressed single-ink in light tan/cream', 'bold gold distressed serif with worn edges', 'flat 2-colour cartoon line-art with no shading'. NAME the medium — Kontext defaults to 'clean illustration' without this line.",
+          "  D. STYLE LOCK — describe the source's PRINT MEDIUM so the new graphic matches: \"Keep the print as a [ink count, colour, distress level, line quality, texture], with [softness/weight/edge quality], so it looks printed INTO the fabric rather than pasted on top.\" Examples: 'subtle vintage distressed single-ink in light tan/cream', 'bold gold distressed serif with worn edges', 'flat 2-colour line-art with no shading'. Without this, Kontext defaults to clean illustration.",
           "",
-          "  E. PRESERVATION LOCK (close with a single firm sentence):",
-          `       \"Do not change the ${product} colour, background, props, lighting, camera angle, or anything else in the scene. No new borders, badges, banners, frames, or wordmarks.\"`,
+          `  E. PRESERVATION LOCK — close with: "Do not change the ${product} colour, background, props, lighting, camera angle, or anything else in the scene. No new borders, badges, banners, frames, or wordmarks the source did not have."`,
           "",
-          "Write all five parts as one flowing prompt (no headings, no bullet points in the output — that is what makes it look human-written). Output strict JSON.",
+          "Write all five parts as ONE flowing prompt paragraph. Output strict JSON.",
           "",
-          "HARD RULES:",
-          "1. Always fill `bestMatch` (use {type:'none', item:'-', why:'...'} when canConvert is false).",
-          "2. Respect AVOID TOPICS in the knowledge base.",
-          "3. Never invent off-brand copy or fake brand names. Every word in the prompt's design copy must come from the knowledge base or be a literal source word being preserved.",
-          "4. editPrompt must be empty string when canConvert is false.",
+          "HARD RULES (the brain's accountability):",
+          "1. Every NAMED MASCOT / CATCHPHRASE / CONCEPT in your editPrompt must literally appear in the KNOWLEDGE BASE above. Quote them from there. If you find yourself writing a phrase or subject you cannot point to in the KB, STOP — set canConvert=false instead.",
+          "2. Never invent off-brand copy, fake brand names, mock nutrition labels, or generic outdoorsy phrases ('STAY WILD', 'WANDER OFTEN', etc. are NOT pickleball — banned).",
+          "3. The new design must REUSE the source's structure (pose, count, arrangement, layout). The identity changes; the structure stays.",
+          "4. Always fill `bestMatch` (use {type:'none', item:'-', why:'...'} when canConvert is false). editPrompt must be empty string when canConvert is false.",
+          "5. Respect AVOID TOPICS.",
         ].join("\n").replace(/\$\{product\}/g, product),
       },
       {
@@ -385,6 +385,11 @@ async function nicheExpertPlan(
       `match="${spec.bestMatch?.item ?? ""}" editPromptChars=${spec.editPrompt.length} ` +
       `reason="${(spec.fitReason || "").slice(0, 80)}"`
   );
+  if (spec.editPrompt) {
+    // Log the actual brain-written prompt (preview) so the live output is debuggable —
+    // length alone hides whether the brain followed the five-part recipe / stayed on-brand.
+    console.log(`[PatternProd] nicheExpertPlan editPrompt PREVIEW: "${spec.editPrompt.slice(0, 600)}${spec.editPrompt.length > 600 ? "…" : ""}"`);
+  }
   return spec;
 }
 
