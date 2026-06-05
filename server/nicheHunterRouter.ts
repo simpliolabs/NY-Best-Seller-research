@@ -234,9 +234,19 @@ export const nicheHunterRouter = router({
     }),
 
   /**
-   * Regenerate the productionDesignUrl for an existing pattern.
-   * Calls processPatternProduction with the pattern's stored sourceImageUrl and promptDescription.
-   * This is the user-facing "regenerate" action for stale or failed production images.
+   * Regenerate the productionDesignUrl for an existing pattern — FIRE-AND-FORGET.
+   *
+   * Returns immediately with the current (stale) URLs + `queued: true`. The actual
+   * regen happens in the background via `void (async () => ...)()` — same pattern as
+   * `approvePattern`'s deferred DTF extraction. The frontend should poll `getPatterns`
+   * after `queued: true` and detect a hash change in `productionDesignUrl` to know it
+   * completed.
+   *
+   * Why: synchronous calls were taking ~125s (GPT-5 reasoning ~60-80s + gpt-image-1
+   * edit ~40-60s) → always hit Cloudflare's ~100s edge timeout → client always got 524
+   * (60% of regens also failed silently server-side when the request handler was killed
+   * mid-flight). Verified the server continues processing after client disconnect:
+   * Tiger's regen 524'd at 100s but completed at 125s and wrote the new URL anyway.
    */
   regenerateProductionImage: protectedProcedure
     .input(z.object({ patternId: z.string(), workspaceId: z.string() }))
@@ -246,13 +256,30 @@ export const nicheHunterRouter = router({
       if (!pattern) throw new TRPCError({ code: "NOT_FOUND", message: "Pattern not found" });
       if (!pattern.sourceImageUrl) throw new TRPCError({ code: "BAD_REQUEST", message: "No source image URL" });
       const promptDesc = (pattern as any).promptDescription ?? pattern.adaptedConcept ?? "";
-      const result = await processPatternProduction(
-        input.patternId,
-        input.workspaceId,
-        pattern.sourceImageUrl,
-        promptDesc
-      );
-      return result;
+
+      // Fire-and-forget: kick off the regen in the background; return immediately.
+      void (async () => {
+        try {
+          await processPatternProduction(
+            input.patternId,
+            input.workspaceId,
+            pattern.sourceImageUrl!,
+            promptDesc
+          );
+          console.log(`[NicheHunter] regenerateProductionImage complete for ${input.patternId}`);
+        } catch (err) {
+          console.warn(`[NicheHunter] regenerateProductionImage failed for ${input.patternId}:`, err);
+        }
+      })();
+
+      // Return immediately with the current URLs + queued:true. Frontend polls getPatterns
+      // to detect when productionDesignUrl hash changes (= regen complete).
+      return {
+        queued: true as const,
+        patternId: input.patternId,
+        productionDesignUrl: pattern.productionDesignUrl,
+        previewImageUrl: pattern.previewImageUrl,
+      };
     }),
 
   /**
