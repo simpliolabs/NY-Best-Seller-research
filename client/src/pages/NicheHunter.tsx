@@ -788,6 +788,27 @@ export default function NicheHunter() {
   const [dismissDialogPatternId, setDismissDialogPatternId] = useState<string | null>(null);
   const [flagDialogPatternId, setFlagDialogPatternId] = useState<string | null>(null);
 
+  // Preserve grid min-height during card removals to prevent scroll jump from DOM height shrinking
+  const gridRef = useRef<HTMLDivElement>(null);
+  const gridMinHeight = useRef<number>(0);
+  const minHeightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Before a card is removed (optimistic update), lock the grid height
+  const lockGridHeight = useCallback(() => {
+    if (gridRef.current) {
+      gridMinHeight.current = gridRef.current.offsetHeight;
+      gridRef.current.style.minHeight = `${gridMinHeight.current}px`;
+      // Release the min-height after a short delay so layout can settle
+      if (minHeightTimer.current) clearTimeout(minHeightTimer.current);
+      minHeightTimer.current = setTimeout(() => {
+        if (gridRef.current) {
+          gridRef.current.style.minHeight = '';
+          gridMinHeight.current = 0;
+        }
+      }, 2000);
+    }
+  }, []);
+
   const utils = trpc.useUtils();
 
   const { data: scanStatus } = trpc.nicheHunter.getScanStatus.useQuery(
@@ -809,15 +830,20 @@ export default function NicheHunter() {
 
   useEffect(() => {
     if (scanStatus?.status === "completed") {
-      utils.nicheHunter.getPatterns.invalidate({ workspaceId });
+      // Use refetchType 'none' so we only mark stale; the placeholderData keeps UI stable
+      utils.nicheHunter.getPatterns.invalidate({ workspaceId }, { refetchType: 'none' });
+      // Then do a quiet refetch that won't cause scroll jump thanks to placeholderData
+      utils.nicheHunter.getPatterns.refetch({ workspaceId, status: statusFilter });
     }
-  }, [scanStatus?.status, workspaceId, utils]);
+  }, [scanStatus?.status, workspaceId, utils, statusFilter]);
 
   const { data: patterns = [], isLoading: patternsLoading } =
     trpc.nicheHunter.getPatterns.useQuery(
       { workspaceId, status: statusFilter },
       {
         enabled: !!workspaceId,
+        // Keep previous data during refetch to prevent layout shifts / scroll jumps
+        placeholderData: (prev) => prev,
         // Poll every 10s while any pattern has a sourceImageUrl but no productionDesignUrl
         // (fire-and-forget image gen still in progress)
         refetchInterval: (query) => {
@@ -836,7 +862,9 @@ export default function NicheHunter() {
       setRetryRemaining(data.remaining);
       if (data.remaining === 0) {
         setIsRetrying(false);
-        utils.nicheHunter.getPatterns.invalidate({ workspaceId });
+        // Mark stale without triggering immediate refetch (prevents scroll jump)
+        // Data will refresh on next user interaction or window focus
+        utils.nicheHunter.getPatterns.invalidate({ workspaceId }, { refetchType: 'none' });
       }
     },
     onError: () => {
@@ -901,22 +929,27 @@ export default function NicheHunter() {
   const approvePattern = trpc.nicheHunter.approvePattern.useMutation({
     onMutate: async ({ patternId }) => {
       setActingPatternId(patternId);
-      // Cancel outgoing refetches so they don't overwrite our optimistic update
+      // Cancel outgoing refetches so they don't overwrite our update
       await utils.nicheHunter.getPatterns.cancel();
       // Snapshot current data for rollback
       const prev = utils.nicheHunter.getPatterns.getData({ workspaceId, status: statusFilter });
-      // Optimistically update the pattern status in cache
-      utils.nicheHunter.getPatterns.setData({ workspaceId, status: statusFilter }, (old) =>
-        old?.map((p: any) => p.id === patternId ? { ...p, status: "approved" } : p) ?? []
-      );
+      // NOTE: Do NOT optimistically update here — the dialog is still open with scroll locked.
+      // If we remove the card now, react-remove-scroll will restore a stale scroll position on close.
       return { prev };
     },
-    onSuccess: () => {
+    onSuccess: (_data, { patternId }) => {
+      // 1. Close dialog first — this releases react-remove-scroll and restores scroll correctly
       setApproveDialogPatternId(null);
-      // Background refresh without layout shift
-      utils.nicheHunter.getPatterns.invalidate({ workspaceId });
-      utils.nicheHunter.getStylePreferences.invalidate({ workspaceId });
-      utils.library.list.invalidate();
+      // 2. After a microtask (dialog unmount + scroll restore complete), update the cache
+      setTimeout(() => {
+        lockGridHeight();
+        utils.nicheHunter.getPatterns.setData({ workspaceId, status: statusFilter }, (old) =>
+          old?.map((p: any) => p.id === patternId ? { ...p, status: "approved" } : p) ?? []
+        );
+        utils.nicheHunter.getPatterns.invalidate({ workspaceId }, { refetchType: 'none' });
+        utils.nicheHunter.getStylePreferences.invalidate({ workspaceId });
+        utils.library.list.invalidate();
+      }, 50);
       toast.success("Pattern approved! Next: Generate images in the Library, then refine in Design Studio.", {
         duration: 6000,
         action: {
@@ -940,16 +973,21 @@ export default function NicheHunter() {
       setActingPatternId(patternId);
       await utils.nicheHunter.getPatterns.cancel();
       const prev = utils.nicheHunter.getPatterns.getData({ workspaceId, status: statusFilter });
-      // Optimistically update status to dismissed (card stays but moves to dismissed filter)
-      utils.nicheHunter.getPatterns.setData({ workspaceId, status: statusFilter }, (old) =>
-        old?.map((p: any) => p.id === patternId ? { ...p, status: "dismissed" } : p) ?? []
-      );
+      // NOTE: Do NOT optimistically update here — dialog scroll lock is active
       return { prev };
     },
-    onSuccess: () => {
+    onSuccess: (_data, { patternId }) => {
+      // 1. Close dialog first — releases scroll lock and restores scroll correctly
       setDismissDialogPatternId(null);
-      utils.nicheHunter.getPatterns.invalidate({ workspaceId });
-      utils.nicheHunter.getStylePreferences.invalidate({ workspaceId });
+      // 2. After dialog unmount + scroll restore, update cache
+      setTimeout(() => {
+        lockGridHeight();
+        utils.nicheHunter.getPatterns.setData({ workspaceId, status: statusFilter }, (old) =>
+          old?.map((p: any) => p.id === patternId ? { ...p, status: "dismissed" } : p) ?? []
+        );
+        utils.nicheHunter.getPatterns.invalidate({ workspaceId }, { refetchType: 'none' });
+        utils.nicheHunter.getStylePreferences.invalidate({ workspaceId });
+      }, 50);
       toast.success("Pattern dismissed.");
     },
     onError: (err, _vars, ctx) => {
@@ -963,16 +1001,23 @@ export default function NicheHunter() {
 
   const flagEditMode = trpc.nicheHunter.flagEditModeResult.useMutation({
     onMutate: async ({ patternId }) => {
+      setActingPatternId(patternId);
       await utils.nicheHunter.getPatterns.cancel();
       const prev = utils.nicheHunter.getPatterns.getData({ workspaceId, status: statusFilter });
-      // Optimistically mark as dismissed (flag also dismisses server-side)
-      utils.nicheHunter.getPatterns.setData({ workspaceId, status: statusFilter }, (old) =>
-        old?.map((p: any) => p.id === patternId ? { ...p, status: "dismissed", adaptationMode: "style_reference_flagged" } : p) ?? []
-      );
+      // NOTE: Do NOT optimistically update here — dialog scroll lock is active
       return { prev };
     },
-    onSuccess: () => {
-      utils.nicheHunter.getPatterns.invalidate({ workspaceId });
+    onSuccess: (_data, { patternId }) => {
+      // 1. Close dialog first — releases scroll lock
+      setFlagDialogPatternId(null);
+      // 2. After dialog unmount + scroll restore, update cache
+      setTimeout(() => {
+        lockGridHeight();
+        utils.nicheHunter.getPatterns.setData({ workspaceId, status: statusFilter }, (old) =>
+          old?.map((p: any) => p.id === patternId ? { ...p, status: "dismissed", adaptationMode: "style_reference_flagged" } : p) ?? []
+        );
+        utils.nicheHunter.getPatterns.invalidate({ workspaceId }, { refetchType: 'none' });
+      }, 50);
       toast.info("Flagged for style-reference retry. The system will use this signal in future scans.");
     },
     onError: (err, _vars, ctx) => {
@@ -981,6 +1026,7 @@ export default function NicheHunter() {
       }
       toast.error(err.message);
     },
+    onSettled: () => setActingPatternId(null),
   });
 
   if (!activeWorkspace) {
@@ -1061,19 +1107,24 @@ export default function NicheHunter() {
         </Card>
       )}
 
-      {/* Retry progress — shown while stuck patterns are being processed */}
-      {isRetrying && retryRemaining > 0 && (
-        <Card className="border border-amber-500/30 bg-amber-500/5">
-          <CardContent className="pt-3 pb-3">
-            <div className="flex items-center gap-2">
-              <Loader2 className="w-3.5 h-3.5 text-amber-500 animate-spin flex-shrink-0" />
-              <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">
-                Generating niche variations… {retryRemaining} remaining
-              </span>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      {/* Retry progress — uses smooth height transition to prevent scroll jump when appearing/disappearing */}
+      <div
+        className="grid transition-[grid-template-rows] duration-300 ease-in-out"
+        style={{ gridTemplateRows: isRetrying && retryRemaining > 0 ? '1fr' : '0fr' }}
+      >
+        <div className="overflow-hidden">
+          <Card className="border border-amber-500/30 bg-amber-500/5">
+            <CardContent className="pt-3 pb-3">
+              <div className="flex items-center gap-2">
+                <Loader2 className="w-3.5 h-3.5 text-amber-500 animate-spin flex-shrink-0" />
+                <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">
+                  Generating niche variations… {retryRemaining} remaining
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
 
       {/* Search Log — collapsible, shown when scan has completed and has a searchLog */}
       {scanStatus && scanStatus.status !== "none" && Array.isArray((scanStatus as { searchLog?: unknown }).searchLog) && ((scanStatus as { searchLog?: unknown[] }).searchLog?.length ?? 0) > 0 && (
@@ -1207,7 +1258,7 @@ export default function NicheHunter() {
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 overflow-hidden">
+        <div ref={gridRef} className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 overflow-hidden transition-[min-height] duration-300">
           {[...patterns]
             .filter((p) => statusFilter === "dismissed" ? p.status === "dismissed" : p.status !== "dismissed")
             .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
@@ -1266,7 +1317,6 @@ export default function NicheHunter() {
             workspaceId,
             reason: reason || undefined,
           });
-          setFlagDialogPatternId(null);
         }}
         isPending={flagEditMode.isPending}
       />
