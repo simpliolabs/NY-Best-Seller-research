@@ -274,35 +274,44 @@ export const nicheHunterRouter = router({
 
   /**
    * Cloud-Run-safe production image retry.
-   * Picks ONE stuck pattern (has sourceImageUrl, no productionDesignUrl) and runs
-   * processPatternProduction on it synchronously within the request lifetime.
+   * Picks up to RETRY_BATCH_SIZE stuck patterns (have sourceImageUrl, no
+   * productionDesignUrl) and runs processPatternProduction on each CONCURRENTLY
+   * within the request lifetime.
    * Returns { processed: patternId | null, remaining: number }.
    *
-   * The frontend polls this every 15s while remaining > 0, draining the queue
-   * one image per request — each call completes well within the 180s Cloud Run timeout.
+   * The frontend polls this every 15s while remaining > 0. Bumping the batch from
+   * 1 to 3 drains 20 stuck patterns in ~7 calls instead of ~20 — biggest single
+   * lever for total scan→visible-mockup wall-clock. Sized so 3 concurrent gpt-image-1
+   * jobs at quality=medium (Step 1) + quality=high (Step 2) still fit comfortably
+   * inside Cloud Run's 180s sync request timeout.
    */
   retryStuckPatterns: protectedProcedure
     .input(z.object({ workspaceId: z.string() }))
     .mutation(async ({ input }) => {
-      const stuck = await getStuckProductionPatterns(input.workspaceId, 1);
+      const RETRY_BATCH_SIZE = 3;
+      const stuck = await getStuckProductionPatterns(input.workspaceId, RETRY_BATCH_SIZE);
       if (stuck.length === 0) {
         return { processed: null, remaining: 0 };
       }
-      const pattern = stuck[0];
-      const promptDesc = (pattern as any).promptDescription ?? pattern.adaptedConcept ?? "";
-      try {
-        await processPatternProduction(
-          pattern.id,
-          input.workspaceId,
-          pattern.sourceImageUrl!,
-          promptDesc
-        );
-        console.log(`[retryStuckPatterns] ✅ Processed pattern ${pattern.id}: ${pattern.adaptedConcept?.slice(0, 60)}`);
-      } catch (err) {
-        console.error(`[retryStuckPatterns] ❌ Failed pattern ${pattern.id}:`, err instanceof Error ? err.message : err);
-        // Don't throw — return remaining count so frontend keeps polling
-      }
+      // Process concurrently — each pattern's failure is logged independently and
+      // does not abort the others. No throw out — frontend keeps polling on remaining>0.
+      await Promise.all(stuck.map(async (pattern) => {
+        const promptDesc = (pattern as any).promptDescription ?? pattern.adaptedConcept ?? "";
+        try {
+          await processPatternProduction(
+            pattern.id,
+            input.workspaceId,
+            pattern.sourceImageUrl!,
+            promptDesc
+          );
+          console.log(`[retryStuckPatterns] ✅ Processed pattern ${pattern.id}: ${pattern.adaptedConcept?.slice(0, 60)}`);
+        } catch (err) {
+          console.error(`[retryStuckPatterns] ❌ Failed pattern ${pattern.id}:`, err instanceof Error ? err.message : err);
+        }
+      }));
       const remaining = await countStuckProductionPatterns(input.workspaceId);
-      return { processed: pattern.id, remaining };
+      // `processed` retained as a single id for backward compat with the frontend
+      // poller — using the first pattern in the batch so logs remain readable.
+      return { processed: stuck[0].id, remaining };
     }),
 });

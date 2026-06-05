@@ -74,7 +74,7 @@ async function callImageEdit(
   sourceImg: Buffer,
   filename: string,
   prompt: string,
-  options: { transparent: boolean; inputFidelity?: "high" | "low" }
+  options: { transparent: boolean; inputFidelity?: "high" | "low"; quality?: "high" | "medium" | "low" }
 ): Promise<Buffer> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
@@ -83,7 +83,11 @@ async function callImageEdit(
   formData.append("model", "gpt-image-1");
   formData.append("prompt", prompt);
   formData.append("size", "1024x1024");
-  formData.append("quality", "high");
+  // quality: "high" is the slowest tier (~90–180s per call) and is the dominant cost
+  // per pattern. Callers can downgrade an intermediate stage to "medium" (~30–60s)
+  // when its output isn't the final asset — Step 1 (replaceDesignOnShirt) does this
+  // because Step 2 extracts from it and re-rasters at high; Step 2 keeps default high.
+  formData.append("quality", options.quality ?? "high");
   if (options.transparent) {
     formData.append("background", "transparent");
   }
@@ -553,11 +557,15 @@ async function replaceDesignOnShirt(
     .png()
     .toBuffer();
   console.log(
-    `[PatternProd] Step 1 (gpt-image-1 + input_fidelity:high). Prompt: "${editPrompt.substring(0, 140)}..."`
+    `[PatternProd] Step 1 (gpt-image-1 quality=medium + input_fidelity:high). Prompt: "${editPrompt.substring(0, 140)}..."`
   );
+  // quality:"medium" on the intermediate edit (~30–60s vs ~90–180s at high). Step 2
+  // re-rasters at quality:"high" to produce the user-visible transparent asset, so the
+  // downgrade is invisible in the final output but cuts ~60–120s off every pattern.
   return callImageEdit(sourcePng, "source_shirt.png", editPrompt, {
     transparent: false,
     inputFidelity: "high",
+    quality: "medium",
   });
 }
 
