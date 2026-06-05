@@ -32,8 +32,10 @@ import {
   updateScanRun,
   updateTrendPatternImage,
   updateTrendPatternScore,
+  updateTrendPatternStatus,
   updateTrendPatternStyleData,
   getTrendPatternsByWorkspace,
+  recordRejectionSignal,
 } from "./nicheHunterDb";
 import { processPatternProduction } from "./patternProductionProcessor";
 import { getProductGroupsByWorkspace } from "./productGroupDb";
@@ -1291,6 +1293,27 @@ export async function runNicheHunterScan(
     // Step 5: Rank all patterns
     await updateScanRun(scanId, { progress: 96 });
     await rankPatterns(workspace.id, profile);
+
+    // Step 5b: Score gate — auto-dismiss low-fit patterns from THIS scan.
+    // rankPatterns just scored every discovered pattern in the workspace; anything
+    // below LOW_FIT_THRESHOLD is off-brand (rank LLM's own judgement) and should
+    // not burn gpt-image-1 cycles via retryStuckPatterns. retryStuckPatterns already
+    // filters status='dismissed' (5d8648f), so dismissing here also halts the serial
+    // polling drain on losers. The wasted in-flight fire-and-forget compute is small
+    // (those jobs mostly die on Cloud Run anyway). PO threshold: 50.
+    const LOW_FIT_THRESHOLD = 50;
+    const allDiscovered = await getTrendPatternsByWorkspace(workspace.id, "discovered");
+    const thisScanDiscovered = allDiscovered.filter(p => p.scanId === scanId);
+    const lowFit = thisScanDiscovered.filter(p => (p.score ?? 100) < LOW_FIT_THRESHOLD);
+    for (const p of lowFit) {
+      const reason = `Low fit (rank score ${p.score ?? 0}): ${p.rankReasoning ?? "no rationale recorded"}`;
+      console.log(`[NicheHunter] Score gate: auto-dismissing "${(p.patternName ?? "").slice(0, 40)}" — ${reason.slice(0, 80)}`);
+      await updateTrendPatternStatus(p.id, "dismissed");
+      await recordRejectionSignal(p.id, reason, ["off_brand"]);
+    }
+    if (lowFit.length > 0) {
+      console.log(`[NicheHunter] Score gate: dismissed ${lowFit.length}/${thisScanDiscovered.length} patterns from scan ${scanId} (threshold ${LOW_FIT_THRESHOLD})`);
+    }
 
     await updateScanRun(scanId, {
       status: "completed",
