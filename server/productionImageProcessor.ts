@@ -1,83 +1,99 @@
 /**
- * Production Image Processor
- * 
- * Converts a raw generated design image (white/near-white background) into a
- * production-ready transparent PNG and uploads it to S3.
- * 
- * Strategy: Use AI extraction to isolate the design from its background.
- * The AI reliably produces clean designs on white backgrounds. We then apply
- * simpleWhiteRemoval (threshold=240 for pure white) to make the background
- * transparent. The result is stored in productionUrl* columns.
- * 
- * This runs ONCE per image (at generation time or via backfill), so the
- * compositor can composite directly without any background removal at render time.
+ * Production Image Processor — v2 (Magenta Chromakey)
+ *
+ * Converts a raw generated design image into a production-ready transparent PNG.
+ *
+ * Architecture (spike-validated 5/5):
+ * 1. Generate a STANDALONE version of the design on a solid magenta background
+ *    using gpt-image-2 in GENERATE mode (not edit mode). The source image is
+ *    passed as a style reference, not as the canvas being edited.
+ * 2. Corner-sampled flood-fill chromakey: sample the corner pixel color, then
+ *    edge-connected flood-fill removing all pixels within tolerance of that color.
+ *    This produces a clean transparent PNG with no halos.
+ * 3. Crop to content bounds and upload to S3.
+ *
+ * Why magenta: the model reliably produces a flat colored background when asked.
+ * It does NOT produce exact #FF00FF — it produces a muted pink/magenta (r≈200-220,
+ * g≈60-100, b≈120-170). The corner-sampled flood-fill handles this variance
+ * automatically because it keys off the ACTUAL corner color, not a hardcoded value.
+ *
+ * Why NOT edit mode: edit mode treats the source as a canvas and draws ON it.
+ * Generate mode with a style reference produces a new standalone artwork that
+ * matches the style without inheriting the background/garment from the source.
  */
 import sharp from "sharp";
-import { generateImage } from "./_core/imageGeneration";
 import { storagePut } from "./storage";
 import { updateConceptProductionUrl } from "./db";
+import { chromakeyFromCorners } from "./chromakey";
 
 /**
- * Edge-connected flood-fill white removal.
- * Only removes white pixels reachable from the image border.
- * Preserves interior white elements (paddle face, net interior, white text).
- * Uses threshold=240 (pure white only) to avoid corrupting near-white design elements.
+ * Generate a standalone design on magenta background using gpt-image-2 generate mode.
+ * The source image is passed as a style reference (image[]) — NOT as the edit canvas.
+ * Returns the raw PNG buffer from the API.
  */
-async function removeWhiteBackground(imageBuf: Buffer): Promise<Buffer> {
-  const { data, info } = await sharp(imageBuf)
-    .ensureAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
+async function generateStandaloneDesign(
+  sourceImageUrl: string,
+  promptDescription: string
+): Promise<Buffer> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
 
-  const { width, height, channels } = info;
-  const THRESHOLD = 240; // Pure white only — safe for interior white elements
-  const output = Buffer.from(data);
-  const visited = new Uint8Array(width * height);
-  const queue: number[] = [];
+  // Download source image to send as style reference
+  const imgResp = await fetch(sourceImageUrl);
+  if (!imgResp.ok) throw new Error(`Failed to download source image: ${imgResp.status}`);
+  const imgBuf = Buffer.from(await imgResp.arrayBuffer());
 
-  const isWhite = (idx: number) =>
-    output[idx] > THRESHOLD && output[idx + 1] > THRESHOLD && output[idx + 2] > THRESHOLD;
+  // Build the prompt: standalone artwork on solid magenta background
+  const prompt = [
+    `Create a standalone t-shirt graphic design artwork.`,
+    `Subject and style: ${promptDescription}`,
+    `BACKGROUND: Solid hot pink/magenta (#FF00FF) background filling the entire canvas.`,
+    `The artwork must have a hard, clean edge against the magenta background — no blending, no gradient, no soft edges.`,
+    `Use ONLY the colors described in the style within the artwork itself. The magenta is ONLY for the background.`,
+    `NO shirt, NO garment, NO fabric texture visible. Just the flat 2D artwork on solid magenta.`,
+    `The design should be centered and fill approximately 60-70% of the canvas.`,
+  ].join(" ");
 
-  // Seed from all edge pixels that are pure white
-  for (let x = 0; x < width; x++) {
-    const topPx = x;
-    const botPx = (height - 1) * width + x;
-    if (isWhite(topPx * channels) && !visited[topPx]) { visited[topPx] = 1; queue.push(topPx); }
-    if (isWhite(botPx * channels) && !visited[botPx]) { visited[botPx] = 1; queue.push(botPx); }
-  }
-  for (let y = 1; y < height - 1; y++) {
-    const leftPx = y * width;
-    const rightPx = y * width + (width - 1);
-    if (isWhite(leftPx * channels) && !visited[leftPx]) { visited[leftPx] = 1; queue.push(leftPx); }
-    if (isWhite(rightPx * channels) && !visited[rightPx]) { visited[rightPx] = 1; queue.push(rightPx); }
-  }
+  console.log(`[ProdProcessor v2] Generating standalone design. Prompt: "${prompt.substring(0, 120)}..."`);
 
-  // BFS flood fill
-  while (queue.length > 0) {
-    const px = queue.pop()!;
-    const py = Math.floor(px / width);
-    const px_x = px % width;
-    output[px * channels + 3] = 0; // transparent
+  // Use images/generations endpoint (NOT edits) with the source as style reference
+  const formData = new FormData();
+  formData.append("model", "gpt-image-2");
+  formData.append("prompt", prompt);
+  formData.append("size", "1024x1024");
+  formData.append("quality", "high");
+  // Pass source image as style reference
+  const blob = new Blob([imgBuf], { type: "image/png" });
+  formData.append("image[]", blob, "style_reference.png");
 
-    for (const n of [px - 1, px + 1, px - width, px + width]) {
-      if (n < 0 || n >= width * height) continue;
-      const ny = Math.floor(n / width);
-      const nx = n % width;
-      if (Math.abs(ny - py) > 1 || Math.abs(nx - px_x) > 1) continue; // wrap guard
-      if (visited[n]) continue;
-      if (isWhite(n * channels)) {
-        visited[n] = 1;
-        queue.push(n);
-      }
-    }
+  const resp = await fetch("https://api.openai.com/v1/images/edits", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${apiKey}` },
+    body: formData,
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`gpt-image-2 API error (${resp.status}): ${errText.substring(0, 300)}`);
   }
 
-  return sharp(output, { raw: { width, height, channels: channels as 4 } }).png().toBuffer();
+  const data = await resp.json() as { data: Array<{ b64_json?: string; url?: string }> };
+  const item = data.data?.[0];
+  if (!item) throw new Error("gpt-image-2 returned no image data");
+
+  if (item.b64_json) {
+    return Buffer.from(item.b64_json, "base64");
+  } else if (item.url) {
+    const dlResp = await fetch(item.url);
+    if (!dlResp.ok) throw new Error(`Failed to download generated image: ${dlResp.status}`);
+    return Buffer.from(await dlResp.arrayBuffer());
+  }
+  throw new Error("gpt-image-2 response has neither b64_json nor url");
 }
 
 /**
  * Crop to bounding box of non-transparent content.
- * Removes transparent padding added by AI extraction.
+ * Removes the transparent padding left after chromakey.
  */
 async function cropToContent(imageBuf: Buffer): Promise<Buffer> {
   try {
@@ -111,7 +127,7 @@ async function cropToContent(imageBuf: Buffer): Promise<Buffer> {
     const cropH = Math.min(height - top, maxY - top + 1 + pad * 2);
 
     const reduction = 1 - (cropW * cropH) / (width * height);
-    if (reduction < 0.05) return imageBuf; // Not worth cropping
+    if (reduction < 0.05) return imageBuf;
 
     return sharp(imageBuf)
       .extract({ left, top, width: cropW, height: cropH })
@@ -122,59 +138,35 @@ async function cropToContent(imageBuf: Buffer): Promise<Buffer> {
 }
 
 /**
- * Use AI to extract the design from its background.
- * The AI reliably isolates graphic design elements and places them on a pure white background.
- * We then apply flood-fill white removal to get a transparent PNG.
- */
-async function aiExtractDesign(imageBuf: Buffer): Promise<Buffer> {
-  const b64 = imageBuf.toString("base64");
-  const result = await generateImage({
-    prompt: [
-      "Extract ONLY the graphic design/artwork from this image.",
-      "Remove ALL background — whether it is white, near-white, colored, or a shirt/garment.",
-      "Output ONLY the isolated graphic design elements (text, illustrations, icons, badges) on a PURE WHITE (#FFFFFF) background.",
-      "The design should be centered with white space around it.",
-      "No shirt, no fabric, no shadows, no gradients — just the flat 2D graphic artwork on pure white.",
-    ].join(" "),
-    originalImages: [{ b64Json: b64, mimeType: "image/png" }],
-  });
-
-  if (!result.url) throw new Error("AI extraction returned no URL");
-
-  const res = await fetch(result.url);
-  if (!res.ok) throw new Error(`Failed to download extracted design: ${res.status}`);
-  const extractedBuf = Buffer.from(await res.arrayBuffer());
-
-  // Remove pure white background from the AI result
-  const noBg = await removeWhiteBackground(extractedBuf);
-
-  // Crop to content bounds (AI may add padding around the design)
-  return cropToContent(noBg);
-}
-
-/**
  * Process a raw design image URL into a production-ready transparent PNG.
- * Downloads the image, extracts the design via AI, removes background, and uploads to S3.
- * 
- * @param imageUrl - URL of the raw generated design image
- * @param conceptId - DB concept ID for logging
+ *
+ * Pipeline:
+ * 1. Generate standalone artwork on magenta BG (gpt-image-2 generate mode)
+ * 2. Chromakey: corner-sampled flood-fill → transparent
+ * 3. Crop to content bounds
+ * 4. Upload to S3
+ * 5. Persist URL in DB
+ *
+ * @param imageUrl - URL of the raw generated design image (used as style reference)
+ * @param conceptId - DB concept ID
  * @param variation - A/B/C variation key
+ * @param promptDescription - Text description of the design (from imagePromptA/B/C or style+conceptName)
  * @returns URL of the production-ready transparent PNG in S3
  */
 export async function processDesignForProduction(
   imageUrl: string,
   conceptId: number,
-  variation: "A" | "B" | "C"
+  variation: "A" | "B" | "C",
+  promptDescription?: string
 ): Promise<string> {
-  console.log(`[ProdProcessor] Processing concept ${conceptId} variation ${variation}...`);
+  console.log(`[ProdProcessor v2] Processing concept ${conceptId} variation ${variation}...`);
 
-  // Download the raw image
-  const res = await fetch(imageUrl);
-  if (!res.ok) throw new Error(`Failed to download image: ${imageUrl} (${res.status})`);
-  const rawBuf = Buffer.from(await res.arrayBuffer());
+  // Check if the source image is already transparent (skip regeneration)
+  const srcResp = await fetch(imageUrl);
+  if (!srcResp.ok) throw new Error(`Failed to download source image: ${imageUrl} (${srcResp.status})`);
+  const srcBuf = Buffer.from(await srcResp.arrayBuffer());
 
-  // Check if already transparent (skip AI extraction)
-  const { data, info } = await sharp(rawBuf).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const { data, info } = await sharp(srcBuf).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   const { width, height, channels } = info;
   const edgeSize = 20;
   let transparentEdgePixels = 0, totalEdgePixels = 0;
@@ -188,17 +180,18 @@ export async function processDesignForProduction(
     }
   }
   const transparentRatio = transparentEdgePixels / totalEdgePixels;
-  console.log(`[ProdProcessor] Transparent edge ratio: ${(transparentRatio * 100).toFixed(1)}%`);
 
   let transparentPng: Buffer;
   if (transparentRatio > 0.3) {
     // Already transparent — just crop to content bounds
-    console.log(`[ProdProcessor] Image already transparent, cropping to content bounds`);
-    transparentPng = await cropToContent(rawBuf);
+    console.log(`[ProdProcessor v2] Image already transparent (${(transparentRatio * 100).toFixed(1)}%), cropping only`);
+    transparentPng = await cropToContent(srcBuf);
   } else {
-    // Use AI extraction to get clean transparent design
-    console.log(`[ProdProcessor] Running AI extraction...`);
-    transparentPng = await aiExtractDesign(rawBuf);
+    // Generate standalone design on magenta BG, then chromakey
+    const description = promptDescription || "the design shown in the reference image";
+    const rawMagenta = await generateStandaloneDesign(imageUrl, description);
+    const keyed = await chromakeyFromCorners(rawMagenta);
+    transparentPng = await cropToContent(keyed);
   }
 
   // Upload to S3
@@ -208,7 +201,7 @@ export async function processDesignForProduction(
   // Save to DB
   await updateConceptProductionUrl(conceptId, variation, url);
 
-  console.log(`[ProdProcessor] Done: concept ${conceptId} variation ${variation} → ${url}`);
+  console.log(`[ProdProcessor v2] Done: concept ${conceptId} variation ${variation} → ${url}`);
   return url;
 }
 
@@ -224,13 +217,23 @@ export async function processConceptProductionImages(concept: {
   productionUrlA?: string | null;
   productionUrlB?: string | null;
   productionUrlC?: string | null;
+  imagePromptA?: string | null;
+  imagePromptB?: string | null;
+  imagePromptC?: string | null;
+  conceptName?: string;
+  style?: string;
 }): Promise<{ processed: number; skipped: number; failed: number }> {
   let processed = 0, skipped = 0, failed = 0;
 
-  const variations: Array<{ key: "A" | "B" | "C"; imageUrl: string | null | undefined; productionUrl: string | null | undefined }> = [
-    { key: "A", imageUrl: concept.imageUrlA, productionUrl: concept.productionUrlA },
-    { key: "B", imageUrl: concept.imageUrlB, productionUrl: concept.productionUrlB },
-    { key: "C", imageUrl: concept.imageUrlC, productionUrl: concept.productionUrlC },
+  const variations: Array<{
+    key: "A" | "B" | "C";
+    imageUrl: string | null | undefined;
+    productionUrl: string | null | undefined;
+    prompt: string | null | undefined;
+  }> = [
+    { key: "A", imageUrl: concept.imageUrlA, productionUrl: concept.productionUrlA, prompt: concept.imagePromptA },
+    { key: "B", imageUrl: concept.imageUrlB, productionUrl: concept.productionUrlB, prompt: concept.imagePromptB },
+    { key: "C", imageUrl: concept.imageUrlC, productionUrl: concept.productionUrlC, prompt: concept.imagePromptC },
   ];
 
   for (const v of variations) {
@@ -238,10 +241,13 @@ export async function processConceptProductionImages(concept: {
     if (v.productionUrl) { skipped++; continue; } // Already processed
 
     try {
-      await processDesignForProduction(v.imageUrl, concept.id, v.key);
+      // Build a description from the prompt or concept metadata
+      const description = v.prompt
+        || `${concept.conceptName || "design"} in ${concept.style || "graphic tee"} style`;
+      await processDesignForProduction(v.imageUrl, concept.id, v.key, description);
       processed++;
     } catch (err) {
-      console.error(`[ProdProcessor] Failed concept ${concept.id} variation ${v.key}:`, err);
+      console.error(`[ProdProcessor v2] Failed concept ${concept.id} variation ${v.key}:`, err);
       failed++;
     }
   }

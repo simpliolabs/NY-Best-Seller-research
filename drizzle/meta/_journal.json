@@ -232,6 +232,34 @@
       "when": 1780331623871,
       "tag": "0032_yummy_electro",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "5",
+      "when": 1780415900087,
+      "tag": "0033_curly_hammerhead",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "5",
+      "when": 1780437260739,
+      "tag": "0034_luxuriant_deathstrike",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "5",
+      "when": 1780499253717,
+      "tag": "0035_slow_sage",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "5",
+      "when": 1780529472650,
+      "tag": "0036_blue_guardian",
+      "breakpoints": true
     }
   ]
 }

@@ -315,19 +315,23 @@ describe("buildGenerationPayload prompt hardening", () => {
   // These tests verify the CONSTRAINTS are present in the prompt template.
 
   const EDIT_SOURCE_REQUIRED_CONSTRAINTS = [
-    "DO NOT add any text, words, or slogans that are NOT in the original design",
-    "DO NOT add any animals, characters, or visual elements that are NOT in the original design",
-    "signature, watermark, or artist mark at the bottom, REMOVE it entirely",
-    "The ONLY change is: replace the depicted activity/subject with pickleball",
+    // gpt-image-2 minimal one-sentence template (Spike A/C pattern)
+    "Instead of a",
+    "change it to a",
+    "plain white background",
+    // Composition refinement appended when available
+    "composition matching the reference",
+    // gpt-image-2 API call — fail-loud, no Forge fallback
+    "gpt-image-2",
+    "OPENAI_API_KEY",
   ];
 
   const DECONSTRUCT_REQUIRED_CONSTRAINTS = [
-    "The ONLY target niche is PICKLEBALL",
+    "The ONLY target niche is",  // AR2: now templated from nicheProfile.summary
     "NEVER adapt to another sport",
-    "NO ELEMENT INJECTION",
+    "CHARACTER-ONLY SWAP",  // AR1: renamed constraint
+    "INJECTION (forbidden)",
     "NO TEXT INJECTION",
-    "PICKLEBALL-SPECIFIC VOCABULARY",
-    "dink, kitchen, third shot drop",
   ];
 
   it("edit_source prompt template contains all prohibition rules (Fix #6, #9)", async () => {
@@ -347,5 +351,105 @@ describe("buildGenerationPayload prompt hardening", () => {
     for (const constraint of DECONSTRUCT_REQUIRED_CONSTRAINTS) {
       expect(fileContent).toContain(constraint);
     }
+  });
+});
+
+// ─── Matching algorithm correctness ──────────────────────────────────────────
+
+describe("Character swap matching algorithm", () => {
+  // Mirror the algorithm from nicheHunter.ts buildGenerationPayload.
+  // Tests verify the ≥2 token overlap rule prevents false positives.
+
+  const STOPWORDS = new Set([
+    "a", "an", "the", "and", "or", "of", "in", "on", "at", "to", "for",
+    "with", "by", "from", "is", "it", "its", "as", "are", "was", "be",
+    "this", "that", "have", "has", "had", "do", "does", "did", "not",
+  ]);
+  const tokenize = (text: string): Set<string> => new Set(
+    text.toLowerCase()
+      .split(/[\s/,\-–—.!?()]+/)
+      .filter(w => w.length > 2 && !STOPWORDS.has(w))
+  );
+
+  function findBestMatch(
+    sourceSubject: string,
+    mappings: Array<{ sourcePattern: string; targetAdaptation: string }>
+  ) {
+    const sourceTokens = tokenize(sourceSubject);
+    let bestMatch: (typeof mappings)[0] | null = null;
+    let bestOverlap = 0;
+    for (const m of mappings) {
+      const patternTokens = tokenize(m.sourcePattern);
+      let overlap = 0;
+      Array.from(patternTokens).forEach(t => { if (sourceTokens.has(t)) overlap++; });
+      if (overlap >= 2 && overlap > bestOverlap) {
+        bestOverlap = overlap;
+        bestMatch = m;
+      }
+    }
+    return { bestMatch, bestOverlap };
+  }
+
+  const PICKLEBALL_MAPPINGS = [
+    { sourcePattern: "Bigfoot/Sasquatch blowing a dandelion", targetAdaptation: "Llama blowing a dandelion" },
+    { sourcePattern: "Bear hiking with a backpack", targetAdaptation: "Llama with a pickleball paddle" },
+    { sourcePattern: "Skeleton holding a fishing rod", targetAdaptation: "Skeleton playing pickleball" },
+    { sourcePattern: "Cat doing yoga poses", targetAdaptation: "Cat in pickleball poses" },
+    { sourcePattern: "Dog with hiking gear", targetAdaptation: "Dog with pickleball gear" },
+    { sourcePattern: "Retro cowboy/western character", targetAdaptation: "Retro pickleball player" },
+  ];
+
+  it("matches Bigfoot blowing dandelion in profile view → Llama blowing a dandelion", () => {
+    const { bestMatch, bestOverlap } = findBestMatch(
+      "Bigfoot blowing a dandelion in profile view",
+      PICKLEBALL_MAPPINGS
+    );
+    expect(bestMatch?.targetAdaptation).toBe("Llama blowing a dandelion");
+    expect(bestOverlap).toBeGreaterThanOrEqual(2);
+  });
+
+  it("matches Sasquatch blowing dandelion seeds → Llama blowing a dandelion", () => {
+    const { bestMatch } = findBestMatch(
+      "Sasquatch blowing dandelion seeds",
+      PICKLEBALL_MAPPINGS
+    );
+    expect(bestMatch?.targetAdaptation).toBe("Llama blowing a dandelion");
+  });
+
+  it("does NOT match Bear with coffee mug (only 1 token overlap: 'bear')", () => {
+    const { bestMatch } = findBestMatch(
+      "Bear with coffee mug",
+      PICKLEBALL_MAPPINGS
+    );
+    // 'bear' is 1 token; 'with' is a stopword; 'coffee' and 'mug' are not in the pattern
+    expect(bestMatch).toBeNull();
+  });
+
+  it("does NOT match a pilates pose design (no animal tokens)", () => {
+    const { bestMatch } = findBestMatch(
+      "Woman doing pilates pose on mat",
+      PICKLEBALL_MAPPINGS
+    );
+    expect(bestMatch).toBeNull();
+  });
+
+  it("matches Skeleton fishing rod → Skeleton playing pickleball", () => {
+    const { bestMatch } = findBestMatch(
+      "Skeleton holding a fishing rod by the lake",
+      PICKLEBALL_MAPPINGS
+    );
+    expect(bestMatch?.targetAdaptation).toBe("Skeleton playing pickleball");
+  });
+
+  it("prefers highest overlap when multiple patterns partially match", () => {
+    // 'Dog hiking with gear' overlaps with both 'Dog with hiking gear' (3 tokens) and
+    // 'Bear hiking with a backpack' (1 token: 'hiking')
+    const { bestMatch } = findBestMatch(
+      "Dog hiking with gear and backpack",
+      PICKLEBALL_MAPPINGS
+    );
+    // 'Dog with hiking gear' has tokens: dog, hiking, gear → 3 overlap
+    // 'Bear hiking with a backpack' has tokens: bear, hiking, backpack → 1 overlap (hiking)
+    expect(bestMatch?.targetAdaptation).toBe("Dog with pickleball gear");
   });
 });

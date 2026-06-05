@@ -31,7 +31,11 @@ interface PrintZoneEditorProps {
 
 type DragMode = "none" | "draw" | "move" | "resize-tl" | "resize-tr" | "resize-bl" | "resize-br";
 
-const DEFAULT_ZONE: PrintZoneCoords = { x: 0.22, y: 0.15, width: 0.56, height: 0.6 };
+/** Default print AREA = maximum realistic ink envelope on the garment.
+ * Design-independent: this is the largest area where any print could go.
+ * Designs are contain-fit + top-anchored within this envelope at composite time.
+ * 60% width × 50% height of garment, starting 10% below neckline. */
+const DEFAULT_ZONE: PrintZoneCoords = { x: 0.20, y: 0.10, width: 0.60, height: 0.50 };
 const MIN_SIZE = 0.05; // minimum 5% of image dimension
 
 export function PrintZoneEditor({
@@ -211,8 +215,8 @@ export function PrintZoneEditor({
       <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/50 rounded-lg px-3 py-2">
         <Move className="h-4 w-4 shrink-0" />
         <span>
-          Drag the rectangle to position the print zone. Drag corners to resize.
-          Click outside the zone to draw a new one.
+          Drag the rectangle to define the maximum print area (ink envelope). Designs will be
+          contain-fit and top-anchored within this area. Click outside to draw a new one.
         </span>
       </div>
 
@@ -281,12 +285,17 @@ export function PrintZoneEditor({
       <div className="grid grid-cols-4 gap-2 text-xs font-mono text-muted-foreground bg-muted/30 rounded-lg px-3 py-2">
         <div>X: {(zone.x * 100).toFixed(1)}%</div>
         <div>Y: {(zone.y * 100).toFixed(1)}%</div>
-        <div className={zone.width < 0.40 ? "text-amber-500 font-bold" : ""}>W: {(zone.width * 100).toFixed(1)}%{zone.width < 0.40 ? " ⚠" : ""}</div>
+        <div className={zone.width < 0.50 ? "text-amber-500 font-bold" : ""}>W: {(zone.width * 100).toFixed(1)}%{zone.width < 0.50 ? " ⚠" : ""}</div>
         <div>H: {(zone.height * 100).toFixed(1)}%</div>
       </div>
-      {zone.width < 0.40 && (
+      {zone.width < 0.50 && (
         <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-          ⚠ Zone width is {Math.round(zone.width * 100)}% — recommended minimum is 40%. A narrow zone will make designs appear small on the shirt. Aim for 50–60% width to fill the chest area.
+          ⚠ Area width is {Math.round(zone.width * 100)}% — recommended minimum is 50%. This is the max ink envelope; designs are contain-fit inside it. Aim for 50–65% of garment width.
+        </div>
+      )}
+      {zone.height > 0.60 && (
+        <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+          ⚠ Area height is {Math.round(zone.height * 100)}% — exceeds typical max print envelope (50%). Designs are top-anchored so excess height adds empty space below, not navel-drift.
         </div>
       )}
 
@@ -301,7 +310,7 @@ export function PrintZoneEditor({
           ) : (
             <>
               <Save className="h-4 w-4 mr-2" />
-              Save Print Zone
+              Save Print Area
             </>
           )}
         </Button>

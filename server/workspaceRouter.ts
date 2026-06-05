@@ -71,9 +71,22 @@ export const workspaceRouter = router({
           subreddits: z.array(z.string()),
           etsyKeywords: z.array(z.string()),
           crossNicheCategories: z.array(z.string()),
+          /** General best-seller search terms for the product type (e.g. "funny shirt", "graphic tee") */
+          generalBestSellerTerms: z.array(z.string()).optional(),
           culturalMoments: z.array(z.string()),
           designStyles: z.array(z.string()),
           avoidTopics: z.array(z.string()),
+          culturalMap: z.object({
+            animalMascots: z.array(z.object({ animal: z.string(), whyItWorks: z.string(), visualTreatment: z.string() })),
+            painPoints: z.array(z.object({ pain: z.string(), humorAngle: z.string() })),
+            funPoints: z.array(z.object({ joy: z.string(), visualConcept: z.string() })),
+            insideJokes: z.array(z.object({ joke: z.string(), context: z.string() })),
+            physicalComedy: z.array(z.object({ scenario: z.string(), whyFunny: z.string() })),
+            catchphrases: z.array(z.string()),
+            lifestyleIdentity: z.array(z.object({ trait: z.string(), purchaseDriver: z.string() })),
+            rivalries: z.array(z.object({ rivalry: z.string(), tension: z.string(), humorAngle: z.string() })),
+            transferableVisualConcepts: z.array(z.object({ sourceNiche: z.string(), sourcePattern: z.string(), targetAdaptation: z.string(), whyItTransfers: z.string() })),
+          }).optional(),
         }).optional(),
         // Style override: user can lock specific style fields to prevent recomputation
         styleOverride: z.object({

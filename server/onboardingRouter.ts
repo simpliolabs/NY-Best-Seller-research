@@ -78,6 +78,8 @@ export const nicheProfileSchema = z.object({
   subreddits: z.array(z.string()),
   etsyKeywords: z.array(z.string()),
   crossNicheCategories: z.array(z.string()),
+  /** General best-seller search terms for the product type (e.g. "funny shirt", "graphic tee") */
+  generalBestSellerTerms: z.array(z.string()).optional(),
   designStyles: z.array(z.string()),
   avoidTopics: z.array(z.string()),
   culturalMap: culturalMapSchema,
@@ -103,6 +105,7 @@ export const onboardingRouter = router({
     )
     .mutation(async ({ input }) => {
       const response = await invokeLLM({
+        model: "gemini-2.5-pro",
         messages: [
           {
             role: "system",
@@ -116,17 +119,29 @@ CRITICAL RULES:
 
 2. ETSY IN-NICHE KEYWORDS: Search terms buyers type on Etsy for THIS specific niche. Be very specific. Include variations: funny, gift, dad/mom, specific inside jokes.
 
-3. CROSS-NICHE CATEGORIES: BROAD CATEGORY SEARCH TERMS for Etsy to browse hot sellers in COMPLETELY DIFFERENT niches. Each entry must be a GENERIC CATEGORY SEARCH TERM (2-4 words), NOT a specific product name.
-   CORRECT: "hiking shirt", "yoga tee", "fishing shirt", "bowling shirt", "camping tee"
-   WRONG: "funny dog hiking shirt", "retro alien bowling shirt" — too specific
-   NEVER include the target niche itself.
+3. CROSS-NICHE CATEGORIES: BROAD CATEGORY SEARCH TERMS for Etsy to browse hot sellers in COMPLETELY DIFFERENT niches. These are used as-is as Etsy search queries — they must be natural, broad search terms a real buyer would type.
+   CORRECT: "hiking shirts", "yoga shirts", "fishing shirts", "bowling shirts", "camping shirts", "golf shirts", "hunting shirts", "dog mom shirts", "cat shirts", "nurse shirts", "teacher shirts"
+   WRONG: "gorilla hiking shirt graphic", "cat yoga tee graphic", "funny dog hiking shirt", "retro alien bowling shirt" — too specific, too narrow, adds junk words
+   RULE: 1-3 words max. Must be a real category a buyer searches. Never add "graphic", "funny", or animal names unless the animal IS the category (e.g. "cat shirts" is fine).
+   Give 6-8 categories. NEVER include the target niche itself.
+
+3b. GENERAL BEST-SELLER TERMS: Broad Etsy search terms for the GENERAL MARKET of the product type being sold. These are NOT niche-specific — they represent what's hot across ALL funny/graphic apparel.
+   For graphic tees: ["funny shirt", "graphic tee", "graphic shirt"]
+   For hoodies: ["funny hoodie", "graphic hoodie"]
+   For mugs: ["funny mug", "graphic mug"]
+   Give 2-3 terms matching the product type. These will be scraped as best-sellers alongside cross-niche categories.
 
 4. DESIGN STYLES: Visual styles that resonate with this audience (e.g. "vintage distressed", "minimalist line art").
 
 5. AVOID TOPICS: Competitor niches, generic slogans, oversaturated angles.
 
 6. CULTURAL MAP — This is the most important section. Go deep. Think like an insider:
-   - animalMascots: Animals that WORK for this niche with specific reasoning (e.g., T-Rex for pickleball = short arms can't reach high volleys). Give 3-5 animals.
+   - animalMascots: Animals/characters that WORK for this niche. THINK BROADLY — consider:
+     * Physical comedy fit: Does the animal's body shape, size, or quirk map to something funny in this sport/activity? (e.g., T-Rex = short arms can't reach; Llama = long neck for reaching high shots, spits when frustrated; Sloth = slow reaction time)
+     * Personality fit: Does the animal's personality stereotype match the community vibe? (e.g., Badger = tenacious, never gives up)
+     * Cultural icon fit: Is this animal already beloved/meme-worthy in pop culture in a way that transfers?
+     * Underdog/lovable fit: Quirky animals that fans would wear proudly (llama, capybara, axolotl, etc.)
+     MANDATORY: Include at least one obvious sport-specific physical comedy animal AND one quirky/lovable animal. Give 5-7 animals minimum.
    - painPoints: Real frustrations this community has, with a humor angle for t-shirts. Give 4-6 pain points.
    - funPoints: Joyful moments unique to this niche with a visual concept. Give 3-5 fun points.
    - insideJokes: Actual jokes/memes the community uses, with context. Give 4-8 jokes.
@@ -156,6 +171,7 @@ Return ONLY valid JSON matching the exact schema.`,
                 subreddits: { type: "array", items: { type: "string" } },
                 etsyKeywords: { type: "array", items: { type: "string" } },
                 crossNicheCategories: { type: "array", items: { type: "string" } },
+                generalBestSellerTerms: { type: "array", items: { type: "string" } },
                 designStyles: { type: "array", items: { type: "string" } },
                 avoidTopics: { type: "array", items: { type: "string" } },
                 culturalMoments: { type: "array", items: { type: "string" } },
@@ -274,8 +290,8 @@ Return ONLY valid JSON matching the exact schema.`,
               },
               required: [
                 "summary", "targetAudience", "subreddits", "etsyKeywords",
-                "crossNicheCategories", "designStyles", "avoidTopics",
-                "culturalMoments", "culturalMap",
+                "crossNicheCategories", "generalBestSellerTerms", "designStyles",
+                "avoidTopics", "culturalMoments", "culturalMap",
               ],
               additionalProperties: false,
             },

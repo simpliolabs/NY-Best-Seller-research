@@ -328,21 +328,7 @@ function PatternCard({
                 {pattern.productionDesignUrl ? "Production Design (Transparent)" : "Adapted Design Preview"}
               </p>
             )}
-            {/* Regenerating state: productionDesignUrl was nulled but previewImageUrl still exists */}
-            {!pattern.productionDesignUrl && pattern.previewImageUrl && pattern.sourceImageUrl && (
-              <div className="relative rounded-md overflow-hidden border border-border bg-muted w-full">
-                <img
-                  src={pattern.previewImageUrl}
-                  alt={pattern.patternName}
-                  className="w-full h-auto block opacity-30"
-                />
-                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
-                  <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
-                  <p className="text-xs text-muted-foreground font-medium">Regenerating...</p>
-                  <p className="text-[10px] text-muted-foreground/60">New design in progress</p>
-                </div>
-              </div>
-            )}
+
             {/* Primary: transparent production design on checkerboard */}
             {pattern.productionDesignUrl ? (
               <div
@@ -1310,12 +1296,11 @@ export default function NicheHunter() {
       <FlagEditModeDialog
         open={!!flagDialogPatternId}
         onClose={() => setFlagDialogPatternId(null)}
-        onConfirm={(reason) => {
+        onConfirm={() => {
           if (!flagDialogPatternId) return;
           flagEditMode.mutate({
             patternId: flagDialogPatternId,
             workspaceId,
-            reason: reason || undefined,
           });
         }}
         isPending={flagEditMode.isPending}

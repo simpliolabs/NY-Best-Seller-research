@@ -344,6 +344,9 @@ export const mockupTemplates = mysqlTable("mockup_templates", {
   /** JSON: ["S","M","L","XL","2XL","3XL"] */
   availableSizes: json("availableSizes").$type<string[]>().notNull(),
   sortOrder: int("sortOrder").default(0).notNull(),
+  /** Cached garment bounding box (vision-detected). Fractions 0-1 relative to photo dimensions.
+   * Null = not yet detected. Populated on first composite or manual trigger. */
+  garmentBbox: json("garmentBbox").$type<{ x: number; y: number; width: number; height: number }>(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type MockupTemplate = typeof mockupTemplates.$inferSelect;
@@ -361,6 +364,14 @@ export const nicheScanRuns = mysqlTable("niche_scan_runs", {
   progress: int("progress").default(0).notNull(),
   patternsFound: int("patternsFound").default(0).notNull(),
   errorLog: text("errorLog"),
+  /** Array of {query, url, filter, resultCount, searchedAt} — one entry per Etsy URL pinged */
+  searchLog: json("searchLog").$type<Array<{
+    query: string;
+    url: string;
+    filter: "is_best_seller" | "is_popular_now";
+    resultCount: number;
+    searchedAt: string; // ISO timestamp
+  }>>(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   completedAt: timestamp("completedAt"),
 });
@@ -383,6 +394,9 @@ export const trendPatterns = mysqlTable("trend_patterns", {
   sourceUrl: text("sourceUrl"),
   sourceImageUrl: text("sourceImageUrl"),
   sourceSales: int("sourceSales"),
+  sourceBadge: varchar("sourceBadge", { length: 30 }),
+  sourceScrapedAt: timestamp("sourceScrapedAt"),
+  sourceReviewCount: int("sourceReviewCount"),
   /** Short name for this pattern, e.g. "Gorilla + Activity Absurdism" */
   patternName: varchar("patternName", { length: 200 }).notNull(),
   /** Layout/composition style, e.g. "centered character, bold text below" */
@@ -415,7 +429,7 @@ export const trendPatterns = mysqlTable("trend_patterns", {
   /** Vision LLM style extraction from source Etsy image */
   sourceStyleJson: json("sourceStyleJson"),
   /** Generation mode selected by LLM: edit_source | style_reference | prompt_only */
-  adaptationMode: varchar("adaptationMode", { length: 20 }),
+  adaptationMode: varchar("adaptationMode", { length: 40 }),
   /** User reason for approving this pattern */
   approvalReason: text("approvalReason"),
   /** User reason for dismissing this pattern */
@@ -430,6 +444,9 @@ export const trendPatterns = mysqlTable("trend_patterns", {
   dismissedAt: timestamp("dismissedAt"),
   /** Production-ready transparent PNG, generated only after approval */
   dtfImageUrl: text("dtfImageUrl"),
+  /** Standalone transparent PNG of the design artwork only (no shirt). Generated via images.generate + magenta chromakey.
+   *  This is the canonical asset. previewImageUrl = compositor(productionDesignUrl + template). dtfImageUrl = upscale(productionDesignUrl). */
+  productionDesignUrl: text("productionDesignUrl"),
 });
 
 export type TrendPattern = typeof trendPatterns.$inferSelect;

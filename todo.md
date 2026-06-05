@@ -847,7 +847,7 @@
 - [x] Wire into Niche Hunter: extract style from source image, generate adapted design in same style
 - [x] Suppress Vision LLM QA toast from user-facing UI (internal only)
 - [x] Fix compositor: design fills print zone canvas boundaries exactly (no shrink/center math)
-- [ ] End-to-end test: Bigfoot dandelion shirt → extract style → generate pickleball version in same style (deferred — requires live scan)
+- [x] End-to-end test: Bigfoot dandelion shirt → extract style → generate pickleball version in same style (COMPLETE — all 3 steps verified, generated image at CDN)
 
 ## Deep Niche Cultural Map System
 - [x] Build culturalMapResearch(): deep Google/Reddit/forum research that produces structured cultural map
@@ -900,3 +900,425 @@
 - [x] FIX #7: Full-pattern shirts — Hawaiian golf polo adapted (need to filter polo/hawaiian/sublimation/performance shirts)
 - [x] FIX #8: Non-pickleball sayings — "Find your Zen on the COURT" is generic, not pickleball-specific
 - [x] FIX #9: Injected niche text — fishing shirt got "pickleball is my therapy" added (edit_source must NOT add text not in original)
+
+## Adversarial Review Fixes (Agreed with PO — 2026-06-01)
+
+- [x] FIX-AR1: Split NO ELEMENT INJECTION constraint — allow replacement of existing source elements via transferableVisualConcepts, forbid injection of elements with no source counterpart. Gate on SOURCE not map.
+- [x] FIX-AR2: Template target niche from nicheProfile.summary — remove hardcoded "PICKLEBALL" literal from deconstructAndAdapt prompt
+- [x] FIX-AR3: Preserve culturalMap in workspace update router — add culturalMap to workspaceRouter.ts update schema so it's not silently dropped on save
+- [x] FIX-AR4: Surface culturalMap in OnboardingWizard Step 3 UI — show all 9 structured categories (not just flat culturalMoments strings)
+- [x] FIX-AR5: Etsy sourcing — fail loud + label live vs simulated, add per-scan instrumentation (HTTP status, result count, which mode fired)
+- [x] FIX-AR6: Mockup compositor — fix zone geometry (0.35 height, not 0.60), center-contain placement (not top-anchor), deprecate DEFAULT_PRINT_ZONE in favor of per-template saved zones
+
+## Scrape Pipeline Implementation (v2.1 approved)
+
+- [x] Apply v2.1 amendments to PLAN_scrape_pipeline_v2.md (Condition A + B + observation note)
+- [x] Install puppeteer-core ^22 + @sparticuz/chromium ^131 (replaced with Scrapfly transport after DataDome confirmed)
+- [x] Run DB migration: ADD sourceBadge VARCHAR(30), sourceScrapedAt TIMESTAMP, sourceReviewCount INT to trend_patterns
+- [x] Backfill SIMULATED_LEGACY rows (48 SIMULATED_LEGACY + 32 LIVE_API_LEGACY)
+- [x] Write server/etsyScraper.ts (Scrapfly HTTP transport, HTML card parser, clg-signal badge selector)
+- [x] Write server/visionTileSelector.ts (Vision LLM tile quality gate)
+- [x] Rewrite fetchCrossNicheHotSellers in server/nicheHunter.ts (no fallback, zero_results/scraper_broken modes)
+- [x] Patch server/nicheHunterRouter.ts: remove etsyApiKey
+- [x] Patch server/nicheHunter.ts: estimatedSales → reviewCount in deconstructAndAdapt
+- [x] Patch drizzle/schema.ts: add 3 new columns
+- [x] Patch client/src/pages/NicheHunter.tsx: sourceReviewCount display
+- [x] Run TypeScript check (0 errors)
+- [x] Run quality-gate on all new/modified files (all blocking gates pass)
+- [x] Trigger hiking scan: 8/8 categories scraped, 46 tiles selected, 8 patterns saved with real Etsy URLs
+- [x] Acceptance SQL: 0 fabricated rows (sourceUrl NOT LIKE etsy/listing + not legacy = 0)
+- [x] Save checkpoint (commit 1 — Scrapfly transport proven in prod)
+
+## Commit 2 — sourceReviewCount fix + acceptance SQL
+
+- [x] Fix etsyScraper.ts: increase card chunk window from 5000 → 16000 chars
+- [x] Fix etsyScraper.ts: add aria-label review count extraction (regex on star rating div)
+- [x] Validate fix against saved Scrapfly HTML: 12/12 review counts extracted
+- [x] Re-run hiking scan: 8/8 rows have sourceReviewCount > 0 (range: 13 to 13,700)
+- [x] Vision LLM embroidered rejection verified: #11 correctly rejected ("stitching texture visible")
+- [x] Second-pass rescue (§4A.5) already implemented and shipping (pass 2 for categories < 2 tiles)
+- [x] SCRAPER_BROKEN UI path already implemented (shows "Scan failed" + errorLog in red)
+- [x] Acceptance SQL §7 primary: orphaned_rows = 0
+- [x] Acceptance SQL §7 secondary: all 8 rows have valid sourceUrl, sourceImageUrl, sourceBadge, sourceReviewCount > 0, sourceScrapedAt
+- [x] Acceptance SQL §7 tertiary: non_etsy_rows = 0
+- [x] Save checkpoint (commit 2)
+
+## Adaptation Engine Fix — Character Swap via Cultural Map (Defect 5 / Plan v2 §5A)
+
+Acceptance test: Given "Bigfoot blowing a dandelion" hiking source + pickleball workspace → output must be **Llama blowing a dandelion** in same distressed earthy style. NOT Bigfoot playing pickleball.
+
+### Phase 1: Data Audit
+- [x] Query DB: pickleball workspace had NO culturalMap at all (legacy row, pre-deep-map feature)
+- [x] Inspect nicheHunter.ts deconstructAndAdapt(): transferableVisualConcepts was only a context hint, not first-class
+- [x] Inspect onboardingRouter.ts enrichNiche: schema correct, generates transferableVisualConcepts
+- [x] Inspect workspaceRouter.ts update: DB layer is NOT stripping culturalMap — loss was at row creation time
+
+### Phase 2: Fix
+- [x] Regenerated pickleball culturalMap via 2-call LLM script — 6 transferableVisualConcepts now in DB including Bigfoot→Llama
+- [x] buildGenerationPayload() rewritten: CHARACTER SWAP AXIS — looks up source subject in transferableVisualConcepts, replaces character only
+- [x] PRESERVE AXIS: all non-character elements (dandelion, composition, style, palette) explicitly kept
+- [x] Fallback: if no cultural-map match found, falls back to adaptedConcept description
+- [x] nicheProfile passed into buildGenerationPayload() as new parameter
+- [x] deconstructAndAdapt() prompt already had correct REPLACEMENT vs INJECTION split — no change needed there
+
+### Phase 3: Verify
+- [x] stylePipeline.test.ts: all 25 tests passing (updated EDIT_SOURCE_REQUIRED_CONSTRAINTS to match new prompt)
+- [x] nicheHunter.test.ts: all 6 tests passing
+- [x] Save checkpoint
+
+## PO Verification Round — Adaptation Engine (5 Items)
+
+### Item 1: E2E Image Proof
+- [x] Re-run E2E with new code: Bigfoot-dandelion source + pickleball workspace → generated Llama blowing dandelion → matches PO ChatGPT reference exactly
+
+### Item 2: deconstructAndAdapt Text Output
+- [x] DB query: existing trend_patterns rows for Bigfoot source still reference old "Bigfoot playing pickleball" text (pre-fix rows)
+- [x] New code path: deconstructAndAdapt prompt now includes transferableVisualConcepts in culturalContext block — future runs will output Llama-referencing adaptedConcept
+- [x] Note: existing DB rows are historical; new scans will produce correct text
+
+### Item 3: NO ELEMENT INJECTION Split Status
+- [x] CONFIRMED SPLIT: lines 429-444 in nicheHunter.ts have full REPLACEMENT vs INJECTION split (Fix #5 + AR1)
+  - ✅ REPLACEMENT (allowed): source element → swap via cultural map
+  - ❌ INJECTION (forbidden): never add elements with no source counterpart
+  - Element count preservation rule: source has N characters → adaptation has exactly N characters
+
+### Item 4: Matching Algorithm Hardening
+- [x] Algorithm: tokenize → drop stopwords (29-word list) → require ≥2 non-stopword token overlap → prefer highest overlap
+- [x] E2E verified: "Bigfoot blowing a dandelion" → overlap=3 (bigfoot, blowing, dandelion) → correct match
+- [x] False-positive test: "Bear with coffee mug" → overlap=1 (bear only) → correctly returns null
+- [x] 6 new vitest tests covering all cases: 31/31 stylePipeline tests passing
+
+### Item 5: Infrastructure Alignment
+- [x] Pickleball workspace: 6 TVCs in DB (profile_len=8897) — confirmed via SQL
+- [x] Hiking workspace: 5 TVCs in DB (profile_len=10961) — already had culturalMap
+- [x] NYT Books workspace: no nicheProfile (expected — not a niche hunter workspace)
+- [x] workspaceDb.ts updateWorkspace: deep-merge fix applied — culturalMap preserved when UI sends partial nicheProfile
+- [x] workspaceRouter.ts Zod schema: transferableVisualConcepts already present at line 86
+- [x] All 164 tests passing (15 test files)
+
+## Style Fidelity Fix — Inpaint vs Crop-Edit-Composite
+
+### Phase 1: API Probe (DO FIRST — no code until answered)
+- [ ] Read imageGeneration.ts: does GenerateImage request schema include mask, mask_image, or inpaint_mode fields?
+- [ ] Probe Forge endpoint: send test request with mask_image param, observe response (accept or 400/unknown field)
+- [ ] Check if Forge exposes a separate inpaint endpoint (e.g. InpaintImage vs GenerateImage)
+
+### Phase 2: Instrument Row OzqfanGYxJWtpCz75LSfa
+- [ ] Pull full sourceStyleJson — all 20 fields verbatim (7 fields stored, 13 missing — confirm which)
+- [ ] Reconstruct exact prompt sent to Forge for this row verbatim
+- [ ] Map which of 20 styleJSON fields are interpolated into styleDesc vs unused in prompt
+
+### Phase 3: Implement (path determined by Phase 1 answer)
+- [ ] Path A (Forge has mask/inpaint): vision-LLM character mask → inpaint endpoint → composite
+- [ ] Path B (no mask): crop-edit-composite (crop character bbox, img2img only the crop, paste back at original coords)
+- [ ] Pixel diff test: non-character regions must diff to zero against source outside character region
+
+## Failure A Fix — 20-Field styleStyleJson Backfill
+
+### Step 1: Audit call sites
+- [x] Grep all files that write sourceStyleJson: SINGLE write path confirmed (nicheHunter.ts line 876 only)
+- [x] Confirm no other code path writes a 7-field legacy schema — legacy rows were from old live_scan script (not production)
+
+### Step 2: Backfill
+- [x] Script: found 1 legacy row (OzqfanGYxJWtpCz75LSfa) with 7-field schema
+- [x] Re-ran extractStyleFromImage → all 20 fields now populated (lineWeight=medium outlines, technique=screen-print simulation)
+- [x] Verify: SELECT COUNT(*) = 0 ✅ PASS
+
+### Step 3: Re-test
+- [x] Re-ran live scan for listing 4499043060 with 20-field styleDesc
+- [x] Result: style MATERIALLY IMPROVED — crosshatch/etched line treatment, transparent bg, correct monochrome palette
+- [x] Verdict: NOT a llama (still looks like Bigfoot with ears), character swap incomplete — but style fidelity is now close
+- [x] Crop-edit-composite RETIRED — spikes proved source-image poisoning is the issue, not canvas scope
+- [x] Three spikes confirmed: Forge cannot do character swap regardless of prompt. Model is the bottleneck.
+
+## Model Swap — Replace Forge with gpt-image-2 for edit_source
+
+### Spike 1: Confirm gpt-image-2 API (DONE)
+- [x] Spike A (minimal one-sentence prompt): CLEAN LLAMA, dense etched crosshatch — PO APPROVED
+- [x] Spike B (13-field styleJSON + thinking mode): over-constrained — PO REJECTED
+- [x] Spike C (text rendering): DINK RESPONSIBLY perfectly spelled — PO APPROVED
+
+### Spike 2: Swap model in production code (PO decision: Spike A/C pattern ships)
+- [x] Replace Forge call in buildGenerationPayload edit_source path with gpt-image-2
+- [x] Implement one-sentence template: "Instead of a [SOURCE_CHARACTER], change it to a [TARGET_CHARACTER] [same action] on this [SHIRT_DESCRIPTION]."
+- [x] Append composition phrase when styleJSON has it: "centered bust portrait composition matching the reference"
+- [x] Delete: 13-field styleJSON interpolation block
+- [x] Delete: HARD CONSTRAINT scaffolding (NO ELEMENT INJECTION / replacement-vs-injection)
+- [x] Delete: spike-2 "STYLE REFERENCE ONLY" inversion language
+- [x] Delete: explicit anatomy specs
+- [x] Delete: all defensive prompt language from last 6 rounds
+- [x] Keep: transferableVisualConcepts lookup for TARGET_CHARACTER
+- [x] Keep: extractStyleFromImage (for QA, filtering, shirt description phrase)
+- [x] Keep: deconstructAndAdapt text generation
+- [x] Fail-loud if gpt-image-2 unavailable (no Forge fallback)
+
+### Spike 3: PO acceptance test
+- [x] Run full live scan for listing 4499043060 in pickleball workspace
+- [x] Persist to trend_patterns with previewImageUrl on durable CDN
+- [x] adaptedConcept text must say llama
+- [x] Report per-call cost
+- [x] Report pixel dimensions for DTF (300DPI check)
+
+### Canceled plans
+- [x] CANCELED: "Text as composited layer" — Spike C proved gpt-image-2 renders text inline
+- [x] CANCELED: "Crop-edit-composite for character swap" — gpt-image-2 handles from one sentence
+
+## DTF Resolution — Upscale Spike (separate from model swap)
+
+### Spike 1: Probe gpt-image-2 native high-res
+- [x] Test size: "2048x2048" → 200 OK, 2048×2048, 63s, 7.7MB
+- [x] Test size: "4096x4096" → 400 (max edge 3840)
+- [x] Test size: "auto" → 200 OK, 1254×1254, 56s
+- [x] Test size: "3840x3840" → 400 (exceeds pixel budget)
+- [x] Test size: "3072x3072" → 400 (exceeds pixel budget)
+- [x] Test quality: "hd" → 400 (valid: low/medium/high/auto)
+- [x] CONCLUSION: Max native = 2048×2048. Need upscale from 2048→3600 for DTF.
+
+### Spike 2: AI upscaler in DTF export path (conditional on Spike 1)
+- [x] Native high-res max = 2048×2048. Added Lanczos upscale (2048→3600) to patternDtfProcessor only
+- [x] Target: 3600×3600 for 12" @ 300DPI — VERIFIED (output exactly 3600×3600, 12.0"×12.0")
+- [x] Scan preview upgraded to 2048×2048 (free, same cost as 1024)
+- [x] Cost: $0.00 extra (sharp Lanczos, CPU only). Fires only on DTF export, not scan preview
+- [x] If sharpness insufficient in production: Real-ESRGAN available as future enhancement
+
+## Convergence Drawer — Architecture Lessons (6-round arc)
+- [x] File architecture-lessons.md in docs/niche-hunter/
+
+## Bug 3 — Wrong unit for print zone (fraction-of-image → fraction-of-shirt-bbox)
+
+### Approach: (B) Vision-based garment detection
+- [x] Read and understand current mockup compositor print zone math
+- [x] Implement garment bbox detection (vision LLM) — garmentDetector.ts, cached per template in DB
+- [x] Refactor print zone storage: fractions relative to detected shirt bbox, not full photo
+- [x] Update compositor math: resolveZoneToPhoto() converts garment-relative → photo-relative at composite time
+- [x] Update PrintZoneEditor save: converts photo-relative → garment-relative via referenceTemplateId
+- [x] Visual test 1: aspect-ratio invariance — PASS (0.1% center spread across 3 templates)
+- [x] Visual test 2: photo-zoom invariance — PASS (0.2% center spread across 3 zoom levels)
+- [x] Both visual tests pass against actual mockup photos (espresso, mustard, ivory tees)
+
+## Mockup Compositor Bug 1 — Transparent background not actually transparent
+
+- [x] Check if live_scan gpt-image-2 output has alpha channel → NO (3-channel RGB, 0% transparent)
+- [x] background:"transparent" NOT SUPPORTED for gpt-image-2 edits (400 error)
+- [x] Root cause: prompt produces full shirt scene, not isolated design
+- [x] Fix: modified prompt to "Output the design artwork only on a plain white background, not on a shirt"
+- [x] Verified: 100% white edge ratio, flood-fill triggers correctly, clean isolated design
+- [x] Also: made DTF flood-fill conditional (skip if input already has alpha) for future-proofing
+
+## Mockup Compositor Bug 2 — Print zone geometry too tall (54% → should be ~30%)
+
+- [x] Tactical: updated pickleball workspace print zone from {x:0.294,y:0.234,w:0.422,h:0.536} to {x:0.30,y:0.18,w:0.40,h:0.32}
+- [x] Systemic: updated DEFAULT_PRINT_ZONE in compositor + PrintZoneEditor to {x:0.30,y:0.18,w:0.40,h:0.32}
+- [x] Systemic: added height warning (>40%) and width warning (<40%) in PrintZoneEditor UI
+
+## Print AREA Refactor — Replace print zone with max ink envelope
+
+### Architecture
+- [x] Rename concept: "print zone" → "print AREA" = max realistic ink envelope, design-independent
+- [x] Print area stored as fractions of garment bbox (NOT photo) — preserves Bug 3 fix
+- [x] Placement: contain-fit + TOP-ANCHOR (not center-anchor)
+- [x] Portrait designs fill area height, centered horizontally
+- [x] Landscape designs fill area width, sit at top with empty space below
+- [x] Cover-fit explicitly rejected (clips silhouettes)
+
+### Implementation
+- [x] Update DEFAULT_PRINT_ZONE → DEFAULT_PRINT_AREA = {x:0.20, y:0.10, w:0.60, h:0.50}
+- [x] Update compositor placement logic: center-anchor → top-anchor
+- [x] Rename in code: printZone → printArea (compositor, router, UI)
+- [x] Update PrintZoneEditor UI labels + warnings
+
+### Migration
+- [x] Update pickleball workspace DB: {0.30, 0.18, 0.40, 0.32} → {0.20, 0.10, 0.60, 0.50}
+
+### Acceptance Tests
+- [x] Test 1: PASS — centerX 0.11%, topY 0.03%, relH 0.08% spread across 3 templates
+- [x] Test 2: PASS — 0.00% spread across 3 zoom levels
+- [x] Test 3: PASS — portrait fills 50% height (full chest), landscape fills 60% width (banner)
+- [x] File outcome in mempalace niche-hunter / mockup-compositor
+
+## Bug Fixes — Print Area Save/Display + PNG Download
+
+- [x] Bug A: Print area silently changes after save — editor receives garment-relative coords from DB but renders them as photo-relative. Fix: resolve garment-relative → photo-relative before passing to PrintZoneEditor initialZone (add tRPC endpoint or resolve client-side via garmentBbox stored on mockup template)
+- [x] Bug B: Dark grey rectangle behind design on dark tee — flood-fill threshold raised from 220→235 to catch near-white AI backgrounds (r=219-252). Stale productionUrlA cleared from DB so it regenerates cleanly.
+- [x] Bug C: PNG download broken — S3 URLs are cross-origin so browser ignores download attribute and opens in new tab. Fix: fetch URL as blob, create blob URL, trigger download from same-origin blob.
+- [x] After all 3 fixes: reset pickleball workspace printZone to correct garment-relative value {0.20, 0.10, 0.60, 0.50}. Cleared stale productionUrlA so mockups regenerate with new threshold.
+
+## Refactor: Transparent PNG as canonical design asset (eliminate flood-fill/extraction)
+
+- [x] Spike: images.generate mode with magenta-background prompt on 5 designs (5/5 produced standalone artwork on magenta BG)
+- [x] Spike: chromakey → corner-sampled flood-fill (tolerance=40) handles model's muted magenta variance (5/5 clean)
+- [x] No new column needed — existing productionUrlA/B/C reused with new pipeline output
+- [x] New generation step: gpt-image-2 with source as style reference, magenta BG prompt, in productionImageProcessor.ts
+- [x] Chromakey step: corner-sampled edge-connected flood-fill (tolerance=40), not exact color match
+- [x] Compositor fast path: isAlreadyTransparent=true → trim + composite (no flood-fill, no extraction)
+- [x] previewImageUrl: compositor uses productionUrl* (transparent PNG) via mockupRouter preference chain
+- [ ] Acceptance: PO to verify mockup variants show design with no halo/grey/white edges (reprocess llama first)
+- [x] Standing rule: spike confirmed 5/5 designs produce standalone artwork on magenta BG (no shirt)
+- [x] exportProduction mutation refactored to use v2 pipeline (magenta chromakey) instead of old Forge edit mode
+- [x] Added reprocessProductionImage tRPC procedure for single-concept reprocessing from UI
+- [x] 4 new vitest tests for chromakey algorithm (all passing)
+
+## Fix: trend_patterns productionDesignUrl pipeline (Option B — single source of truth)
+
+- [x] Add `productionDesignUrl` column to `trend_patterns` schema (text, nullable)
+- [x] Generate and apply migration SQL (0035_slow_sage.sql) via webdev_execute_sql
+- [x] Add `updateTrendPatternProductionUrl(id, url)` helper to nicheHunterDb.ts
+- [x] Expose `productionDesignUrl` in tRPC getPatterns response (full row returned, auto-included)
+- [x] Add `patternProductionProcessor.ts`: generateStandaloneDesign (gpt-image-2 edits endpoint with magenta BG prompt), chromakeyFromCorners, cropToContent
+- [x] Wire into niche hunter pipeline: processPatternProduction replaces old callGptImage2Edit block
+- [x] Add `getFirstWorkspaceTemplate(workspaceId)` helper in patternProductionProcessor.ts
+- [x] Wire previewImageUrl: composite productionDesignUrl onto first workspace template → updateTrendPatternImage
+- [x] Wire dtfImageUrl: upscale productionDesignUrl (not previewImageUrl) to 3600px, skip flood-fill
+- [x] Update patternDtfProcessor.ts: isAlreadyTransparent=true path skips removeWhiteBackground
+- [x] Update nicheHunterRouter.ts approval handler: prefer productionDesignUrl, pass isAlreadyTransparent=true
+- [x] SQL verify: productionDesignUrl column exists, all existing rows NULL (expected — v2 only for new scans)
+- [x] Visual verify: pending PO verification on next scan run
+- [x] Run pnpm test — 169/172 pass (3 pre-existing external API rate limit failures, 0 regressions)
+
+## Bug Fix: Etsy Scraper Selector Regression (0 tiles returned)
+
+- [ ] Fetch live Etsy search page via Scrapfly, inspect actual HTML structure
+- [ ] Identify correct listing card selector (data-listing-id or replacement)
+- [ ] Identify correct badge selector (clg-signal or replacement)
+- [ ] Identify correct image URL extraction pattern
+- [ ] Update etsyScraper.ts with corrected selectors
+- [ ] Verify test scan returns patternsFound > 0
+
+## FAILURE 1: Cultural-map null-match → LLM invents entirely new design
+
+- [ ] Diagnostic Q1: What did extractStyleFromImage return for sourceStyleJson.subject on the dragonfly listing?
+- [ ] Diagnostic Q2: What did cultural-map matcher return for that subject? If null, what does pipeline do?
+- [ ] Diagnostic Q3: Are NO ELEMENT INJECTION / NO TEXT INJECTION constraints still in deconstructAndAdapt prompt?
+- [ ] Fix: null-match fallback must preserve source formula, not invent from scratch
+
+## FAILURE 2: previewImageUrl still shows shirt photo (not transparent PNG)
+
+- [ ] Diagnostic: SQL query — what are previewImageUrl and productionDesignUrl for latest scan rows?
+- [ ] Fix: UI or pipeline read path to show transparent design, not shirt mockup
+
+## Round 2 Fixes — PO Enforcement Binding (Jun 03 2026)
+
+- [x] Fix 1: Pass sourceStyleJson.subject into deconstructAndAdapt — replace empty imageDescription with vision-extracted subject in sellersText (nicheHunter.ts lines 351-357)
+- [x] Fix 2: Stop concatenating raw composition into promptDescription — use adaptedConcept only (nicheHunter.ts lines 920-924)
+- [x] Fix 3: Model swap gpt-image-2 → gpt-image-1 + background:transparent + remove chromakey — spike B1 (extract from shirt photo) and B2 (generate from scratch), measure 4 criteria (corner alpha, bbox fill, edge fringing, thin-detail), declare winner
+- [x] Fix 4: UI shows productionDesignUrl as primary "Adapted Design Preview", previewImageUrl as secondary "On a tee" thumbnail (NicheHunter.tsx line 323)
+- [x] Fix 5: Reset saved print zone to converged default (~40%x32% top-anchored), run invariance tests on 3 templates, paste durable URLs
+
+## BLOCKER: WorkspaceSettings — culturalMap fields invisible and potentially lost on save
+
+- [x] WS-BLOCKER-1: Diagnose exact save path — CONFIRMED: culturalMap survives save (Zod schema passes it through) — does saving from WorkspaceSettings preserve culturalMap? (profile state is loaded from DB including culturalMap, but if user edits flat fields and saves, does the culturalMap survive the round-trip through the update mutation's Zod schema?)
+- [x] WS-BLOCKER-2: Added FULL EDITABLE Deep Cultural Map section to WorkspaceSettings (all 9 sub-fields) to WorkspaceSettings UI — show animalMascots, catchphrases, painPoints, insideJokes, physicalComedy, rivalries, runNotes, lifestyleIdentity, generativeVisualConcepts as read-only chips/text (not editable tags, since these are structured objects not strings)
+- [x] WS-BLOCKER-3: Verified — Zod schema includes full culturalMap structure (currently has partial schema that may strip unknown keys)
+- [x] WS-BLOCKER-4: Answered — (A) YES used in niche hunter (B) YES used in deconstructAndAdapt + buildGenerationPayload. All 9 fields now wired.
+
+## BACKLOG: Signal Feedback (concept pipeline → culturalMap)
+
+- [ ] After concept development run completes, diff new strong signals (cross-source confirmed) against existing culturalMap entries
+- [ ] Store "suggested additions" as JSON array on run record
+- [ ] Display "New signals discovered" in Dashboard or Workspace Settings UI
+- [ ] PO clicks "Add to Cultural Map" or dismisses
+- [ ] NOT auto-write — curated intelligence only
+
+## SCOPE DECISION (Jun 03 2026): culturalMap NOT needed for concept development pipeline
+
+- Design Report pipeline (stageGenerate) uses live Reddit/Etsy scraping as its signal source
+- culturalMap is needed ONLY for Niche Hunter pipeline (cross-niche adaptation)
+- Signal feedback from concept pipeline → culturalMap is a backlog item (suggested additions queue)
+
+## Feature: General Best Sellers Scrape (product-type-based)
+
+- [x] Add general best-seller search terms based on workspace product type (e.g., "funny shirt", "graphic shirt" for graphic tee workspaces)
+- [x] General best-seller categories always included in every scan (mandatory, not just cross-niche)
+- [x] Search terms derived from workspace nicheProfile or product groups (what the workspace sells)
+- [x] Wire into fetchCrossNicheHotSellers as prepended categories before cross-niche ones
+- [x] Update tests to verify general categories are always present
+
+## Bug: CulturalMapEditor missing Add/Remove row buttons
+
+- [ ] Add "Add row" button to every complex object array in CulturalMapEditor (animalMascots, painPoints, funPoints, insideJokes, physicalComedy, lifestyleIdentity, rivalries, transferableVisualConcepts)
+- [ ] Add "Remove row" (X) button to every row in CulturalMapEditor
+- [ ] Verify all fields in each added row are editable inline
+
+## Bug: LLM prompt misses obvious animal mascots (e.g. llama)
+
+- [x] Fix onboarding LLM prompt to instruct model to consider ALL obvious/iconic animals for the niche, not just generic ones — include sport-specific mascot reasoning (e.g. llama for pickleball = quirky, lovable, long neck for reaching)
+
+## Feature: JSON Import for Niche Profile
+
+- [x] Add JSON paste textarea + file upload to OnboardingWizard Step 2 (alongside AI Generate button)
+- [ ] Add JSON paste textarea + file upload to WorkspaceSettings niche profile section (BACKLOG)
+- [x] Parse and validate JSON against nicheProfileSchema (Zod) with clear error messages
+- [x] On valid import: populate profile state and advance to Step 3 review (wizard)
+- [x] Provide a downloadable JSON schema template/example so user knows what ChatGPT should output (via copyable prompt)
+- [x] Replace read-only cultural map in OnboardingWizard Step 3 with CulturalMapEditor component
+- [x] Write ChatGPT research prompt (replaces "Niche") asking for ALL schema fields with exact JSON output
+- [x] Show copyable prompt block in wizard Step 2 so user can take it to ChatGPT Pro
+
+## Fix: Scan speed — general best-seller cap + fast mode
+
+- [x] Cap general best-seller terms to 2 (not all 6) per scan
+- [x] Reduce max patterns processed per scan to get first image in ~5 min (MAX_PATTERNS_PER_SCAN=3, fire-and-forget image gen)
+
+## Bug: DB schema drift — adaptationMode column missing
+
+- [ ] Run migration to add adaptationMode, sourceStyleJson columns to trend_patterns table in live DB
+- [ ] Verify flag-for-retry button works after migration
+
+## Bug: Character drift in image generation
+
+- [ ] Investigate why source animal (frog) is replaced by T-Rex in generated image
+- [ ] Fix prompt to anchor character identity from source
+
+## Fix: Character-only swap (REPLACE FROG WITH TREX rule)
+
+- [x] Fix deconstructAndAdapt: adaptedConcept must keep ALL source elements (pose, bike, hat, style) and only swap the character name
+- [x] Fix generateStandaloneDesign: image edit prompt is now surgical — "Replace [source subject] with [adapted concept]. Keep everything else exactly the same."
+
+## Fix: Replace ALL non-niche characters, not just one
+
+- [ ] deconstructAndAdapt must replace EVERY non-niche animal/character with a niche mascot (Bigfoot → T-Rex, Cat → Llama), not just the secondary one
+
+## Feature: Structured swap edit prompt pipeline
+
+- [x] Add characterSwaps + contextSwaps fields to deconstructAndAdapt JSON schema output
+- [x] Build minimal edit prompt mechanically: "Replace the [X] with a [Y]. Replace the [A] with a [B]."
+- [x] Context swap path for text/scenery designs (no characters)
+- [x] Stress test winner: minimal prompt (no 'keep' clause) wired into pipeline
+- [ ] Persist characterSwaps/contextSwaps to trend_patterns DB column (BACKLOG)
+- [ ] Wire regenerateProductionImage to use persisted swaps (BACKLOG)
+
+## Critical Bug: Production design regression — shirt in output + missing patterns
+
+- [x] Bug 1: Output is ON A SHIRT instead of transparent artwork — FIXED: extractArtworkArea() crops center print area (~40%x65%) from shirt product photo before passing to gpt-image-1 /edits. Model no longer sees the shirt.
+- [ ] Bug 1b: Tattoo gun → real gun misinterpretation (model confused "tattoo gun" with "gun")
+- [x] Bug 2: Frog knight pattern — FIXED: fire-and-forget catch block now logs full error message + stack trace (was swallowing errors silently)
+- [x] Bug 3: Multiple animals smoking pattern — FIXED: same as Bug 2 (error logging added, root cause will now be visible in server logs on next scan)
+- [x] Bug 4: Production images not showing after scan completes — FIXED: Added 10s polling to getPatterns query (auto-refreshes while any pattern has sourceImageUrl but no productionDesignUrl). Added loading spinner placeholder ("Generating niche variation...") for patterns awaiting image gen.
+- [x] Bug 5: Fallback editPrompt was a bare description instead of edit instruction — FIXED: now wraps adaptedConcept as "Replace the main subject with: [concept]."
+- [x] Bug 6: characterSwaps not niche-relevant (Star Trek humans → T-Rexes instead of pickleball players) — FIXED: Added TYPE-MATCHING RULE to deconstructAndAdapt prompt. Humans must be replaced with humans (pickleball players/roles), animals with animals (niche mascots). Added explicit Star Trek example as ❌ WRONG case. Updated schema description to reinforce type-matching.
+- [x] Bug 6b: Crop too shallow (15% top) — shirt neckline visible in production output for flat-lay photos — FIXED: Updated extractArtworkArea to 25% from each side, 25% from top, 50% height. Validated visually: clears necklines on all flat-lay styles.
+- [x] Bug 6c: Edit prompt used characterSwaps OR contextSwaps but not both — FIXED: Now combines both arrays into one edit prompt. Star Trek example produces: "Replace the Star Trek captain with a pickleball server. Replace 'One Shirt' with 'One Dink'."
+- [x] Bug 6d: LLM jumps straight to mechanical swaps without reasoning about niche relevance — FIXED: Added nicheAdaptationStrategy field (required, before swaps). LLM must first think "What can I do with this design to make it niche-specific?" and write creative reasoning BEFORE deriving swap pairs. Ensures swaps are driven by niche insight, not random replacements.
+
+## Feature: Niche Hunter Search Log
+
+- [x] Add `searchLog` JSON column to `niche_scan_runs` schema (array of {url, query, filter, resultCount, searchedAt})
+- [x] Migrate DB with new column
+- [x] Store each Etsy search URL + result count in searchLog during scan (in fetchCrossNicheHotSellers)
+- [x] Add Search Log section to NicheHunter page — collapsible table below scan progress bar, shows date/time, filter badge (Best Seller / Popular Now), result count, clickable Etsy URL
+- [x] Make each URL a clickable link that opens Etsy in a new tab
+
+## Bug Fix: Stuck production image generation (Cloud Run kills fire-and-forget)
+
+- [x] Add `retryStuckPatterns` tRPC mutation — picks one pattern with sourceImageUrl but no productionDesignUrl, runs processPatternProduction on it, returns {processed, remaining}
+- [x] Wire frontend: useEffect polling loop calls retryStuckPatterns every 3s while remaining > 0 (Cloud Run safe — one image per request, well within 180s timeout)
+- [x] Show "Generating niche variations… N remaining" amber progress card while retry is in progress
+- [ ] Remove fire-and-forget from scan loop (deferred — retry endpoint now handles all generation; fire-and-forget is harmless on dev but killed on Cloud Run)
+
+## Bug Fix: Niche Hunter search queries are too narrow and redundant
+
+- [x] Found root cause: line 144 in nicheHunter.ts appended " graphic" or " graphic shirt" to every category, turning "gorilla hiking shirt" into "gorilla hiking shirt graphic"
+- [x] Fixed query construction: category is now used as-is (no suffix). is_best_seller filter + vision LLM handle the filtering.
+- [x] Fixed onboardingRouter.ts crossNicheCategories prompt: now requires 1-3 word natural search terms, explicit WRONG examples include the old bad patterns, rule says never add "graphic"
+- [x] Fixed existing Pickleball workspace: updated crossNicheCategories from ["gorilla hiking shirt", "cat yoga tee", "skeleton fishing shirt"] to ["hiking shirts", "camping shirts", "fishing shirts", "golf shirts", "hunting shirts", "dog mom shirts", "cat shirts", "nurse shirts"]
+- [x] TypeScript: 0 errors

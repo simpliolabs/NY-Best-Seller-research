@@ -20,8 +20,12 @@ import {
   recordApprovalSignal,
   recordRejectionSignal,
   updateTrendPatternDtfUrl,
+  updateTrendPatternProductionUrl,
+  getStuckProductionPatterns,
+  countStuckProductionPatterns,
 } from "./nicheHunterDb";
 import { runNicheHunterScan } from "./nicheHunter";
+import { processPatternProduction } from "./patternProductionProcessor";
 import { getWorkspaceById } from "./workspaceDb";
 import { createConceptFromPattern } from "./db";
 import { computeSignalWeights } from "./signalWeights";
@@ -73,13 +77,8 @@ export const nicheHunterRouter = router({
 
       const scanRun = await createScanRun(input.workspaceId);
 
-      const rawEtsyKey = process.env.ETSY_API_KEY;
-      const rawEtsySecret = process.env.ETSY_API_SECRET;
-      const etsyApiKey = rawEtsyKey && rawEtsySecret
-        ? `${rawEtsyKey}:${rawEtsySecret}`
-        : rawEtsyKey || undefined;
-
-      runNicheHunterScan(workspace, scanRun.id, etsyApiKey).catch((err) =>
+      // Scraper-based pipeline: no Etsy API key needed
+      runNicheHunterScan(workspace, scanRun.id).catch((err) =>
         console.error("[NicheHunter] Scan failed:", err)
       );
 
@@ -107,6 +106,8 @@ export const nicheHunterRouter = router({
         scanId: run.id,
         errorLog: run.errorLog ?? null,
         completedAt: run.completedAt ? run.completedAt.getTime() : null,
+        createdAt: run.createdAt.getTime(),
+        searchLog: run.searchLog ?? [],
       };
     }),
 
@@ -158,14 +159,18 @@ export const nicheHunterRouter = router({
       const conceptId = await createConceptFromPattern(pattern, input.workspaceId);
 
       // 4. Deferred DTF extraction — fire and forget
-      if (pattern.previewImageUrl && !pattern.dtfImageUrl) {
+      // v2 path: use productionDesignUrl (transparent PNG) — skip flood-fill
+      // Legacy path: use previewImageUrl (shirt photo) — run flood-fill
+      const dtfSourceUrl = pattern.productionDesignUrl || pattern.previewImageUrl;
+      const isAlreadyTransparent = !!pattern.productionDesignUrl;
+      if (dtfSourceUrl && !pattern.dtfImageUrl) {
         void (async () => {
           try {
             const { processPatternForDtf } = await import("./patternDtfProcessor");
-            const dtfUrl = await processPatternForDtf(pattern.previewImageUrl!);
+            const dtfUrl = await processPatternForDtf(dtfSourceUrl, isAlreadyTransparent);
             if (dtfUrl) {
               await updateTrendPatternDtfUrl(input.patternId, dtfUrl);
-              console.log(`[NicheHunter] DTF extraction complete for pattern ${input.patternId}`);
+              console.log(`[NicheHunter] DTF extraction complete for pattern ${input.patternId} (${isAlreadyTransparent ? 'v2 transparent' : 'legacy'})`);
             }
           } catch (err) {
             console.warn(`[NicheHunter] DTF extraction failed for pattern ${input.patternId}:`, err);
@@ -227,5 +232,86 @@ export const nicheHunterRouter = router({
         adaptationMode: "style_reference_flagged",
       });
       return { success: true, message: "Pattern flagged for style_reference retry" };
+    }),
+
+  /**
+   * Regenerate the productionDesignUrl for an existing pattern.
+   *
+   * Cloud-Run-safe pattern: NULL OUT productionDesignUrl first (marks the pattern as
+   * "needs regen"), THEN call processPatternProduction synchronously. If sync completes,
+   * processPatternProduction writes the new URL — done. If sync hits Cloudflare's ~100s
+   * edge timeout (524 to client), the productionDesignUrl stays null in the DB, and
+   * `retryStuckPatterns` (which the frontend already polls) will pick it up and finish
+   * the regen within its own request lifetime (which holds the Cloud Run container alive).
+   *
+   * Why the previous fire-and-forget pattern failed: Cloud Run kills the container when
+   * the request handler returns and no other requests are in-flight. The `void async`
+   * background work was killed before completion. The retryStuckPatterns mirror reuses
+   * existing infra and works because each retry call IS a real request.
+   */
+  regenerateProductionImage: protectedProcedure
+    .input(z.object({ patternId: z.string(), workspaceId: z.string() }))
+    .mutation(async ({ input }) => {
+      const patterns = await getTrendPatternsByWorkspace(input.workspaceId);
+      const pattern = patterns.find((p) => p.id === input.patternId);
+      if (!pattern) throw new TRPCError({ code: "NOT_FOUND", message: "Pattern not found" });
+      if (!pattern.sourceImageUrl) throw new TRPCError({ code: "BAD_REQUEST", message: "No source image URL" });
+      const promptDesc = (pattern as any).promptDescription ?? pattern.adaptedConcept ?? "";
+
+      // Mark for regen FIRST so retryStuckPatterns will pick it up if the sync call 524s.
+      await updateTrendPatternProductionUrl(input.patternId, null);
+
+      // Sync call — likely completes if reasoning_effort+edit total <100s. On 524 the
+      // client sees an error but the null in DB ensures retryStuckPatterns recovers.
+      const result = await processPatternProduction(
+        input.patternId,
+        input.workspaceId,
+        pattern.sourceImageUrl,
+        promptDesc
+      );
+      return result;
+    }),
+
+  /**
+   * Cloud-Run-safe production image retry.
+   * Picks up to RETRY_BATCH_SIZE stuck patterns (have sourceImageUrl, no
+   * productionDesignUrl) and runs processPatternProduction on each CONCURRENTLY
+   * within the request lifetime.
+   * Returns { processed: patternId | null, remaining: number }.
+   *
+   * The frontend polls this every 15s while remaining > 0. Bumping the batch from
+   * 1 to 3 drains 20 stuck patterns in ~7 calls instead of ~20 — biggest single
+   * lever for total scan→visible-mockup wall-clock. Sized so 3 concurrent gpt-image-1
+   * jobs at quality=medium (Step 1) + quality=high (Step 2) still fit comfortably
+   * inside Cloud Run's 180s sync request timeout.
+   */
+  retryStuckPatterns: protectedProcedure
+    .input(z.object({ workspaceId: z.string() }))
+    .mutation(async ({ input }) => {
+      const RETRY_BATCH_SIZE = 3;
+      const stuck = await getStuckProductionPatterns(input.workspaceId, RETRY_BATCH_SIZE);
+      if (stuck.length === 0) {
+        return { processed: null, remaining: 0 };
+      }
+      // Process concurrently — each pattern's failure is logged independently and
+      // does not abort the others. No throw out — frontend keeps polling on remaining>0.
+      await Promise.all(stuck.map(async (pattern) => {
+        const promptDesc = (pattern as any).promptDescription ?? pattern.adaptedConcept ?? "";
+        try {
+          await processPatternProduction(
+            pattern.id,
+            input.workspaceId,
+            pattern.sourceImageUrl!,
+            promptDesc
+          );
+          console.log(`[retryStuckPatterns] ✅ Processed pattern ${pattern.id}: ${pattern.adaptedConcept?.slice(0, 60)}`);
+        } catch (err) {
+          console.error(`[retryStuckPatterns] ❌ Failed pattern ${pattern.id}:`, err instanceof Error ? err.message : err);
+        }
+      }));
+      const remaining = await countStuckProductionPatterns(input.workspaceId);
+      // `processed` retained as a single id for backward compat with the frontend
+      // poller — using the first pattern in the batch so logs remain readable.
+      return { processed: stuck[0].id, remaining };
     }),
 });

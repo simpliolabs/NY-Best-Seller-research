@@ -1334,7 +1334,7 @@ Subgenre: ${book?.subgenre ?? "not specified"}`;
         // can composite directly without any background removal at render time.
         if (rawUrl) {
           try {
-            await processDesignForProduction(rawUrl, task.concept.id, task.variation);
+            await processDesignForProduction(rawUrl, task.concept.id, task.variation, task.prompt);
           } catch (procErr) {
             // Non-fatal: log and continue. The compositor will fall back to the raw image.
             console.warn(`[Pipeline] Production processing failed for concept ${task.concept.id} variation ${task.variation}:`, procErr);
