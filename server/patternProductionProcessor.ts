@@ -274,7 +274,19 @@ async function nicheExpertPlan(
     nicheProfile?.niche ||
     fallbackNiche ||
     "the niche";
-  const response = await invokeLLM({
+  // BRAIN = GPT-5 via OpenAI direct (reverted from Gemini Flash via forge).
+  // The PO showed twice that ChatGPT — which uses GPT-5 reasoning + gpt-image-1 internally
+  // — produces "same proven design with the subject swapped" from a 12-word intent with
+  // ~1 minute of thinking. The Gemini-Flash brain (thinking=128 tokens, ~no reasoning) was
+  // architecturally incapable of producing ChatGPT-quality edit prompts. GPT-5 with high
+  // reasoning effort matches what ChatGPT does in its silent expansion step.
+  // Falls back to gpt-4o if "gpt-5" returns 404 — change BRAIN_MODEL env var to override.
+  const openaiKey = process.env.OPENAI_API_KEY;
+  if (!openaiKey) throw new Error("OPENAI_API_KEY is not configured (brain)");
+  const brainModel = process.env.BRAIN_MODEL || "gpt-5";
+  const openaiBody = {
+    model: brainModel,
+    reasoning_effort: "high",
     messages: [
       {
         role: "system",
@@ -356,17 +368,27 @@ async function nicheExpertPlan(
         },
       },
     },
+  };
+  const openaiResp = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${openaiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(openaiBody),
   });
+  if (!openaiResp.ok) {
+    throw new Error(
+      `GPT-5 brain API error (${openaiResp.status}): ${(await openaiResp.text()).slice(0, 300)}`
+    );
+  }
+  const response = (await openaiResp.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
 
-  const content = response.choices?.[0]?.message?.content;
-  const raw =
-    typeof content === "string"
-      ? content
-      : Array.isArray(content)
-        ? content.map((c) => ("text" in c ? c.text : "")).join("")
-        : "";
-  if (!raw.trim()) {
-    throw new Error("[PatternProd] nicheExpertPlan: empty LLM response");
+  const raw = (response.choices?.[0]?.message?.content ?? "").trim();
+  if (!raw) {
+    throw new Error("[PatternProd] nicheExpertPlan: empty GPT-5 response");
   }
 
   let spec: EditSpec;
@@ -509,18 +531,28 @@ async function replaceDesignOnShirt(
   sourceImageUrl: string,
   editPrompt: string
 ): Promise<Buffer> {
-  // Step 1 uses FLUX.1 Kontext [max] (via fal): an instruction-edit model that
-  // changes only the printed graphic and preserves the rest of the photo by
-  // design. This replaces gpt-image-1, which re-rendered the whole canvas and
-  // would redraw figures / invent props (the redrawn-lady, salt-shaker, and
-  // fake-brand failures). Verified in a 3-design bake-off vs Qwen-Image-Edit:
-  // Kontext preserved text, figure, AND illustration style across all three.
-  // The edit instruction comes from planMinimalEdit() + buildEditPrompt(); fal
-  // fetches `sourceImageUrl` server-side, so no local download is needed.
+  // Step 1 uses gpt-image-1 with input_fidelity:"high" (reverted from FLUX Kontext).
+  // The PO showed twice that ChatGPT (which uses gpt-image-1 internally, with GPT-5
+  // reasoning writing the prompt) produces the desired "same proven design with the
+  // subject swapped" result with a simple intent + ~1 minute of reasoning. Our prior
+  // Kontext swap was wrong: Kontext recomposes the source on substantial swaps
+  // (architectural failure, paper-confirmed), and the brain it was paired with
+  // (Gemini Flash, ~no reasoning) was the wrong brain too. Pairing GPT-5 reasoning
+  // brain → rich edit prompt → gpt-image-1 + input_fidelity:high is what ChatGPT does.
+  const imgResp = await fetch(sourceImageUrl);
+  if (!imgResp.ok) {
+    throw new Error(`Failed to download source image: ${imgResp.status}`);
+  }
+  const sourcePng = await sharp(Buffer.from(await imgResp.arrayBuffer()))
+    .png()
+    .toBuffer();
   console.log(
-    `[PatternProd] Step 1 (Kontext [max] in-place edit). Prompt: "${editPrompt.substring(0, 140)}..."`
+    `[PatternProd] Step 1 (gpt-image-1 + input_fidelity:high). Prompt: "${editPrompt.substring(0, 140)}..."`
   );
-  return callFalKontextEdit(sourceImageUrl, editPrompt);
+  return callImageEdit(sourcePng, "source_shirt.png", editPrompt, {
+    transparent: false,
+    inputFidelity: "high",
+  });
 }
 
 // ─── Step 2: Extract transparent design from edited shirt photo ──────────────
