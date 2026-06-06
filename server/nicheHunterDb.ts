@@ -165,6 +165,21 @@ export async function updateTrendPatternDtfUrl(
 }
 
 /**
+ * Update the per-shirt-color preview gallery for a pattern. Each entry is one
+ * mockup template's composite preview, halftoned for that template's shirt color.
+ * PO insight: halftone is shirt-color-dependent, so each shirt gets its own preview.
+ * Legacy previewImageUrl stays populated separately for backward UI compat.
+ */
+export async function updateTrendPatternPreviewUrls(
+  id: string,
+  previewImageUrls: Array<{ templateId: string; colorHex: string; colorName: string; previewUrl: string }>
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(trendPatterns).set({ previewImageUrls }).where(eq(trendPatterns.id, id));
+}
+
+/**
  * Update the productionDesignUrl for a pattern — the canonical transparent PNG asset.
  */
 export async function updateTrendPatternProductionUrl(

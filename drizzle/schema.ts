@@ -453,6 +453,13 @@ export const trendPatterns = mysqlTable("trend_patterns", {
    *  a permanently-failing pattern was stuck for 4 hours because retryStuckPatterns logged
    *  the error but never gave up). Default 0 = fresh budget on insert. */
   productionAttempts: int("productionAttempts").default(0).notNull(),
+  /** Array of per-shirt-color previews. Each entry is the productionDesignUrl composited
+   *  onto one workspace mockup template, with shirt-aware halftone+knockout tuned to that
+   *  template's colorHex (so the design integrates with the fabric instead of looking like
+   *  a plastic decal). PO insight: halftone is shirt-color-dependent — the dot pattern lets
+   *  the shirt color show through, so each template gets its own tuned preview.
+   *  Null on legacy patterns; previewImageUrl above stays populated for backward UI compat. */
+  previewImageUrls: json("previewImageUrls").$type<Array<{ templateId: string; colorHex: string; colorName: string; previewUrl: string }>>(),
 });
 
 export type TrendPattern = typeof trendPatterns.$inferSelect;

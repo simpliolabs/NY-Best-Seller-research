@@ -21,6 +21,97 @@ export interface CompositeConfig {
   designUrl: string;   // Transparent PNG from S3
   mockupUrl: string;   // Blank shirt photo from S3
   printZone: PrintArea;
+  /** Hex color of the shirt this is being composited onto, e.g. "#0e1c2e".
+   *  When provided, the design is run through shirt-aware halftone + knockout BEFORE
+   *  composite — pixels close to the shirt color get knocked out (let the shirt show
+   *  through), mid-contrast pixels become a Bayer dot pattern (vintage screen-print
+   *  feel, shirt color reads through the gaps), high-contrast pixels stay solid.
+   *  Result: the design looks PRINTED INTO the fabric instead of sitting on top like
+   *  a plastic decal. PO insight: halftone effect is shirt-color-dependent, so this
+   *  belongs at composite time, not at production time. */
+  shirtColorHex?: string;
+}
+
+// 8×8 Bayer ordered-dither matrix (0..63). Used by applyShirtAwareHalftone.
+const BAYER_8X8 = [
+   0, 32,  8, 40,  2, 34, 10, 42,
+  48, 16, 56, 24, 50, 18, 58, 26,
+  12, 44,  4, 36, 14, 46,  6, 38,
+  60, 28, 52, 20, 62, 30, 54, 22,
+   3, 35, 11, 43,  1, 33,  9, 41,
+  51, 19, 59, 27, 49, 17, 57, 25,
+  15, 47,  7, 39, 13, 45,  5, 37,
+  63, 31, 55, 23, 61, 29, 53, 21,
+];
+
+// Thresholds tuned against test runs on Salty Dinker across cream/black/navy shirts
+// — see test-salty-shirt-aware.cjs and the conversation log. PO confirmed default look.
+const HALFTONE_KNOCKOUT_THRESHOLD = 0.20;  // contrast below = pixel too close to shirt → alpha=0
+const HALFTONE_KEEP_SOLID_THRESHOLD = 0.65; // contrast above = pure ink → keep all pixels
+
+function parseHexColor(hex: string): { r: number; g: number; b: number } {
+  const m = hex.trim().replace(/^#/, "");
+  if (m.length !== 6) throw new Error(`Invalid hex color: ${hex}`);
+  return {
+    r: parseInt(m.slice(0, 2), 16),
+    g: parseInt(m.slice(2, 4), 16),
+    b: parseInt(m.slice(4, 6), 16),
+  };
+}
+
+/**
+ * Apply shirt-aware knockout + halftone to a transparent design PNG.
+ * Uses max-channel-diff contrast against the shirt color (better than luminance-only —
+ * catches hue differences like yellow-on-cream that share luminance but read very
+ * differently).
+ *
+ * Rules per pixel:
+ *   contrast = max(|R-Rs|, |G-Gs|, |B-Bs|) / 255
+ *   contrast < KNOCKOUT  → alpha=0       (pixel invisible on shirt, let shirt show)
+ *   contrast > KEEP_SOLID → keep opaque  (pure ink, high contrast)
+ *   else                  → Bayer halftone, density proportional to contrast
+ *
+ * This is what makes "navy text on navy shirt" honestly disappear (correct print-prep
+ * behavior — same-color ink on same-color shirt IS invisible) instead of pretending.
+ */
+export async function applyShirtAwareHalftone(
+  designBuf: Buffer,
+  shirtColorHex: string
+): Promise<Buffer> {
+  const shirt = parseHexColor(shirtColorHex);
+  const { data, info } = await sharp(designBuf)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const { width: w, height: h, channels: ch } = info;
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * ch;
+      // Already transparent (the productionDesignUrl's existing transparency) — leave it
+      if (data[i + 3] < 16) continue;
+      const dr = Math.abs(data[i]     - shirt.r);
+      const dg = Math.abs(data[i + 1] - shirt.g);
+      const db = Math.abs(data[i + 2] - shirt.b);
+      const contrast = Math.max(dr, dg, db) / 255;
+
+      if (contrast < HALFTONE_KNOCKOUT_THRESHOLD) {
+        data[i + 3] = 0;
+      } else if (contrast > HALFTONE_KEEP_SOLID_THRESHOLD) {
+        // keep solid — no change
+      } else {
+        // Mid-contrast → Bayer halftone. Density proportional to contrast.
+        const norm = (contrast - HALFTONE_KNOCKOUT_THRESHOLD) / (HALFTONE_KEEP_SOLID_THRESHOLD - HALFTONE_KNOCKOUT_THRESHOLD);
+        const bayerVal = BAYER_8X8[(y % 8) * 8 + (x % 8)];
+        const bayerThresh = (bayerVal + 0.5) / 64;
+        if (norm <= bayerThresh) data[i + 3] = 0;
+      }
+    }
+  }
+
+  return sharp(data, { raw: { width: w, height: h, channels: ch } })
+    .png()
+    .toBuffer();
 }
 
 /** Default print AREA — converged placement for realistic DTF/DTG mockups.
@@ -395,6 +486,16 @@ export async function compositeDesignOnMockup(config: CompositeConfig): Promise<
     const trimmedFirst = await trimToContent(rawDesignBuf);
     const noBgDesign = await removeBackground(trimmedFirst);
     trimmedDesign = await trimDesign(noBgDesign);
+  }
+
+  // 1c. Shirt-aware halftone + knockout (optional, gated on shirtColorHex).
+  // Runs AFTER trim so we only process pixels that are part of the design itself,
+  // not the trimmed-away padding. Per PO: the dot pattern lets the shirt color show
+  // through the gaps, so the design integrates with the fabric instead of looking
+  // like a plastic decal.
+  if (config.shirtColorHex) {
+    trimmedDesign = await applyShirtAwareHalftone(trimmedDesign, config.shirtColorHex);
+    console.log(`[Compositor] Applied shirt-aware halftone for shirtColorHex=${config.shirtColorHex}`);
   }
 
   // 2. Get mockup dimensions

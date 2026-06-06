@@ -267,6 +267,13 @@
       "when": 1780762702820,
       "tag": "0037_motionless_black_tarantula",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "5",
+      "when": 1780780004916,
+      "tag": "0038_same_lady_deathstrike",
+      "breakpoints": true
     }
   ]
 }

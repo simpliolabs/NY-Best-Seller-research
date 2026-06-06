@@ -52,6 +52,7 @@ import {
 import { getGarmentBbox, resolveZoneToPhoto } from "./garmentDetector";
 import {
   updateTrendPatternImage,
+  updateTrendPatternPreviewUrls,
   updateTrendPatternProductionUrl,
   updateTrendPatternStatus,
   recordRejectionSignal,
@@ -768,24 +769,6 @@ export async function assertTransparentPng(buf: Buffer, patternId: string): Prom
 
 // ─── Default template selection ──────────────────────────────────────────────
 
-/**
- * Get the first mockup template for a workspace (by createdAt ASC, then sortOrder ASC).
- * Returns null if no product group or templates exist for the workspace.
- */
-async function getFirstWorkspaceTemplate(workspaceId: string) {
-  const groups = await getProductGroupsByWorkspace(workspaceId);
-  if (groups.length === 0) return null;
-
-  const firstGroup = groups.sort(
-    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-  )[0];
-
-  const templates = await getMockupsByGroup(firstGroup.id);
-  if (templates.length === 0) return null;
-
-  return { template: templates[0], group: firstGroup };
-}
-
 // ─── Main entry point ────────────────────────────────────────────────────────
 
 /**
@@ -862,38 +845,63 @@ export async function processPatternProduction(
   await updateTrendPatternProductionUrl(patternId, productionDesignUrl);
   console.log(`[PatternProd] productionDesignUrl: ${productionDesignUrl}`);
 
-  // Step 6: Composite onto first workspace template for previewImageUrl
-  let previewImageUrl: string;
+  // Step 6: Composite onto EVERY workspace template, each with shirt-aware halftone
+  // tuned to that template's colorHex. PO insight: halftone effect is shirt-color-
+  // dependent — the dot pattern lets the shirt color show through, so each template
+  // needs its own tuned preview. Result: one productionDesignUrl (the smooth master)
+  // + N previews (one per shirt color, each halftoned for that shirt).
+  let previewImageUrl: string = productionDesignUrl; // legacy single-preview, populated with first composite
+  const previewImageUrls: Array<{ templateId: string; colorHex: string; colorName: string; previewUrl: string }> = [];
   try {
-    const result = await getFirstWorkspaceTemplate(workspaceId);
-    if (result) {
-      const { template, group } = result;
+    const groups = await getProductGroupsByWorkspace(workspaceId);
+    const sortedGroups = groups
+      .slice()
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    for (const group of sortedGroups) {
+      const templates = await getMockupsByGroup(group.id);
       const printAreaRelGarment = (group.printZone as { x: number; y: number; width: number; height: number } | null) ?? DEFAULT_PRINT_AREA;
-      const garmentBbox = await getGarmentBbox(template.id, template.imageUrl);
-      const printZone = resolveZoneToPhoto(printAreaRelGarment, garmentBbox);
-
-      const compositeBuffer = await compositeDesignOnMockup({
-        designUrl: productionDesignUrl,
-        mockupUrl: template.imageUrl,
-        printZone,
-      });
-
-      const previewKey = `pattern-preview/${patternId}-${Date.now()}.webp`;
-      const { url } = await storagePut(previewKey, compositeBuffer, "image/webp");
-      previewImageUrl = url;
-      console.log(`[PatternProd] previewImageUrl (composite): ${previewImageUrl}`);
-    } else {
-      previewImageUrl = productionDesignUrl;
-      console.log(`[PatternProd] No template found for workspace ${workspaceId}, using transparent PNG as preview`);
+      for (const template of templates) {
+        try {
+          const garmentBbox = await getGarmentBbox(template.id, template.imageUrl);
+          const printZone = resolveZoneToPhoto(printAreaRelGarment, garmentBbox);
+          const compositeBuffer = await compositeDesignOnMockup({
+            designUrl: productionDesignUrl,
+            mockupUrl: template.imageUrl,
+            printZone,
+            shirtColorHex: template.colorHex, // ← drives shirt-aware halftone in the compositor
+          });
+          const safeColorName = template.colorName.replace(/[^a-zA-Z0-9_-]+/g, "_");
+          const previewKey = `pattern-preview/${patternId}-${safeColorName}-${Date.now()}.webp`;
+          const { url } = await storagePut(previewKey, compositeBuffer, "image/webp");
+          previewImageUrls.push({
+            templateId: template.id,
+            colorHex: template.colorHex,
+            colorName: template.colorName,
+            previewUrl: url,
+          });
+          if (previewImageUrls.length === 1) previewImageUrl = url; // legacy field = first preview
+          console.log(`[PatternProd] previewImageUrl[${template.colorName}]: ${url}`);
+        } catch (compErr) {
+          console.warn(`[PatternProd] Composite failed for template ${template.colorName} (${template.colorHex}):`, compErr);
+          // skip this template, keep going for the others
+        }
+      }
+    }
+    if (previewImageUrls.length === 0) {
+      console.log(`[PatternProd] No templates yielded a preview for workspace ${workspaceId}, using transparent PNG as preview`);
     }
   } catch (err) {
-    console.warn(`[PatternProd] Composite failed, falling back to transparent PNG:`, err);
+    console.warn(`[PatternProd] Multi-template composite block failed, falling back to transparent PNG:`, err);
     previewImageUrl = productionDesignUrl;
   }
 
-  // Step 7: Update previewImageUrl in DB
+  // Step 7: Update preview fields in DB. previewImageUrl (legacy single) for the
+  // current PatternCard render; previewImageUrls (array) for the new shirt-color gallery.
   await updateTrendPatternImage(patternId, previewImageUrl);
-  console.log(`[PatternProd] Pattern ${patternId} done.`);
+  if (previewImageUrls.length > 0) {
+    await updateTrendPatternPreviewUrls(patternId, previewImageUrls);
+  }
+  console.log(`[PatternProd] Pattern ${patternId} done — ${previewImageUrls.length} per-shirt preview(s).`);
 
   return { productionDesignUrl, previewImageUrl };
 }
