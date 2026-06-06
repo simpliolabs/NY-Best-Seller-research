@@ -24,6 +24,7 @@ import {
   getStuckProductionPatterns,
   countStuckProductionPatterns,
   recordProductionFailure,
+  updateScanRun,
 } from "./nicheHunterDb";
 import { runNicheHunterScan } from "./nicheHunter";
 import { processPatternProduction } from "./patternProductionProcessor";
@@ -73,7 +74,25 @@ export const nicheHunterRouter = router({
 
       const latest = await getLatestScanRun(input.workspaceId);
       if (latest?.status === "running") {
-        return { scanId: latest.id, alreadyRunning: true };
+        // Dead-scan watchdog: Cloud Run kills containers after ~10 min idle. A scan
+        // row stuck at status='running' for much longer than any realistic scan time
+        // means the original runNicheHunterScan handler was killed mid-execution —
+        // the row stays "running" forever and blocks every future triggerScan.
+        // Manus PO confirmed a case where the UI was stuck on "Scanning..." for
+        // 4+ hours because of this. Self-heal: mark the dead row failed and proceed.
+        const SCAN_DEAD_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes — generous vs. realistic ~3-4min scan time
+        const ageMs = Date.now() - latest.createdAt.getTime();
+        if (ageMs > SCAN_DEAD_THRESHOLD_MS) {
+          const ageMin = Math.round(ageMs / 60000);
+          console.warn(`[triggerScan] Scan ${latest.id} stuck at status='running' for ${ageMin}min — exceeds ${SCAN_DEAD_THRESHOLD_MS / 60000}min dead threshold. Marking failed and starting fresh.`);
+          await updateScanRun(latest.id, {
+            status: "failed",
+            errorLog: `Scan abandoned by watchdog — running for ${ageMin}min exceeds dead threshold (likely Cloud Run container killed mid-execution).`,
+            completedAt: new Date(),
+          });
+        } else {
+          return { scanId: latest.id, alreadyRunning: true };
+        }
       }
 
       const scanRun = await createScanRun(input.workspaceId);
