@@ -24,6 +24,7 @@ import {
   closeBrowser,
   fetchEtsySearchPage,
   type EtsySearchFilter,
+  type EtsyTile,
 } from "./etsyScraper";
 import { selectGraphicTeeTiles, type NicheContext } from "./visionTileSelector";
 import type { SourceStyleJSON } from "../shared/sourceStyleJson";
@@ -136,63 +137,71 @@ async function fetchCrossNicheHotSellers(
   const results: HotSeller[] = [];
   const seenListingIds = new Set<string>();
 
+  // openBrowser/closeBrowser are no-op stubs (Scrapfly transport is stateless HTTP;
+  // see etsyScraper.ts:171). Kept around the parallel block for interface compat.
   await openBrowser();
 
-  try {
-    // ── Pass 1: is_best_seller ──────────────────────────────────────────────
-    const pass1Counts: Record<string, number> = {};
+  // Per-category scrape + vision-select round-trip. Used by both passes in parallel.
+  // Returns a normalized result so the merge step can dedup, log, and short-circuit
+  // on scraperBroken without the per-call await blocking the other categories.
+  type CategoryFetchResult = {
+    category: string;
+    logEntry: { query: string; url: string; filter: EtsySearchFilter; resultCount: number; searchedAt: string };
+    scraperBroken: boolean;
+    errorMessage?: string | null;
+    pageNotRendered: boolean;
+    selectedTiles: EtsyTile[];
+  };
+  const fetchAndSelectCategory = async (
+    category: string,
+    filter: EtsySearchFilter
+  ): Promise<CategoryFetchResult> => {
+    const searchResult = await fetchEtsySearchPage(category, filter);
+    const encodedQ = encodeURIComponent(category);
+    const filterParam = filter === "is_best_seller" ? "is_best_seller=true" : "is_popular_now=true";
+    const logEntry = {
+      query: category,
+      url: `https://www.etsy.com/search?q=${encodedQ}&explicit=1&${filterParam}`,
+      filter,
+      resultCount: searchResult.tiles.length,
+      searchedAt: new Date().toISOString(),
+    };
+    if (searchResult.scraperBroken) {
+      return { category, logEntry, scraperBroken: true, errorMessage: searchResult.errorMessage, pageNotRendered: false, selectedTiles: [] };
+    }
+    if (!searchResult.pageRendered) {
+      return { category, logEntry, scraperBroken: false, errorMessage: searchResult.errorMessage, pageNotRendered: true, selectedTiles: [] };
+    }
+    if (searchResult.tiles.length === 0) {
+      console.log(`[NicheHunter][CATEGORY] "${category}" → 0 tiles from scraper (${filter})`);
+      return { category, logEntry, scraperBroken: false, pageNotRendered: false, selectedTiles: [] };
+    }
+    // Vision LLM selection (niche-aware: prefers mascot/catchphrase fit, rejects costume gimmicks)
+    const { selectedIds, rejectionNotes } = await selectGraphicTeeTiles(category, searchResult.tiles, nicheContext);
+    console.log(`[NicheHunter][CATEGORY] "${category}" (${filter}) → scraped=${searchResult.tiles.length} | selected=${selectedIds.length} | notes: ${rejectionNotes.slice(0, 80)}`);
+    const selectedTiles = searchResult.tiles.filter(t => selectedIds.includes(t.listingId));
+    return { category, logEntry, scraperBroken: false, pageNotRendered: false, selectedTiles };
+  };
 
-    for (const category of categories) {
-      // Use the category term directly as the Etsy search query.
-      // The is_best_seller filter does the heavy lifting — no need to append
-      // "graphic" or "graphic shirt" which makes queries unnatural and too narrow.
-      // The vision LLM downstream filters for graphic tee tiles from the results.
-      const searchQuery = category;
-
-      const searchResult = await fetchEtsySearchPage(searchQuery, "is_best_seller");
-      const encodedQ1 = encodeURIComponent(searchQuery);
-      searchLog.push({
-        query: searchQuery,
-        url: `https://www.etsy.com/search?q=${encodedQ1}&explicit=1&is_best_seller=true`,
-        filter: "is_best_seller",
-        resultCount: searchResult.tiles.length,
-        searchedAt: new Date().toISOString(),
-      });
-
-      if (searchResult.scraperBroken) {
-        // SCRAPER_BROKEN: Etsy HTML structure changed — fail the entire scan with a distinct error
-        instrumentation.mode = "scraper_broken";
-        instrumentation.fallbackReason = searchResult.errorMessage;
-        console.error(`[NicheHunter] ⛔ SCRAPER_BROKEN for category "${category}": ${searchResult.errorMessage}`);
-        // Return immediately — no partial results, no fiction
-        return { sellers: [], instrumentation, searchLog };
-      }
-
-      if (!searchResult.pageRendered) {
-        console.warn(`[NicheHunter][CATEGORY] "${category}" → Page not rendered: ${searchResult.errorMessage}`);
-        instrumentation.httpErrors.push({ category, status: 0, message: searchResult.errorMessage ?? "Page not rendered" });
-        pass1Counts[category] = 0;
+  // Serial merge: append to searchLog/results in input order so downstream
+  // pattern-by-index behavior stays deterministic. Returns added counts per category.
+  const mergeResults = (passResults: CategoryFetchResult[]): Record<string, number> => {
+    const counts: Record<string, number> = {};
+    for (const r of passResults) {
+      searchLog.push(r.logEntry);
+      if (r.pageNotRendered) {
+        console.warn(`[NicheHunter][CATEGORY] "${r.category}" → Page not rendered: ${r.errorMessage}`);
+        instrumentation.httpErrors.push({ category: r.category, status: 0, message: r.errorMessage ?? "Page not rendered" });
+        counts[r.category] = 0;
         continue;
       }
-
-      if (searchResult.tiles.length === 0) {
-        console.log(`[NicheHunter][CATEGORY] "${category}" → 0 tiles from scraper (pass 1)`);
-        pass1Counts[category] = 0;
-        continue;
-      }
-
-      // Vision LLM selection (niche-aware: prefers mascot/catchphrase fit, rejects costume gimmicks)
-      const { selectedIds, rejectionNotes } = await selectGraphicTeeTiles(category, searchResult.tiles, nicheContext);
-      console.log(`[NicheHunter][CATEGORY] "${category}" (pass 1) → scraped=${searchResult.tiles.length} | selected=${selectedIds.length} | notes: ${rejectionNotes.slice(0, 80)}`);
-
-      let addedForCategory = 0;
-      for (const tile of searchResult.tiles) {
-        if (!selectedIds.includes(tile.listingId)) continue;
+      let added = 0;
+      for (const tile of r.selectedTiles) {
         if (seenListingIds.has(tile.listingId)) continue;
         seenListingIds.add(tile.listingId);
         results.push({
           title: tile.title,
-          category,
+          category: r.category,
           estimatedSales: tile.reviewCount,
           imageDescription: "",
           sourceUrl: tile.listingUrl,
@@ -200,60 +209,46 @@ async function fetchCrossNicheHotSellers(
           sourceReviewCount: tile.reviewCount,
           sourceBadge: tile.badge,
         });
-        addedForCategory++;
+        added++;
       }
-      pass1Counts[category] = addedForCategory;
+      counts[r.category] = added;
     }
+    return counts;
+  };
+
+  try {
+    // ── Pass 1: is_best_seller (parallel across categories) ────────────────
+    // Previously serial: 5 categories × (scrape ~3-5s + vision LLM ~5-10s) = ~40-75s.
+    // Parallel: bounded by the slowest single category = ~10-15s. ScrapFly is stateless
+    // HTTP so concurrent calls are safe; OpenAI 5-way concurrency is well within tier
+    // limits. Promise.all cannot early-return on scraperBroken — we check after settle.
+    const pass1Results = await Promise.all(categories.map(c => fetchAndSelectCategory(c, "is_best_seller")));
+    const brokenP1 = pass1Results.find(r => r.scraperBroken);
+    if (brokenP1) {
+      // SCRAPER_BROKEN: Etsy HTML structure changed — fail the entire scan with a distinct error
+      instrumentation.mode = "scraper_broken";
+      instrumentation.fallbackReason = brokenP1.errorMessage ?? null;
+      console.error(`[NicheHunter] ⛔ SCRAPER_BROKEN for category "${brokenP1.category}": ${brokenP1.errorMessage}`);
+      // Push every pass-1 log entry we did make (transparency over partial work) and bail
+      for (const r of pass1Results) searchLog.push(r.logEntry);
+      return { sellers: [], instrumentation, searchLog };
+    }
+    const pass1Counts = mergeResults(pass1Results);
 
     // ── Pass 2: is_popular_now for categories that yielded < 2 tiles ──────
     const pass2Categories = categories.filter(c => (pass1Counts[c] ?? 0) < 2);
     if (pass2Categories.length > 0) {
       console.log(`[NicheHunter] Pass 2 (popular_now) for ${pass2Categories.length} starved categories: ${pass2Categories.join(", ")}`);
-      for (const category of pass2Categories) {
-        // Same as pass 1 — use category directly, no graphic suffix
-        const searchQuery = category;
-
-        const searchResult = await fetchEtsySearchPage(searchQuery, "is_popular_now");
-        const encodedQ2 = encodeURIComponent(searchQuery);
-        searchLog.push({
-          query: searchQuery,
-          url: `https://www.etsy.com/search?q=${encodedQ2}&explicit=1&is_popular_now=true`,
-          filter: "is_popular_now",
-          resultCount: searchResult.tiles.length,
-          searchedAt: new Date().toISOString(),
-        });
-
-        if (searchResult.scraperBroken) {
-          instrumentation.mode = "scraper_broken";
-          instrumentation.fallbackReason = searchResult.errorMessage;
-          console.error(`[NicheHunter] ⛔ SCRAPER_BROKEN (pass 2) for "${category}": ${searchResult.errorMessage}`);
-          return { sellers: [], instrumentation, searchLog };
-        }
-
-        if (!searchResult.pageRendered || searchResult.tiles.length === 0) {
-          console.log(`[NicheHunter][CATEGORY] "${category}" → 0 tiles from scraper (pass 2)`);
-          continue;
-        }
-
-        const { selectedIds, rejectionNotes } = await selectGraphicTeeTiles(category, searchResult.tiles, nicheContext);
-        console.log(`[NicheHunter][CATEGORY] "${category}" (pass 2) → scraped=${searchResult.tiles.length} | selected=${selectedIds.length} | notes: ${rejectionNotes.slice(0, 80)}`);
-
-        for (const tile of searchResult.tiles) {
-          if (!selectedIds.includes(tile.listingId)) continue;
-          if (seenListingIds.has(tile.listingId)) continue;
-          seenListingIds.add(tile.listingId);
-          results.push({
-            title: tile.title,
-            category,
-            estimatedSales: tile.reviewCount,
-            imageDescription: "",
-            sourceUrl: tile.listingUrl,
-            sourceImageUrl: tile.fullResUrl,
-            sourceReviewCount: tile.reviewCount,
-            sourceBadge: tile.badge,
-          });
-        }
+      const pass2Results = await Promise.all(pass2Categories.map(c => fetchAndSelectCategory(c, "is_popular_now")));
+      const brokenP2 = pass2Results.find(r => r.scraperBroken);
+      if (brokenP2) {
+        instrumentation.mode = "scraper_broken";
+        instrumentation.fallbackReason = brokenP2.errorMessage ?? null;
+        console.error(`[NicheHunter] ⛔ SCRAPER_BROKEN (pass 2) for "${brokenP2.category}": ${brokenP2.errorMessage}`);
+        for (const r of pass2Results) searchLog.push(r.logEntry);
+        return { sellers: [], instrumentation, searchLog };
       }
+      mergeResults(pass2Results);
     }
   } finally {
     await closeBrowser();
