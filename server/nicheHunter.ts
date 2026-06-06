@@ -277,17 +277,27 @@ async function fetchCrossNicheHotSellers(
  * Run Vision LLM style extraction on each hot seller that has a source image.
  * Non-blocking per listing — failures return null (prompt_only fallback).
  * Capped at 8 concurrent extractions to avoid API overload.
+ *
+ * NB: prior implementation was serial despite the "8 concurrent" claim — ~30 sources
+ * × ~10s per vision LLM call meant ~5 minutes of forced serialization at scan
+ * progress 20→35. Empirically observed: a scan stuck at progress=20 for ~10 minutes
+ * straight before this fix. Batch parallelism preserves return-order (callers
+ * use the result array by hotSellers index).
  */
 async function extractStylesForHotSellers(
   hotSellers: HotSeller[]
 ): Promise<(SourceStyleJSON | null)[]> {
-  const results: (SourceStyleJSON | null)[] = [];
-  for (const seller of hotSellers) {
-    if (seller.sourceImageUrl) {
-      const style = await extractStyleFromImage(seller.sourceImageUrl);
-      results.push(style);
-    } else {
-      results.push(null);
+  const CONCURRENCY = 8;
+  const results: (SourceStyleJSON | null)[] = new Array(hotSellers.length).fill(null);
+  for (let i = 0; i < hotSellers.length; i += CONCURRENCY) {
+    const batch = hotSellers.slice(i, i + CONCURRENCY);
+    const batchResults = await Promise.all(
+      batch.map(s =>
+        s.sourceImageUrl ? extractStyleFromImage(s.sourceImageUrl) : Promise.resolve(null)
+      )
+    );
+    for (let j = 0; j < batchResults.length; j++) {
+      results[i + j] = batchResults[j];
     }
   }
   return results;
