@@ -260,6 +260,13 @@
       "when": 1780529472650,
       "tag": "0036_blue_guardian",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "5",
+      "when": 1780762702820,
+      "tag": "0037_motionless_black_tarantula",
+      "breakpoints": true
     }
   ]
 }

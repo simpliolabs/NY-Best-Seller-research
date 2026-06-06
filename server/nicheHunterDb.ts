@@ -177,6 +177,55 @@ export async function updateTrendPatternProductionUrl(
 }
 
 /**
+ * Production-retry bookkeeping.
+ *
+ * Increment the pattern's productionAttempts counter. If it reaches `maxAttempts`,
+ * auto-dismiss the pattern (status=dismissed, rejectionReason includes the last
+ * error, rejectionTags=['transfer_failed']) so retryStuckPatterns stops re-picking
+ * it from the queue. Otherwise leave status='discovered' and the next poll will
+ * try again.
+ *
+ * WHY THIS EXISTS:
+ * retryStuckPatterns previously logged on failure but never gave up. A permanently
+ * failing pattern (bad source URL, brain crash on weird source, persistent
+ * gpt-image-1 5xx, etc.) re-entered the queue every 15s forever. Manus PO confirmed
+ * a 4-hour stuck case where one bad source spun the loop ~960 times.
+ *
+ * Returns the new attempt count and whether the pattern got auto-dismissed.
+ */
+export async function recordProductionFailure(
+  id: string,
+  errorMessage: string,
+  maxAttempts: number = 3
+): Promise<{ attempts: number; dismissed: boolean }> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const rows = await db.select().from(trendPatterns).where(eq(trendPatterns.id, id)).limit(1);
+  const current = rows[0];
+  if (!current) return { attempts: 0, dismissed: false };
+  const attempts = (current.productionAttempts ?? 0) + 1;
+  const trimmedErr = errorMessage.length > 280 ? errorMessage.slice(0, 277) + "..." : errorMessage;
+  if (attempts >= maxAttempts) {
+    // Give up — auto-dismiss so the retry loop stops re-picking
+    await db.update(trendPatterns)
+      .set({
+        productionAttempts: attempts,
+        status: "dismissed",
+        rejectionReason: `Production failed after ${attempts} attempts. Last error: ${trimmedErr}`,
+        rejectionTags: ["transfer_failed"],
+        dismissedAt: new Date(),
+      })
+      .where(eq(trendPatterns.id, id));
+    return { attempts, dismissed: true };
+  }
+  // Not yet — bump the counter and let the next retryStuckPatterns poll try again
+  await db.update(trendPatterns)
+    .set({ productionAttempts: attempts })
+    .where(eq(trendPatterns.id, id));
+  return { attempts, dismissed: false };
+}
+
+/**
  * Get patterns that have a sourceImageUrl but no productionDesignUrl.
  * Used by the retry endpoint to process stuck production jobs one at a time.
  * Returns oldest-first so earlier scans are resolved before newer ones.

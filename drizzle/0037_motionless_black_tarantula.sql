@@ -1,0 +1,1 @@
+ALTER TABLE `trend_patterns` ADD `productionAttempts` int DEFAULT 0 NOT NULL;

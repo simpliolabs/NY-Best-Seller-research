@@ -23,6 +23,7 @@ import {
   updateTrendPatternProductionUrl,
   getStuckProductionPatterns,
   countStuckProductionPatterns,
+  recordProductionFailure,
 } from "./nicheHunterDb";
 import { runNicheHunterScan } from "./nicheHunter";
 import { processPatternProduction } from "./patternProductionProcessor";
@@ -295,6 +296,10 @@ export const nicheHunterRouter = router({
       }
       // Process concurrently — each pattern's failure is logged independently and
       // does not abort the others. No throw out — frontend keeps polling on remaining>0.
+      // On failure we increment productionAttempts; after MAX_PRODUCTION_ATTEMPTS the
+      // pattern is auto-dismissed (rejectionTags=['transfer_failed']) so it stops
+      // re-entering the queue forever. Fixes the 4-hour stuck case Manus PO confirmed.
+      const MAX_PRODUCTION_ATTEMPTS = 3;
       await Promise.all(stuck.map(async (pattern) => {
         const promptDesc = (pattern as any).promptDescription ?? pattern.adaptedConcept ?? "";
         try {
@@ -306,7 +311,22 @@ export const nicheHunterRouter = router({
           );
           console.log(`[retryStuckPatterns] ✅ Processed pattern ${pattern.id}: ${pattern.adaptedConcept?.slice(0, 60)}`);
         } catch (err) {
-          console.error(`[retryStuckPatterns] ❌ Failed pattern ${pattern.id}:`, err instanceof Error ? err.message : err);
+          const errMsg = err instanceof Error ? err.message : String(err);
+          console.error(`[retryStuckPatterns] ❌ Failed pattern ${pattern.id}: ${errMsg}`);
+          try {
+            const { attempts, dismissed } = await recordProductionFailure(
+              pattern.id,
+              errMsg,
+              MAX_PRODUCTION_ATTEMPTS
+            );
+            if (dismissed) {
+              console.error(`[retryStuckPatterns] 💀 Pattern ${pattern.id} AUTO-DISMISSED after ${attempts} failed attempts (max=${MAX_PRODUCTION_ATTEMPTS})`);
+            } else {
+              console.warn(`[retryStuckPatterns] ⏳ Pattern ${pattern.id} attempt ${attempts}/${MAX_PRODUCTION_ATTEMPTS} — will retry on next poll`);
+            }
+          } catch (bookkeepErr) {
+            console.error(`[retryStuckPatterns] failed to record retry count for ${pattern.id}:`, bookkeepErr);
+          }
         }
       }));
       const remaining = await countStuckProductionPatterns(input.workspaceId);

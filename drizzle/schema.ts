@@ -447,6 +447,12 @@ export const trendPatterns = mysqlTable("trend_patterns", {
   /** Standalone transparent PNG of the design artwork only (no shirt). Generated via images.generate + magenta chromakey.
    *  This is the canonical asset. previewImageUrl = compositor(productionDesignUrl + template). dtfImageUrl = upscale(productionDesignUrl). */
   productionDesignUrl: text("productionDesignUrl"),
+  /** Count of failed processPatternProduction attempts via retryStuckPatterns. Incremented
+   *  on each catch; after MAX_PRODUCTION_ATTEMPTS the pattern is auto-dismissed with
+   *  rejectionTags=['transfer_failed']. Prevents the infinite-retry loop (Manus PO confirmed:
+   *  a permanently-failing pattern was stuck for 4 hours because retryStuckPatterns logged
+   *  the error but never gave up). Default 0 = fresh budget on insert. */
+  productionAttempts: int("productionAttempts").default(0).notNull(),
 });
 
 export type TrendPattern = typeof trendPatterns.$inferSelect;
