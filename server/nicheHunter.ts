@@ -1130,12 +1130,21 @@ export async function runNicheHunterScan(
     const existingPatternNames = new Set(
       existingPatterns.map(ep => (ep.patternName ?? "").toLowerCase().trim()).filter(Boolean)
     );
-    // Theme-fingerprints from BOTH sourceTitle and patternName per existing pattern —
-    // catches "same Concept Library theme, different Etsy shop" duplicates (Salty case).
-    const existingFingerprints: Set<string>[] = existingPatterns
+    // Theme-fingerprints from APPROVED patterns only — Concept Library winners worth
+    // protecting from theme-collision in future scans (Salty case). DISMISSED patterns
+    // are NOT used here: their signal already feeds the brain via the AVOID list at
+    // planning time; if we ALSO pre-block at search time, accumulated dismissed-pattern
+    // noise (e.g. 14 dismissed "funny shirt" patterns from pre-fix auto-inject days)
+    // crowds out new candidates and yield collapses to ~1 pattern per scan even when
+    // scrapes return 60 tiles. PO observed exactly this on the iSa0ctgg scan
+    // 2026-06-06: 5 categories scraped clean, only 1 pattern survived (Sunrise Forest).
+    // Exact-string dedup above still uses ALL patterns so we don't re-scrape the
+    // SAME Etsy listing twice — that's a different concern from theme dedup.
+    const approvedPatterns = existingPatterns.filter(ep => ep.status === "approved");
+    const existingFingerprints: Set<string>[] = approvedPatterns
       .map(ep => extractFingerprint(`${ep.sourceTitle ?? ""} ${ep.patternName ?? ""}`))
       .filter(fp => fp.size > 0);
-    console.log(`[NicheHunter] Dedup baseline: ${existingPatterns.length} existing patterns, ${existingFingerprints.length} fingerprints`);
+    console.log(`[NicheHunter] Dedup baseline: ${existingPatterns.length} total / ${approvedPatterns.length} approved → ${existingFingerprints.length} theme fingerprints`);
 
     let saved = 0;
     // Per-category counter for the 4-designs-per-category cap (PO spec).
