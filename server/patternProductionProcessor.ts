@@ -341,7 +341,7 @@ async function nicheExpertPlan(
           "3. The new design must REUSE the source's structure (pose, count, arrangement, layout). The identity changes; the structure stays.",
           "4. Always fill `bestMatch` (use {type:'none', item:'-', why:'...'} when canConvert is false). editPrompt must be empty string when canConvert is false.",
           "5. Respect AVOID TOPICS.",
-          "6. INK PALETTE FOR MULTI-SHIRT — designs are printed on MULTIPLE shirt colors in the catalog (both light AND dark). Pure black or near-shirt-color inks DISAPPEAR on shirts that share their luminance — black ink on espresso shirt is invisible at print, navy text on navy shirt is invisible. Prefer LIGHT/BRIGHT main inks (cream, off-white, ivory, mustard, sage, dusty pastels) for the design's main subject and lettering so the design reads on EVERY shirt color in the catalog (Frog Moon, Salty Dinker, and other vintage-print bestsellers all do this — light/mid-tone main inks on dark shirts). Reserve dark inks ONLY for thin accent lines or shadow detail, never as the main shape or primary text. State the main ink colour explicitly in the editPrompt (Part D).",
+          "6. KEEP THE SOURCE'S ORIGINAL COLOURS AND PALETTE. Do NOT recolour the design to suit shirt colours. The proven-bestseller transfers preserve the source's exact palette — a dark mystical glow stays a dark mystical glow, an earthy muted cartoon stays earthy and muted. The ONLY change is the subject identity (and any swapped text); the colour scheme, ink treatment, and overall mood are inherited verbatim from the source. (Shirt-colour suitability is handled later by choosing WHICH shirt colours to offer per design — never by altering the design's palette.)",
         ].join("\n").replace(/\$\{product\}/g, product),
       },
       {
@@ -702,15 +702,19 @@ async function replaceDesignOnShirt(
     .png()
     .toBuffer();
   console.log(
-    `[PatternProd] Step 1 (gpt-image-1 quality=medium + input_fidelity:high). Prompt: "${editPrompt.substring(0, 140)}..."`
+    `[PatternProd] Step 1 (gpt-image-1 quality=high + input_fidelity:high). Prompt: "${editPrompt.substring(0, 140)}..."`
   );
-  // quality:"medium" on the intermediate edit (~30–60s vs ~90–180s at high). Step 2
-  // re-rasters at quality:"high" to produce the user-visible transparent asset, so the
-  // downgrade is invisible in the final output but cuts ~60–120s off every pattern.
+  // quality:"high" — reverted from "medium". Step 1 is the actual niche transfer (the
+  // edit that swaps frogs->raccoons etc.); medium was a speed trade that cost edit
+  // fidelity (PO-confirmed regression: flat-vector output, lost source texture). The
+  // PO's ground-truth ChatGPT transfers used full quality + full thinking. The
+  // structural speed fixes (parallel style extraction d3848db, parallel scrape
+  // b32da43, atomic-claim race fix dfa4338) already recovered the scan time, so the
+  // per-pattern quality trade is no longer needed.
   return callImageEdit(sourcePng, "source_shirt.png", editPrompt, {
     transparent: false,
     inputFidelity: "high",
-    quality: "medium",
+    quality: "high",
   });
 }
 
