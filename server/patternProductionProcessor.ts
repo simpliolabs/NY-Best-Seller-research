@@ -971,16 +971,15 @@ export async function processPatternProduction(
   const shirtMockup = await replaceDesignOnShirt(sourceImageUrl, editPrompt);
 
   // Step 1b: OUTPUT VALIDATION — vision-LLM audit of the design vs brain's plan.
-  // Foundational fix replacing layer-by-layer patching: every prior layer trusted
-  // the next without verification, so brain-plan vs image-output drift, off-niche
-  // outputs, and gpt-image-1 typography typos all leaked through.
-  //
-  // CRITICAL ORDERING: this runs on the Step 1 mockup BEFORE the expensive Step 2
-  // extraction (quality:high, ~60-120s). The failure modes we catch — typos,
-  // off-niche subjects, plan drift — are all fully determined at Step 1; running
-  // the audit here lets a rejected pattern skip Step 2 + despeckle + crop entirely,
-  // saving ~2 min per reject (reject rate is high by design). The validator reads
-  // the printed graphic off the shirt mockup just fine (text/subject all visible).
+  // FLAG-ONLY (PO directive 2026-06-07: "Nothing should be automatically dismissed
+  // if produced — but the system should be able to catch itself before doing
+  // something"). The auditor reads the Step 1 mockup and records a validationReport
+  // (typo / off-niche / plan-drift) so the UI can surface a ⚠️ warning chip and the
+  // HUMAN decides whether to keep or flag-for-retry. It does NOT auto-dismiss: once
+  // we've spent the compute to produce a design, we never silently throw it away.
+  // (Pre-production catching still happens upstream — the canConvert fit gate skips
+  // BEFORE any image-gen. That's "catch before doing"; this is post-production, so
+  // it only flags.)
   // Computed niche string matches the one used inside nicheExpertPlan.
   const niche =
     (typeof ws?.nicheProfile === "object" && ws?.nicheProfile !== null && typeof (ws.nicheProfile as any).summary === "string"
@@ -996,11 +995,9 @@ export async function processPatternProduction(
     );
     await updateTrendPatternValidationReport(patternId, validation);
     if (!validation.shouldShip) {
-      const reason = `Output failed validation: ${validation.reasoning} (relevance=${validation.nicheRelevance}, matchesPlan=${validation.matchesPlan}, hasTypo=${validation.hasTypo})`;
-      console.log(`[PatternProd] AUTO-DISMISS pattern=${patternId} by validator (pre-extraction): ${reason}`);
-      await updateTrendPatternStatus(patternId, "dismissed");
-      await recordRejectionSignal(patternId, reason, ["off_brand"]);
-      return { productionDesignUrl: null, previewImageUrl: null };
+      // FLAG, do not dismiss. The report is stored; the UI shows the warning; the
+      // human curates. Production continues normally below.
+      console.warn(`[PatternProd] ⚠️ pattern=${patternId} FLAGGED by validator (kept, not dismissed): ${validation.reasoning}`);
     }
   }
   // (When validation is null — API/auth failure — fall through and ship anyway.
