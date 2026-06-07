@@ -526,12 +526,22 @@ export async function compositeDesignOnMockup(config: CompositeConfig): Promise<
     .resize(finalW, finalH, { fit: "fill", background: { r: 0, g: 0, b: 0, alpha: 0 } })
     .toBuffer();
 
-  // 6. Position design: CONTAIN-FIT + TOP-ANCHOR within the print area.
-  // Horizontal: centered (portrait designs get equal side margins).
-  // Vertical: top-anchored (landscape designs sit at top, empty space below).
-  // This ensures designs are as large as possible and never drift toward the navel.
+  // 6. Position design: CONTAIN-FIT + CENTER-ANCHOR within the print area.
+  // Was TOP-ANCHOR previously, on the rationale "never drift toward the navel".
+  // But gpt-image-1 outputs are fixed-square (706×706 after trim) and users tend
+  // to draw TALL portrait print zones (e.g. 408×538, aspect 0.76). Contain-fit
+  // a square into a tall zone fills only the width — leaves ~130px empty below.
+  // Top-anchor made that empty space appear at the bottom and PO read it as
+  // "design not placed within SET range" (zone-on-preview overlay confirmed
+  // 2026-06-07: the design IS within the zone, just hugging the top, leaving
+  // visible empty zone below).
+  // Centering the design WITHIN the user-defined zone matches what commercial
+  // print mockups do (Frog Moon, Salty Dinker, etc. — chest-centered, not chest-top).
+  // The user-defined zone IS the chest area; centering inside it puts the design
+  // dead-center of the chest. If the user wants the design higher, they shorten
+  // the zone in the UI — the compositor follows the zone faithfully either way.
   const offsetX = zoneX + Math.round((zoneW - finalW) / 2); // center horizontally
-  const offsetY = zoneY; // TOP-ANCHOR vertically (no centering)
+  const offsetY = zoneY + Math.round((zoneH - finalH) / 2); // center vertically
 
   // 7. Composite design onto mockup, output as WebP (compressed, max 1000x1000)
   const composite = sharp(mockupBuf)
