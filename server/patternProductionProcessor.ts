@@ -472,13 +472,20 @@ async function validateNicheOutput(
     return null;
   }
   const dataUri = `data:image/png;base64,${designPngBuf.toString("base64")}`;
-  const brainModel = process.env.BRAIN_MODEL || "gpt-5";
+  // Validator defaults to gpt-4o — a fast vision model. This is a read-and-compare
+  // check (OCR the text, judge niche fit, match against the plan), NOT a reasoning
+  // task, so GPT-5's slow reasoning is wasted here (~15s/pattern). gpt-4o returns
+  // in ~3-5s. Override with VALIDATOR_MODEL if needed.
+  const validatorModel = process.env.VALIDATOR_MODEL || "gpt-4o";
+  const isReasoningModel = validatorModel.startsWith("gpt-5") || validatorModel.startsWith("o");
 
   const systemPrompt = [
     `You are a quality auditor for print-on-demand designs in the "${niche}" niche.`,
     "",
     "A brain LLM planned an adaptation of a hot-selling shirt design. An image-gen",
-    "model then produced the design. Your job is to check if the OUTPUT is shippable.",
+    "model then produced it. You are shown the design PRINTED ON A SHIRT MOCKUP —",
+    "judge ONLY the printed graphic artwork. Ignore the shirt fabric, shirt colour,",
+    "folds, and the photo background; they are not part of the design.",
     "",
     "BRAIN PLANNED THIS:",
     `  bestMatch.type:  ${spec.bestMatch?.type ?? "(none)"}`,
@@ -488,12 +495,12 @@ async function validateNicheOutput(
     "INTENDED EDIT PROMPT (what image-gen was instructed to produce):",
     spec.editPrompt.slice(0, 1000),
     "",
-    "Look at the generated design image and return strict JSON:",
-    `  - nicheRelevance:   integer 0-100. Does the design clearly depict the "${niche}" niche?`,
+    "Look at the printed graphic and return strict JSON:",
+    `  - nicheRelevance:   integer 0-100. Does the printed graphic clearly depict the "${niche}" niche?`,
     "                       <60 = off-niche; >=60 = visibly on-niche.",
-    "  - matchesPlan:      true if the image clearly depicts the bestMatch.item subject.",
-    "                       false if the image shows a different subject than planned.",
-    "  - textInImage:      any visible words in the design (OCR-style read).",
+    "  - matchesPlan:      true if the graphic clearly depicts the bestMatch.item subject.",
+    "                       false if it shows a different subject than planned.",
+    "  - textInImage:      any visible words in the printed graphic (OCR-style read).",
     "  - textMatchesPlan:  true if the text matches what the editPrompt asked for AND",
     "                       every word is correctly spelled. false on ANY typo or off-plan text.",
     "  - hasTypo:          true if any visible word is misspelled (PART vs PARK, RFICHEN vs KITCHEN).",
@@ -504,15 +511,16 @@ async function validateNicheOutput(
   ].join("\n");
 
   const body = {
-    model: brainModel,
-    reasoning_effort: "low" as const, // simple yes/no check, no deep reasoning needed
+    model: validatorModel,
+    // reasoning_effort is a GPT-5/o-series param; gpt-4o rejects it with a 400.
+    ...(isReasoningModel ? { reasoning_effort: "low" as const } : {}),
     messages: [
       { role: "system", content: systemPrompt },
       {
         role: "user",
         content: [
           { type: "image_url" as const, image_url: { url: dataUri, detail: "low" as const } },
-          { type: "text" as const, text: "Audit this generated design and return the JSON." },
+          { type: "text" as const, text: "Audit this design (shown printed on a shirt) and return the JSON." },
         ],
       },
     ],
@@ -962,6 +970,42 @@ export async function processPatternProduction(
   // Step 1: Surgically edit the source product photo using only the planned swaps.
   const shirtMockup = await replaceDesignOnShirt(sourceImageUrl, editPrompt);
 
+  // Step 1b: OUTPUT VALIDATION — vision-LLM audit of the design vs brain's plan.
+  // Foundational fix replacing layer-by-layer patching: every prior layer trusted
+  // the next without verification, so brain-plan vs image-output drift, off-niche
+  // outputs, and gpt-image-1 typography typos all leaked through.
+  //
+  // CRITICAL ORDERING: this runs on the Step 1 mockup BEFORE the expensive Step 2
+  // extraction (quality:high, ~60-120s). The failure modes we catch — typos,
+  // off-niche subjects, plan drift — are all fully determined at Step 1; running
+  // the audit here lets a rejected pattern skip Step 2 + despeckle + crop entirely,
+  // saving ~2 min per reject (reject rate is high by design). The validator reads
+  // the printed graphic off the shirt mockup just fine (text/subject all visible).
+  // Computed niche string matches the one used inside nicheExpertPlan.
+  const niche =
+    (typeof ws?.nicheProfile === "object" && ws?.nicheProfile !== null && typeof (ws.nicheProfile as any).summary === "string"
+      ? (ws.nicheProfile as any).summary.split(",")[0]
+      : null) ||
+    (ws?.nicheProfile as any)?.niche ||
+    promptDescription ||
+    "the niche";
+  const validation = await validateNicheOutput(shirtMockup, editSpec, niche);
+  if (validation) {
+    console.log(
+      `[PatternProd] Validation pattern=${patternId}: relevance=${validation.nicheRelevance} matchesPlan=${validation.matchesPlan} hasTypo=${validation.hasTypo} shouldShip=${validation.shouldShip} text="${validation.textInImage.slice(0, 60)}"`
+    );
+    await updateTrendPatternValidationReport(patternId, validation);
+    if (!validation.shouldShip) {
+      const reason = `Output failed validation: ${validation.reasoning} (relevance=${validation.nicheRelevance}, matchesPlan=${validation.matchesPlan}, hasTypo=${validation.hasTypo})`;
+      console.log(`[PatternProd] AUTO-DISMISS pattern=${patternId} by validator (pre-extraction): ${reason}`);
+      await updateTrendPatternStatus(patternId, "dismissed");
+      await recordRejectionSignal(patternId, reason, ["off_brand"]);
+      return { productionDesignUrl: null, previewImageUrl: null };
+    }
+  }
+  // (When validation is null — API/auth failure — fall through and ship anyway.
+  // Fail-open prevents transient infra issues from blocking production.)
+
   // Step 2: Extract just the design onto a transparent canvas
   const rawTransparent = await extractTransparentFromShirt(shirtMockup, product);
 
@@ -974,37 +1018,6 @@ export async function processPatternProduction(
 
   // Step 4: Validate transparency + content presence (throws on failure)
   await assertTransparentPng(transparentPng, patternId);
-
-  // Step 4b: OUTPUT VALIDATION — vision-LLM audit of the design vs brain's plan.
-  // Foundational fix replacing layer-by-layer patching: every prior layer trusted
-  // the next without verification, so brain-plan vs image-output drift, off-niche
-  // outputs, and gpt-image-1 typography typos all leaked through. This call asks
-  // a vision LLM to confirm the design is on-niche, matches the brain's plan, and
-  // has no obvious typos. Failure → auto-dismiss before storagePut.
-  // Computed niche string matches the one used inside nicheExpertPlan.
-  const niche =
-    (typeof ws?.nicheProfile === "object" && ws?.nicheProfile !== null && typeof (ws.nicheProfile as any).summary === "string"
-      ? (ws.nicheProfile as any).summary.split(",")[0]
-      : null) ||
-    (ws?.nicheProfile as any)?.niche ||
-    promptDescription ||
-    "the niche";
-  const validation = await validateNicheOutput(transparentPng, editSpec, niche);
-  if (validation) {
-    console.log(
-      `[PatternProd] Validation pattern=${patternId}: relevance=${validation.nicheRelevance} matchesPlan=${validation.matchesPlan} hasTypo=${validation.hasTypo} shouldShip=${validation.shouldShip} text="${validation.textInImage.slice(0, 60)}"`
-    );
-    await updateTrendPatternValidationReport(patternId, validation);
-    if (!validation.shouldShip) {
-      const reason = `Output failed validation: ${validation.reasoning} (relevance=${validation.nicheRelevance}, matchesPlan=${validation.matchesPlan}, hasTypo=${validation.hasTypo})`;
-      console.log(`[PatternProd] AUTO-DISMISS pattern=${patternId} by validator: ${reason}`);
-      await updateTrendPatternStatus(patternId, "dismissed");
-      await recordRejectionSignal(patternId, reason, ["off_brand"]);
-      return { productionDesignUrl: null, previewImageUrl: null };
-    }
-  }
-  // (When validation is null — API/auth failure — fall through and ship anyway.
-  // Fail-open prevents transient infra issues from blocking production.)
 
   // Step 5: Upload transparent PNG as productionDesignUrl
   const prodKey = `pattern-production/${patternId}-${Date.now()}.png`;
