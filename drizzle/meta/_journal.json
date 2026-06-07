@@ -281,6 +281,13 @@
       "when": 1780866419064,
       "tag": "0039_shiny_mandroid",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "5",
+      "when": 1780869248180,
+      "tag": "0040_plain_red_shift",
+      "breakpoints": true
     }
   ]
 }

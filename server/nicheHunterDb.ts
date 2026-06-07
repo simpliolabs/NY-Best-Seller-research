@@ -2,7 +2,7 @@
  * Niche Hunter DB helpers — Phase E
  * Karpathy P2: only what the router and engine need. No speculative helpers.
  */
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, or, isNull, lt } from "drizzle-orm";
 import { getDb } from "./db";
 import { nicheScanRuns, trendPatterns } from "../drizzle/schema";
 import type { NicheScanRun, TrendPattern, InsertTrendPattern } from "../drizzle/schema";
@@ -255,17 +255,67 @@ export async function recordProductionFailure(
       .where(eq(trendPatterns.id, id));
     return { attempts, dismissed: true };
   }
-  // Not yet — bump the counter and let the next retryStuckPatterns poll try again
+  // Not yet — bump the counter and CLEAR the claim so the next poll can retry
+  // immediately (the 5-min staleness window only matters for crash recovery; on a
+  // clean failure we want the next 15s poll to pick it back up).
   await db.update(trendPatterns)
-    .set({ productionAttempts: attempts })
+    .set({ productionAttempts: attempts, claimedAt: null })
     .where(eq(trendPatterns.id, id));
   return { attempts, dismissed: false };
+}
+
+/**
+ * How long a production claim is held before it's considered stale and re-claimable.
+ * Covers the crash-recovery case: if a retryStuckPatterns worker is killed mid-process
+ * (Cloud Run container scale-down) it never clears its claim, so after this window the
+ * pattern becomes claimable again. On a clean failure recordProductionFailure clears
+ * the claim immediately, so this only bites on hard crashes.
+ */
+const CLAIM_STALE_MS = 5 * 60 * 1000;
+
+/**
+ * Atomically claim a stuck pattern for production processing.
+ *
+ * Single conditional UPDATE: set claimedAt=now WHERE id matches AND the pattern is
+ * currently unclaimed (claimedAt NULL or older than CLAIM_STALE_MS). InnoDB serializes
+ * row-level UPDATEs, so of two concurrent claimers exactly one matches the WHERE and
+ * gets affectedRows=1; the other sees the fresh claimedAt and gets affectedRows=0.
+ * Because the new timestamp always differs from the prior value, "matched" implies
+ * "changed" — affectedRows===1 reliably signals a won claim under any mysql2 flag.
+ *
+ * Returns true if THIS caller won the claim (and must process the pattern), false if
+ * another concurrent caller already holds it (skip).
+ *
+ * Fixes the duplicate-processing race: overlapping retryStuckPatterns polls used to
+ * grab the same pattern and run it 2-3x (duplicate gpt-image-1 cost + contradictory
+ * validationReport-vs-status rows). PO-confirmed 2026-06-07.
+ */
+export async function claimProductionPattern(id: string, now: Date): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const staleCutoff = new Date(now.getTime() - CLAIM_STALE_MS);
+  const res = await db
+    .update(trendPatterns)
+    .set({ claimedAt: now })
+    .where(
+      and(
+        eq(trendPatterns.id, id),
+        or(isNull(trendPatterns.claimedAt), lt(trendPatterns.claimedAt, staleCutoff))
+      )
+    );
+  // mysql2 returns [ResultSetHeader, FieldPacket[]]; ResultSetHeader.affectedRows
+  const affected = (res as unknown as Array<{ affectedRows?: number }>)?.[0]?.affectedRows ?? 0;
+  return affected === 1;
 }
 
 /**
  * Get patterns that have a sourceImageUrl but no productionDesignUrl.
  * Used by the retry endpoint to process stuck production jobs one at a time.
  * Returns oldest-first so earlier scans are resolved before newer ones.
+ *
+ * Excludes patterns with a FRESH claim (claimedAt within CLAIM_STALE_MS) so concurrent
+ * retryStuckPatterns polls don't even surface an in-flight pattern as a candidate. This
+ * narrows the race window; claimProductionPattern() is the actual atomic guard.
  */
 export async function getStuckProductionPatterns(
   workspaceId: string,
@@ -278,10 +328,16 @@ export async function getStuckProductionPatterns(
     .from(trendPatterns)
     .where(eq(trendPatterns.workspaceId, workspaceId))
     .orderBy(desc(trendPatterns.createdAt));
+  const staleCutoffMs = Date.now() - CLAIM_STALE_MS;
+  const isFreshlyClaimed = (r: TrendPattern) =>
+    r.claimedAt != null && new Date(r.claimedAt).getTime() >= staleCutoffMs;
   // Filter in JS: has sourceImageUrl but no productionDesignUrl
   // Exclude dismissed: auto-dismissed-on-no-fit patterns intentionally have null
   // productionDesignUrl and must NOT be re-picked (would cause an infinite re-process loop).
-  return rows.filter(r => r.sourceImageUrl && !r.productionDesignUrl && r.status !== "dismissed").slice(0, limit);
+  // Exclude freshly-claimed: another worker is processing it right now.
+  return rows
+    .filter(r => r.sourceImageUrl && !r.productionDesignUrl && r.status !== "dismissed" && !isFreshlyClaimed(r))
+    .slice(0, limit);
 }
 
 /**

@@ -453,6 +453,16 @@ export const trendPatterns = mysqlTable("trend_patterns", {
    *  a permanently-failing pattern was stuck for 4 hours because retryStuckPatterns logged
    *  the error but never gave up). Default 0 = fresh budget on insert. */
   productionAttempts: int("productionAttempts").default(0).notNull(),
+  /** Concurrency lease for retryStuckPatterns. The frontend polls retryStuckPatterns
+   *  every 15s but each call takes minutes, so polls overlap and used to grab the SAME
+   *  stuck pattern concurrently — processing it 2-3x (duplicate gpt-image-1 cost) and
+   *  producing contradictory validationReport-vs-status rows (PO-confirmed 2026-06-07).
+   *  A pattern is atomically claimed (claimedAt = now via conditional UPDATE) before
+   *  processing; concurrent claimers see affectedRows=0 and skip it. Cleared on
+   *  non-dismiss failure (immediate retry) and ignored once productionDesignUrl is set
+   *  or status=dismissed (pattern leaves the queue). A 5-min staleness window lets a
+   *  pattern recover if its claimer was killed mid-process (Cloud Run). */
+  claimedAt: timestamp("claimedAt"),
   /** Array of per-shirt-color previews. Each entry is the productionDesignUrl composited
    *  onto one workspace mockup template, with shirt-aware halftone+knockout tuned to that
    *  template's colorHex (so the design integrates with the fabric instead of looking like

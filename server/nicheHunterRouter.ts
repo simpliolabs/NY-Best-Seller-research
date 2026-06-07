@@ -24,6 +24,7 @@ import {
   getStuckProductionPatterns,
   countStuckProductionPatterns,
   recordProductionFailure,
+  claimProductionPattern,
   updateScanRun,
 } from "./nicheHunterDb";
 import { runNicheHunterScan } from "./nicheHunter";
@@ -318,8 +319,22 @@ export const nicheHunterRouter = router({
       // On failure we increment productionAttempts; after MAX_PRODUCTION_ATTEMPTS the
       // pattern is auto-dismissed (rejectionTags=['transfer_failed']) so it stops
       // re-entering the queue forever. Fixes the 4-hour stuck case Manus PO confirmed.
+      //
+      // Each pattern is ATOMICALLY CLAIMED before processing. The frontend polls every
+      // 15s but each call takes minutes, so polls overlap; without the claim, two calls
+      // grab the same pattern and run it 2-3x (duplicate gpt-image-1 cost + contradictory
+      // validationReport-vs-status rows, PO-confirmed 2026-06-07). claimProductionPattern
+      // is a conditional UPDATE — only one concurrent caller wins; the rest skip.
       const MAX_PRODUCTION_ATTEMPTS = 3;
+      const now = new Date();
+      const processedIds: string[] = [];
       await Promise.all(stuck.map(async (pattern) => {
+        const won = await claimProductionPattern(pattern.id, now);
+        if (!won) {
+          console.log(`[retryStuckPatterns] ⏭️  Pattern ${pattern.id} already claimed by another worker — skipping`);
+          return;
+        }
+        processedIds.push(pattern.id);
         const promptDesc = (pattern as any).promptDescription ?? pattern.adaptedConcept ?? "";
         try {
           await processPatternProduction(
@@ -349,8 +364,9 @@ export const nicheHunterRouter = router({
         }
       }));
       const remaining = await countStuckProductionPatterns(input.workspaceId);
-      // `processed` retained as a single id for backward compat with the frontend
-      // poller — using the first pattern in the batch so logs remain readable.
-      return { processed: stuck[0].id, remaining };
+      // `processed` = first pattern we actually claimed+processed this call (null if all
+      // were already claimed by overlapping workers). Frontend uses it only as a liveness
+      // signal; remaining drives whether it keeps polling.
+      return { processed: processedIds[0] ?? null, remaining };
     }),
 });
