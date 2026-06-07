@@ -165,6 +165,28 @@ export async function updateTrendPatternDtfUrl(
 }
 
 /**
+ * Persist the vision-LLM validation report for a pattern. Run AFTER assertTransparentPng
+ * and BEFORE storagePut so we can auto-dismiss bad outputs without writing them as
+ * approved-looking assets. See ValidationReport in patternProductionProcessor.ts.
+ */
+export async function updateTrendPatternValidationReport(
+  id: string,
+  report: {
+    nicheRelevance: number;
+    matchesPlan: boolean;
+    textInImage: string;
+    textMatchesPlan: boolean;
+    hasTypo: boolean;
+    shouldShip: boolean;
+    reasoning: string;
+  }
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(trendPatterns).set({ validationReport: report }).where(eq(trendPatterns.id, id));
+}
+
+/**
  * Update the per-shirt-color preview gallery for a pattern. Each entry is one
  * mockup template's composite preview, halftoned for that template's shirt color.
  * PO insight: halftone is shirt-color-dependent, so each shirt gets its own preview.

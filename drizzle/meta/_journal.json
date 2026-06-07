@@ -274,6 +274,13 @@
       "when": 1780780004916,
       "tag": "0038_same_lady_deathstrike",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "5",
+      "when": 1780866419064,
+      "tag": "0039_shiny_mandroid",
+      "breakpoints": true
     }
   ]
 }

@@ -460,6 +460,22 @@ export const trendPatterns = mysqlTable("trend_patterns", {
    *  the shirt color show through, so each template gets its own tuned preview.
    *  Null on legacy patterns; previewImageUrl above stays populated for backward UI compat. */
   previewImageUrls: json("previewImageUrls").$type<Array<{ templateId: string; colorHex: string; colorName: string; previewUrl: string }>>(),
+  /** Output validation report — vision-LLM audit of the generated design BEFORE storagePut.
+   *  Catches the failure modes the existing pipeline didn't notice: off-niche designs
+   *  scoring high (Don't Be Afraid dandelion scored 85), gpt-image-1 typography typos
+   *  (PART/PARK, RFICHEN/KITCHEN), and brain-plan vs image-output drift (raccoon image
+   *  labeled T-Rex). When shouldShip=false the pattern is auto-dismissed before
+   *  storagePut. Foundational fix — every layer of the pipeline was trusting the
+   *  previous layer's output without verification. */
+  validationReport: json("validationReport").$type<{
+    nicheRelevance: number;
+    matchesPlan: boolean;
+    textInImage: string;
+    textMatchesPlan: boolean;
+    hasTypo: boolean;
+    shouldShip: boolean;
+    reasoning: string;
+  }>(),
 });
 
 export type TrendPattern = typeof trendPatterns.$inferSelect;

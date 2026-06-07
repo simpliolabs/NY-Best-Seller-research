@@ -55,6 +55,7 @@ import {
   updateTrendPatternPreviewUrls,
   updateTrendPatternProductionUrl,
   updateTrendPatternStatus,
+  updateTrendPatternValidationReport,
   recordRejectionSignal,
   getTrendPatternsByWorkspace,
 } from "./nicheHunterDb";
@@ -425,6 +426,140 @@ async function nicheExpertPlan(
     console.log(`[PatternProd] nicheExpertPlan editPrompt PREVIEW: "${spec.editPrompt.slice(0, 600)}${spec.editPrompt.length > 600 ? "…" : ""}"`);
   }
   return spec;
+}
+
+// ─── Step 4b: Output validation (foundational fix) ───────────────────────────
+
+/**
+ * Vision-LLM audit of the generated transparent design BEFORE storagePut.
+ *
+ * The original pipeline trusted every layer's output: brain plans X, gpt-image-1
+ * does Y, nothing notices the drift. PO observed all four failure modes on a
+ * single scan (2026-06-06):
+ *   1. Off-niche design ("Don't Be Afraid" dandelion) scoring 85 via rank LLM
+ *      (the rank LLM weights resonance + originality, not strict niche match)
+ *   2. gpt-image-1 typography typos ("DINK VALLEY NATIONAL PART" — PARK; "STAY
+ *      OUT OF THE RFICHEN" — KITCHEN). Known weakness on text >8 chars.
+ *   3. Brain-plan vs image-output drift: pattern card said "T-Rex pickleball
+ *      mascot on net" but the image showed a raccoon in flowers. The scan-time
+ *      brain metadata didn't match what gpt-image-1 actually produced.
+ *   4. Print-style flattening: vintage distressed source came out clean-vector.
+ *
+ * This auditor catches #1-#3 with one vision LLM call. (#4 is addressed by the
+ * style-lock prompt strengthening in commit 10581f3.)
+ *
+ * Returns null on API failure → fail-open: ship the design without a report
+ * rather than block production on transient infra issues.
+ */
+export type ValidationReport = {
+  nicheRelevance: number;     // 0-100, how well the design depicts the niche
+  matchesPlan: boolean;       // does the image match brain's bestMatch?
+  textInImage: string;        // OCR-style read of any visible text
+  textMatchesPlan: boolean;   // does the visible text match brain's intent AND is correctly spelled?
+  hasTypo: boolean;           // is any visible word obviously misspelled?
+  shouldShip: boolean;        // overall: ship to user or auto-dismiss?
+  reasoning: string;          // 1-2 sentences explaining the shouldShip decision
+};
+
+async function validateNicheOutput(
+  designPngBuf: Buffer,
+  spec: EditSpec,
+  niche: string
+): Promise<ValidationReport | null> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    console.warn("[Validator] OPENAI_API_KEY missing — skipping validation");
+    return null;
+  }
+  const dataUri = `data:image/png;base64,${designPngBuf.toString("base64")}`;
+  const brainModel = process.env.BRAIN_MODEL || "gpt-5";
+
+  const systemPrompt = [
+    `You are a quality auditor for print-on-demand designs in the "${niche}" niche.`,
+    "",
+    "A brain LLM planned an adaptation of a hot-selling shirt design. An image-gen",
+    "model then produced the design. Your job is to check if the OUTPUT is shippable.",
+    "",
+    "BRAIN PLANNED THIS:",
+    `  bestMatch.type:  ${spec.bestMatch?.type ?? "(none)"}`,
+    `  bestMatch.item:  ${spec.bestMatch?.item ?? "(none)"}`,
+    `  bestMatch.why:   ${(spec.bestMatch?.why ?? "(no rationale)").slice(0, 200)}`,
+    "",
+    "INTENDED EDIT PROMPT (what image-gen was instructed to produce):",
+    spec.editPrompt.slice(0, 1000),
+    "",
+    "Look at the generated design image and return strict JSON:",
+    `  - nicheRelevance:   integer 0-100. Does the design clearly depict the "${niche}" niche?`,
+    "                       <60 = off-niche; >=60 = visibly on-niche.",
+    "  - matchesPlan:      true if the image clearly depicts the bestMatch.item subject.",
+    "                       false if the image shows a different subject than planned.",
+    "  - textInImage:      any visible words in the design (OCR-style read).",
+    "  - textMatchesPlan:  true if the text matches what the editPrompt asked for AND",
+    "                       every word is correctly spelled. false on ANY typo or off-plan text.",
+    "  - hasTypo:          true if any visible word is misspelled (PART vs PARK, RFICHEN vs KITCHEN).",
+    "  - shouldShip:       false if nicheRelevance < 60, OR hasTypo == true,",
+    "                       OR matchesPlan == false. Otherwise true.",
+    "  - reasoning:        1-2 sentences explaining your shouldShip decision (will be shown",
+    "                       to the human as the dismissal reason if shouldShip=false).",
+  ].join("\n");
+
+  const body = {
+    model: brainModel,
+    reasoning_effort: "low" as const, // simple yes/no check, no deep reasoning needed
+    messages: [
+      { role: "system", content: systemPrompt },
+      {
+        role: "user",
+        content: [
+          { type: "image_url" as const, image_url: { url: dataUri, detail: "low" as const } },
+          { type: "text" as const, text: "Audit this generated design and return the JSON." },
+        ],
+      },
+    ],
+    response_format: {
+      type: "json_schema" as const,
+      json_schema: {
+        name: "design_validation",
+        strict: true,
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            nicheRelevance: { type: "integer", minimum: 0, maximum: 100 },
+            matchesPlan: { type: "boolean" },
+            textInImage: { type: "string" },
+            textMatchesPlan: { type: "boolean" },
+            hasTypo: { type: "boolean" },
+            shouldShip: { type: "boolean" },
+            reasoning: { type: "string" },
+          },
+          required: ["nicheRelevance", "matchesPlan", "textInImage", "textMatchesPlan", "hasTypo", "shouldShip", "reasoning"],
+        },
+      },
+    },
+  };
+
+  try {
+    const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      console.warn(`[Validator] API error ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      return null;
+    }
+    const data = (await resp.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    const raw = (data.choices?.[0]?.message?.content ?? "").trim();
+    if (!raw) {
+      console.warn("[Validator] empty response");
+      return null;
+    }
+    return JSON.parse(raw.replace(/^```json\s*/i, "").replace(/\s*```$/i, "")) as ValidationReport;
+  } catch (e) {
+    console.warn(`[Validator] Failed:`, e instanceof Error ? e.message : e);
+    return null;
+  }
 }
 
 /**
@@ -839,6 +974,37 @@ export async function processPatternProduction(
 
   // Step 4: Validate transparency + content presence (throws on failure)
   await assertTransparentPng(transparentPng, patternId);
+
+  // Step 4b: OUTPUT VALIDATION — vision-LLM audit of the design vs brain's plan.
+  // Foundational fix replacing layer-by-layer patching: every prior layer trusted
+  // the next without verification, so brain-plan vs image-output drift, off-niche
+  // outputs, and gpt-image-1 typography typos all leaked through. This call asks
+  // a vision LLM to confirm the design is on-niche, matches the brain's plan, and
+  // has no obvious typos. Failure → auto-dismiss before storagePut.
+  // Computed niche string matches the one used inside nicheExpertPlan.
+  const niche =
+    (typeof ws?.nicheProfile === "object" && ws?.nicheProfile !== null && typeof (ws.nicheProfile as any).summary === "string"
+      ? (ws.nicheProfile as any).summary.split(",")[0]
+      : null) ||
+    (ws?.nicheProfile as any)?.niche ||
+    promptDescription ||
+    "the niche";
+  const validation = await validateNicheOutput(transparentPng, editSpec, niche);
+  if (validation) {
+    console.log(
+      `[PatternProd] Validation pattern=${patternId}: relevance=${validation.nicheRelevance} matchesPlan=${validation.matchesPlan} hasTypo=${validation.hasTypo} shouldShip=${validation.shouldShip} text="${validation.textInImage.slice(0, 60)}"`
+    );
+    await updateTrendPatternValidationReport(patternId, validation);
+    if (!validation.shouldShip) {
+      const reason = `Output failed validation: ${validation.reasoning} (relevance=${validation.nicheRelevance}, matchesPlan=${validation.matchesPlan}, hasTypo=${validation.hasTypo})`;
+      console.log(`[PatternProd] AUTO-DISMISS pattern=${patternId} by validator: ${reason}`);
+      await updateTrendPatternStatus(patternId, "dismissed");
+      await recordRejectionSignal(patternId, reason, ["off_brand"]);
+      return { productionDesignUrl: null, previewImageUrl: null };
+    }
+  }
+  // (When validation is null — API/auth failure — fall through and ship anyway.
+  // Fail-open prevents transient infra issues from blocking production.)
 
   // Step 5: Upload transparent PNG as productionDesignUrl
   const prodKey = `pattern-production/${patternId}-${Date.now()}.png`;
