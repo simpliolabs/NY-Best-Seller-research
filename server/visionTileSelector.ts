@@ -42,7 +42,7 @@ const BASE_SYSTEM_PROMPT = `You are a print-on-demand product classifier. Your O
 - Text designs using generic, undesigned system-font output (plain Arial/Helvetica with no stylistic treatment) — only reject these, NOT stylized typography
 
 === CRITICAL NON-GOAL ===
-You do NOT read or extract URLs from images. URLs are provided separately in the structured input. You ONLY judge whether each tile shows a graphic t-shirt design.
+You do NOT read or extract URLs from images. URLs are provided separately in the structured input. You judge whether each tile shows a graphic t-shirt design AND — per the NICHE CONTEXT below — whether it has a clean, easy conversion to the niche (the CONVERTIBILITY GATE). Both must be true to select.
 
 === OUTPUT RULES ===
 - Return ONLY the listing IDs of tiles you select
@@ -87,6 +87,21 @@ function buildNicheBlock(ctx: NicheContext | undefined): string {
     "- Designs locked to a specific historical/political moment or named figure",
     "  (e.g., Washington crossing the Delaware, presidential portraits, military",
     "  insignia). The cultural weight is non-transferable to most niches.",
+    "",
+    "★ CONVERTIBILITY GATE (the decisive test — select ONLY designs that are EASY to convert):",
+    "You are given HIGH-DETAIL images — actually READ the text and inspect the subject. Select a",
+    "tile ONLY if it has an OBVIOUS, CLEAN, one-step conversion to the niche, of one of these kinds:",
+    "  - TEXT / NUMBER / PUN swap (for TEXT-DRIVEN designs): read the design's words; it qualifies if",
+    "    a single number/word swap or a structure-preserving pun makes it niche text — e.g. a score",
+    "    '567.9' → '0-0-2', or 'VELOCIREADER' → 'VELOCIDINKER'. If you cannot read a clean swap in the",
+    "    text, it does NOT qualify on text grounds.",
+    "  - MASCOT swap (for ANIMAL/CHARACTER designs): the main subject is an animal/character that can",
+    "    become an on-brand mascot in the SAME pose/outfit/props/text (e.g. a cowboy frog → a cowboy",
+    "    llama). This qualifies EVEN IF no niche equipment is added — the mascot swap is the conversion.",
+    "  - OBJECT swap: a prominent object becomes a niche object (e.g. a moon → a pickleball).",
+    "REJECT (no clean conversion — common and correct) if making it niche would need inventing a new",
+    "scene, overlaying a generic niche theme on an unrelated design, or any forced/awkward stretch.",
+    "Most tiles will fail this gate — that is fine. Only pass the genuinely easy ones.",
     "=== END NICHE CONTEXT ===",
   );
   return lines.join("\n");
@@ -146,7 +161,11 @@ Return your selections as a JSON array of listing IDs.`;
 
   const imageBlocks: MessageContent[] = candidates.map((c) => ({
     type: "image_url" as const,
-    image_url: { url: c.thumbnailUrl, detail: "low" as const },
+    // detail:high (was low) — the selector now judges CONVERTIBILITY, which requires
+    // READING the design's text (number/word/pun swaps like 567.9→0-0-2,
+    // VELOCIREADER→VELOCIDINKER). Low detail can't reliably read text. Use the
+    // full-res image when available so text is legible; fall back to thumbnail.
+    image_url: { url: c.fullResUrl || c.thumbnailUrl, detail: "high" as const },
   }));
 
   const invokeAndParse = async (): Promise<{ selectedIds: string[]; rejectionNotes: string }> => {
