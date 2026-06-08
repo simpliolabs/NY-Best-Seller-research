@@ -356,20 +356,9 @@ function PatternCard({
                 />
               </div>
             )}
-            {/* Secondary: on-tee mockup thumbnail (only if different from production) */}
-            {pattern.productionDesignUrl && pattern.previewImageUrl && pattern.previewImageUrl !== pattern.productionDesignUrl && (
-              <div className="mt-2">
-                <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">On-Tee Preview</p>
-                <div className="rounded border border-border overflow-hidden w-20 h-20">
-                  <img
-                    src={pattern.previewImageUrl}
-                    alt="Mockup preview"
-                    className="w-full h-full object-cover"
-                  />
-                </div>
-              </div>
-            )}
-            <div className="hidden">legacy-fallback</div>
+            {/* On-Tee Preview thumbnail removed per PO 2026-06-08 — not needed.
+                Per-shirt previews live on the Mockups page; the niche-hunter card
+                shows only the production design. */}
             {/* Flag edit-mode result button */}
             {pattern.adaptationMode === "edit_source" && pattern.status === "discovered" && (
               <Button
