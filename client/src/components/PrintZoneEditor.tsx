@@ -31,12 +31,16 @@ interface PrintZoneEditorProps {
 
 type DragMode = "none" | "draw" | "move" | "resize-tl" | "resize-tr" | "resize-bl" | "resize-br";
 
-/** Default print AREA = maximum realistic ink envelope on the garment.
- * Design-independent: this is the largest area where any print could go.
- * Designs are contain-fit + top-anchored within this envelope at composite time.
- * 60% width × 50% height of garment, starting 10% below neckline. */
-const DEFAULT_ZONE: PrintZoneCoords = { x: 0.20, y: 0.10, width: 0.60, height: 0.50 };
+/** Default print zone = a realistic CHEST PRINT, photo-relative (the box IS the print size).
+ * 2026-06-08: was a giant 60%×50% "max ink envelope" which made designs fill the torso and
+ * extend to the belly (PO "off location"). The zone is now drawn directly as where+how-big
+ * the design prints (design centered + top-anchored inside it), so the default is a normal
+ * upper-chest print: ~36% wide × 26% tall, centered, starting just below the collar. */
+const DEFAULT_ZONE: PrintZoneCoords = { x: 0.32, y: 0.28, width: 0.36, height: 0.26 };
 const MIN_SIZE = 0.05; // minimum 5% of image dimension
+// A normal chest print is roughly this size; bigger reads as oversized (extends low).
+const OVERSIZE_WIDTH = 0.55;
+const OVERSIZE_HEIGHT = 0.42;
 
 export function PrintZoneEditor({
   imageUrl,
@@ -215,8 +219,10 @@ export function PrintZoneEditor({
       <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/50 rounded-lg px-3 py-2">
         <Move className="h-4 w-4 shrink-0" />
         <span>
-          Drag the rectangle to define the maximum print area (ink envelope). Designs will be
-          contain-fit and top-anchored within this area. Click outside to draw a new one.
+          Draw the box where your design should print — <strong>this box IS the print size</strong>.
+          The design is centered and pinned to the TOP of the box; a smaller box = a smaller print.
+          For a normal chest print, draw a box about a third of the shirt's width on the upper chest.
+          Click outside to draw a new one.
         </span>
       </div>
 
@@ -285,17 +291,12 @@ export function PrintZoneEditor({
       <div className="grid grid-cols-4 gap-2 text-xs font-mono text-muted-foreground bg-muted/30 rounded-lg px-3 py-2">
         <div>X: {(zone.x * 100).toFixed(1)}%</div>
         <div>Y: {(zone.y * 100).toFixed(1)}%</div>
-        <div className={zone.width < 0.50 ? "text-amber-500 font-bold" : ""}>W: {(zone.width * 100).toFixed(1)}%{zone.width < 0.50 ? " ⚠" : ""}</div>
-        <div>H: {(zone.height * 100).toFixed(1)}%</div>
+        <div className={zone.width > OVERSIZE_WIDTH ? "text-amber-500 font-bold" : ""}>W: {(zone.width * 100).toFixed(1)}%{zone.width > OVERSIZE_WIDTH ? " ⚠" : ""}</div>
+        <div className={zone.height > OVERSIZE_HEIGHT ? "text-amber-500 font-bold" : ""}>H: {(zone.height * 100).toFixed(1)}%{zone.height > OVERSIZE_HEIGHT ? " ⚠" : ""}</div>
       </div>
-      {zone.width < 0.50 && (
+      {(zone.width > OVERSIZE_WIDTH || zone.height > OVERSIZE_HEIGHT) && (
         <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-          ⚠ Area width is {Math.round(zone.width * 100)}% — recommended minimum is 50%. This is the max ink envelope; designs are contain-fit inside it. Aim for 50–65% of garment width.
-        </div>
-      )}
-      {zone.height > 0.60 && (
-        <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-          ⚠ Area height is {Math.round(zone.height * 100)}% — exceeds typical max print envelope (50%). Designs are top-anchored so excess height adds empty space below, not navel-drift.
+          ⚠ This box is large ({Math.round(zone.width * 100)}% × {Math.round(zone.height * 100)}%) — the design will print big and extend low on the shirt. A normal chest print is roughly 30–45% wide × 22–35% tall. Shrink the box for a smaller, higher print.
         </div>
       )}
 
