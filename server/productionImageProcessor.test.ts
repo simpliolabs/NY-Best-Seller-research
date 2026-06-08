@@ -378,10 +378,13 @@ describe("buildEditPrompt — assembles the brain prompt + guardrails", () => {
     expect(p).toContain("wicker placemat");
     expect(p).toContain("printed INTO the fabric");
   });
-  it("appends the DTF print constraint", () => {
+  it("does NOT inject a DTF bold-shapes print constraint (source style is preserved)", () => {
+    // PO directive 2026-06-07: the blanket DTF "bold solid shapes only, no halftone"
+    // constraint was removed — it flattened painterly/photographic sources. Print
+    // style is now preserved from the source; halftone is a per-design opt-in.
     const p = buildEditPrompt(SAMPLE_SPEC, []);
-    expect(p).toContain("PRINT CONSTRAINT (DTF)");
-    expect(p).toContain("bold, solid shapes only");
+    expect(p).not.toContain("PRINT CONSTRAINT (DTF)");
+    expect(p).not.toContain("bold, solid shapes only");
   });
   it("appends the AVOID block when there are rejection reasons", () => {
     const p = buildEditPrompt(SAMPLE_SPEC, ["salt shaker again", "too generic"]);
@@ -394,9 +397,10 @@ describe("buildEditPrompt — assembles the brain prompt + guardrails", () => {
   });
   it("handles SKIP spec (empty editPrompt) without crashing", () => {
     // Defensive: buildEditPrompt should never be called for a skip in the orchestrator,
-    // but if it is, return only the guardrails — no brain prompt to emit.
+    // but if it is, it must not crash. With the DTF constraint removed and no AVOID
+    // list, an empty editPrompt yields an empty string (nothing to emit).
     const p = buildEditPrompt(SKIP_SPEC, []);
-    expect(p).toContain("PRINT CONSTRAINT (DTF)");
+    expect(p).toBe("");
     expect(p).not.toContain("Edit this t-shirt mockup");
   });
 });

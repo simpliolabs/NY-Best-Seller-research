@@ -577,20 +577,25 @@ async function validateNicheOutput(
  * The brain (nicheExpertPlan) does the heavy lifting: it looks at the source image,
  * consults the knowledge base, and writes the SCENE/EDIT/NEW-DESIGN/STYLE/PRESERVATION
  * recipe directly — the way a human craftsperson writes one rich prompt to ChatGPT.
- * This function just adds the cross-cutting concerns the brain shouldn't know about:
- * the AVOID list (from prior rejections) and the DTF print constraint (printability).
- * No more structured-spec-to-prose templating — that template flattened the per-image
- * specificity which is exactly what Kontext needs to preserve composition.
+ * This function just adds the cross-cutting concern the brain shouldn't know about:
+ * the AVOID list (from prior rejections).
+ *
+ * The DTF "bold solid shapes only, no halftone" print constraint was REMOVED
+ * (PO directive 2026-06-07). It blanket-forced every design toward flat bold
+ * shapes, which flattened painterly/photographic sources — the opposite of the
+ * ground-truth transfers (the raccoon-pickleball keeps its painterly glow and
+ * gradients). Print-style is now PRESERVED FROM THE SOURCE: a painterly source
+ * stays painterly, a flat-cartoon source stays flat. DTF-printability for
+ * block-heavy designs is handled later by the OPT-IN halftone step (applied per
+ * design when the PO chooses it), not by constraining generation up front.
  */
 export function buildEditPrompt(spec: EditSpec, avoid: string[] = [], _product: string = "t-shirt"): string {
-  const dtf = "PRINT CONSTRAINT (DTF): the printed graphic must use bold, solid shapes only — no thin hairlines, stipple, halftone, or small scattered dots; any rain/sparkle/texture must be a few BOLD solid strokes or omitted entirely.";
   const avoidLine = avoid.length
     ? `AVOID (these were rejected on previous designs in this shop; do NOT repeat them): ${avoid.join("; ")}.`
     : null;
   return [
     (spec.editPrompt || "").trim(),
     ...(avoidLine ? [avoidLine] : []),
-    dtf,
   ].filter(Boolean).join("\n\n");
 }
 
@@ -1026,11 +1031,14 @@ export async function processPatternProduction(
   await updateTrendPatternProductionUrl(patternId, productionDesignUrl);
   console.log(`[PatternProd] productionDesignUrl: ${productionDesignUrl}`);
 
-  // Step 6: Composite onto EVERY workspace template, each with shirt-aware halftone
-  // tuned to that template's colorHex. PO insight: halftone effect is shirt-color-
-  // dependent — the dot pattern lets the shirt color show through, so each template
-  // needs its own tuned preview. Result: one productionDesignUrl (the smooth master)
-  // + N previews (one per shirt color, each halftoned for that shirt).
+  // Step 6: Composite onto EVERY workspace template — FAITHFULLY (no halftone by
+  // default). PO directive 2026-06-07: halftone is OPT-IN, only for block-heavy
+  // designs (e.g. the solid dark mass behind the raccoons), NOT forced on every
+  // design — it would flatten painterly/photographic sources. So the default
+  // preview places the design faithfully on each shirt; the per-design halftone
+  // opt-in (a toggle that re-composites with shirt-aware halftone) is a separate
+  // step. The applyShirtAwareHalftone path in mockupCompositor stays available for
+  // that opt-in — it's just not invoked here.
   let previewImageUrl: string = productionDesignUrl; // legacy single-preview, populated with first composite
   const previewImageUrls: Array<{ templateId: string; colorHex: string; colorName: string; previewUrl: string }> = [];
   try {
@@ -1049,7 +1057,8 @@ export async function processPatternProduction(
             designUrl: productionDesignUrl,
             mockupUrl: template.imageUrl,
             printZone,
-            shirtColorHex: template.colorHex, // ← drives shirt-aware halftone in the compositor
+            // shirtColorHex intentionally omitted — no forced halftone. Faithful
+            // placement by default; halftone is the per-design opt-in (PO 2026-06-07).
           });
           const safeColorName = template.colorName.replace(/[^a-zA-Z0-9_-]+/g, "_");
           const previewKey = `pattern-preview/${patternId}-${safeColorName}-${Date.now()}.webp`;
