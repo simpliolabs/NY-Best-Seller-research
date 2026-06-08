@@ -45,10 +45,9 @@ const BASE_SYSTEM_PROMPT = `You are a print-on-demand product classifier. Your O
 You do NOT read or extract URLs from images. URLs are provided separately in the structured input. You judge whether each tile shows a graphic t-shirt design AND — per the NICHE CONTEXT below — whether it has a clean, easy conversion to the niche (the CONVERTIBILITY GATE). Both must be true to select.
 
 === OUTPUT RULES ===
-- Return ONLY the listing IDs of tiles you select
-- Select between 2 and 6 tiles per batch (aim for quality over quantity)
-- If fewer than 2 tiles qualify, return an empty array — do NOT lower your standards
-- If you are uncertain about a tile, reject it (false negatives are acceptable; false positives waste downstream LLM calls)`;
+- For EACH tile you select, return its listing ID AND a one-sentence \`conversion\`: the EXACT single-step swap that makes it niche — e.g. "write DINK on the can the raccoon holds", "swap the frog for a llama in the same pose/outfit", "change the score 567.9 to 0-0-2". If you cannot write a concrete, specific one-step conversion, you are NOT allowed to select the tile. A vague conversion ("make it pickleball themed", "add pickleball elements") is NOT a conversion — reject the tile.
+- Select 0 to 6 tiles per batch. Returning ZERO is a great and common answer — most batches contain few or no clean fits. There is NO minimum and NO quota; never select a marginal tile to "fill" the batch.
+- Be RUTHLESS. Every tile you pass downstream costs real money: a vision-brain reasoning call AND an image generation. A bad-fit selection wastes both AND produces a junk product. When you are anything less than confident the conversion is clean and obvious, REJECT.`;
 
 /**
  * Build a niche-aware addition to the base system prompt. Adds PREFER + ALSO REJECT
@@ -101,6 +100,13 @@ function buildNicheBlock(ctx: NicheContext | undefined): string {
     "  - OBJECT swap: a prominent object becomes a niche object (e.g. a moon → a pickleball).",
     "REJECT (no clean conversion — common and correct) if making it niche would need inventing a new",
     "scene, overlaying a generic niche theme on an unrelated design, or any forced/awkward stretch.",
+    "★ SPECIFICALLY REJECT — DECORATIVE-MOTIF + LIFESTYLE-TEXT designs: an inspirational/lifestyle",
+    "  phrase set over an unrelated decorative illustration (dandelion, florals, feathers, butterflies,",
+    "  mountains, sunsets, waves, trees). Swapping the phrase to a niche pun leaves NICHE WORDS ON",
+    "  UNRELATED ART = incoherent. Example failure: a dandelion 'just breathe' tee → 'Find Your Dink",
+    "  Center' is NOT a clean fit — the dandelion has nothing to do with the niche, so the result reads",
+    "  as a yoga design with odd text. A TEXT/word swap is clean ONLY when the design is TEXT-DRIVEN",
+    "  (typography is the hero on a plain/neutral background) OR the imagery itself is niche-convertible.",
     "Most tiles will fail this gate — that is fine. Only pass the genuinely easy ones.",
     "=== END NICHE CONTEXT ===",
   );
@@ -117,17 +123,28 @@ const RESPONSE_FORMAT = {
     schema: {
       type: "object",
       properties: {
-        selectedListingIds: {
+        selections: {
           type: "array",
-          items: { type: "string" },
-          description: "Listing IDs of tiles that show graphic t-shirt designs",
+          description: "Tiles selected. Each REQUIRES a concrete one-step conversion; if you can't name one, don't include the tile.",
+          items: {
+            type: "object",
+            properties: {
+              listingId: { type: "string", description: "Listing ID of the selected tile" },
+              conversion: {
+                type: "string",
+                description: "The EXACT single-step swap that makes this tile niche (e.g. 'write DINK on the can', 'swap frog for llama in same pose'). Must be concrete — vague themes are not allowed.",
+              },
+            },
+            required: ["listingId", "conversion"],
+            additionalProperties: false,
+          },
         },
         rejectionNotes: {
           type: "string",
           description: "Brief note on why rejected tiles were excluded (for logging)",
         },
       },
-      required: ["selectedListingIds", "rejectionNotes"],
+      required: ["selections", "rejectionNotes"],
       additionalProperties: false,
     },
   },
@@ -147,17 +164,19 @@ export async function selectGraphicTeeTiles(
   const candidateIdSet = new Set(candidates.map((c) => c.listingId));
   const systemPrompt = BASE_SYSTEM_PROMPT + buildNicheBlock(nicheContext);
   const nicheNote = nicheContext?.niche
-    ? ` Target niche for downstream adaptation: "${nicheContext.niche}". When more than 6 tiles qualify, PREFER the ones with the strongest niche-fit per the NICHE CONTEXT block above.`
+    ? ` Target niche for downstream adaptation: "${nicheContext.niche}". Per the NICHE CONTEXT + CONVERTIBILITY GATE below, select ONLY tiles for which you can name a concrete one-step conversion. Selecting zero is fine.`
     : "";
 
   const userText = `Here are ${candidates.length} Etsy search result tiles from the "${category}" category. For each tile I provide: the listing ID, title, and the product thumbnail image.
 
 Select which tiles show GRAPHIC T-SHIRT DESIGNS suitable for print-on-demand pattern extraction. Reject digital downloads, non-apparel, unclear images, and generic undesigned text. Typography-driven designs with stylistic treatment ARE valid — select them.${nicheNote}
 
+For every tile you select you MUST provide its \`conversion\` — the exact one-step swap that makes it niche. If you can't name one, don't select it. No quota: returning zero selections is a good answer when nothing is a clean fit.
+
 Tiles:
 ${candidates.map((c, i) => `[${i + 1}] ID: ${c.listingId} | Title: "${c.title}"`).join("\n")}
 
-Return your selections as a JSON array of listing IDs.`;
+Return your selections as JSON: each selected tile's listingId AND its concrete one-step conversion, plus brief rejectionNotes.`;
 
   const imageBlocks: MessageContent[] = candidates.map((c) => ({
     type: "image_url" as const,
@@ -182,24 +201,33 @@ Return your selections as a JSON array of listing IDs.`;
 
     const contentVal = response.choices?.[0]?.message?.content ?? "";
     const raw = typeof contentVal === "string" ? contentVal : JSON.stringify(contentVal);
-    let parsed: { selectedListingIds: string[]; rejectionNotes: string };
+    let parsed: { selections: Array<{ listingId: string; conversion: string }>; rejectionNotes: string };
     try {
       parsed = JSON.parse(raw);
     } catch {
       throw new Error(`LLM returned malformed JSON: ${raw.slice(0, 200)}`);
     }
 
-    if (!Array.isArray(parsed.selectedListingIds)) {
-      throw new Error(`selectedListingIds is not an array: ${raw.slice(0, 200)}`);
+    if (!Array.isArray(parsed.selections)) {
+      throw new Error(`selections is not an array: ${raw.slice(0, 200)}`);
     }
 
-    // Filter out hallucinated IDs (IDs not in the input set)
-    const validIds = parsed.selectedListingIds.filter((id) => candidateIdSet.has(id));
+    // Keep only tiles with a real ID AND a concrete conversion (a named one-step swap
+    // is REQUIRED to select — drop any selection missing/empty conversion).
+    const validSelections = parsed.selections
+      .filter((s) => s && candidateIdSet.has(s.listingId) && typeof s.conversion === "string" && s.conversion.trim().length > 0)
+      .slice(0, 6);
+    const validIds = validSelections.map((s) => s.listingId);
 
-    // Cap at 6 per plan
-    const cappedIds = validIds.slice(0, 6);
+    // Log the named conversion for each pick — accountability + debuggability.
+    if (validSelections.length) {
+      console.log(
+        `[VisionTileSelector] "${category}" selected ${validIds.length}: ` +
+          validSelections.map((s) => `${s.listingId} → ${s.conversion}`).join(" | ")
+      );
+    }
 
-    return { selectedIds: cappedIds, rejectionNotes: parsed.rejectionNotes ?? "" };
+    return { selectedIds: validIds, rejectionNotes: parsed.rejectionNotes ?? "" };
   };
 
   // Attempt with one retry on failure
