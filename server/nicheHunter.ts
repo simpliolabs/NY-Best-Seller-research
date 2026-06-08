@@ -1227,6 +1227,10 @@ export async function runNicheHunterScan(
         // Style-Faithful Pipeline fields
         sourceStyleJson: sourceStyle as Record<string, unknown> | null,
         adaptationMode: mode,
+        // Curated mode: mark "awaiting concept choice" ATOMICALLY at insert so the
+        // background straggler-drain (retryStuckPatterns) can never auto-generate it
+        // during the window before scan-end concept proposals are written.
+        awaitingConcept: conceptMode === "curated",
       });
 
       if (isTransferValid) {

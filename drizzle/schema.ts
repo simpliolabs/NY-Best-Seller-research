@@ -499,6 +499,14 @@ export const trendPatterns = mysqlTable("trend_patterns", {
    *  nicheExpertPlan so it writes the edit prompt FOR this concept instead of
    *  re-choosing. Null until the human chooses (or in auto mode). */
   chosenConcept: text("chosenConcept"),
+  /** Curated mode race-guard (PO-confirmed bug 2026-06-08): set TRUE atomically at
+   *  pattern creation in a curated scan, so retryStuckPatterns excludes it from
+   *  auto-generation from the very first instant. Concept options are proposed at
+   *  scan-END, so a curated pattern exists option-less for minutes during the scan;
+   *  without this flag, the background straggler-drain grabbed and auto-generated it
+   *  before its options were set. Stays true; the `!chosenConcept` guard makes it
+   *  eligible again once the human picks. False for all auto-mode patterns. */
+  awaitingConcept: boolean("awaitingConcept").default(false).notNull(),
 });
 
 export type TrendPattern = typeof trendPatterns.$inferSelect;

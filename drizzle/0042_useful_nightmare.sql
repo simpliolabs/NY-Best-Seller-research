@@ -1,0 +1,1 @@
+ALTER TABLE `trend_patterns` ADD `awaitingConcept` boolean DEFAULT false NOT NULL;

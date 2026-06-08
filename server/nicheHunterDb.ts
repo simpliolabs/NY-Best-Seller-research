@@ -377,12 +377,18 @@ export async function getStuckProductionPatterns(
   const staleCutoffMs = Date.now() - CLAIM_STALE_MS;
   const isFreshlyClaimed = (r: TrendPattern) =>
     r.claimedAt != null && new Date(r.claimedAt).getTime() >= staleCutoffMs;
-  // Curated mode (Option C): a pattern with conceptOptions but no chosenConcept is
-  // AWAITING the human's pick — it must NOT be auto-generated. Once chosenConcept is
-  // set (human picked), it becomes eligible again (so a 524'd choose-and-generate
-  // gets finished by the retry path).
+  // Curated mode (Option C): a pattern awaiting the human's pick must NOT be
+  // auto-generated. The authoritative signal is awaitingConcept (set ATOMICALLY at
+  // insert in a curated scan — closes the race where the straggler-drain grabbed a
+  // pattern before its options were proposed at scan-end). The conceptOptions check
+  // is kept as a fallback for patterns created before the awaitingConcept column
+  // existed. Either way, once chosenConcept is set the pattern is eligible again
+  // (so a 524'd choose-and-generate gets finished by the retry path).
   const isAwaitingConceptChoice = (r: TrendPattern) =>
-    Array.isArray(r.conceptOptions) && r.conceptOptions.length > 0 && !r.chosenConcept;
+    !r.chosenConcept && (
+      r.awaitingConcept === true ||
+      (Array.isArray(r.conceptOptions) && r.conceptOptions.length > 0)
+    );
   // Filter in JS: has sourceImageUrl but no productionDesignUrl
   // Exclude dismissed: auto-dismissed-on-no-fit patterns intentionally have null
   // productionDesignUrl and must NOT be re-picked (would cause an infinite re-process loop).
@@ -409,7 +415,7 @@ export async function countStuckProductionPatterns(
   // "stuck" production work, they're waiting on a decision (mirrors getStuckProductionPatterns).
   return rows.filter(r =>
     r.sourceImageUrl && !r.productionDesignUrl && r.status !== "dismissed"
-    && !(Array.isArray(r.conceptOptions) && r.conceptOptions.length > 0 && !r.chosenConcept)
+    && !(!r.chosenConcept && (r.awaitingConcept === true || (Array.isArray(r.conceptOptions) && r.conceptOptions.length > 0)))
   ).length;
 }
 

@@ -295,6 +295,13 @@
       "when": 1780933345718,
       "tag": "0041_busy_rocket_racer",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "5",
+      "when": 1780935304872,
+      "tag": "0042_useful_nightmare",
+      "breakpoints": true
     }
   ]
 }
