@@ -48,8 +48,8 @@ import {
 import {
   compositeDesignOnMockup,
   DEFAULT_PRINT_AREA,
+  anchorForProductType,
 } from "./mockupCompositor";
-import { getGarmentBbox, resolveZoneToPhoto } from "./garmentDetector";
 import {
   updateTrendPatternImage,
   updateTrendPatternConcept,
@@ -1248,15 +1248,17 @@ export async function processPatternProduction(
       .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
     for (const group of sortedGroups) {
       const templates = await getMockupsByGroup(group.id);
-      const printAreaRelGarment = (group.printZone as { x: number; y: number; width: number; height: number } | null) ?? DEFAULT_PRINT_AREA;
+      // PHOTO-RELATIVE zone (the rectangle the human drew) — placed directly, no
+      // garment-box guessing. Per-type anchor: apparel = centered-to-top, objects = center.
+      const printZone = (group.printZone as { x: number; y: number; width: number; height: number } | null) ?? DEFAULT_PRINT_AREA;
+      const anchorY = anchorForProductType(group.productType);
       for (const template of templates) {
         try {
-          const garmentBbox = await getGarmentBbox(template.id, template.imageUrl);
-          const printZone = resolveZoneToPhoto(printAreaRelGarment, garmentBbox);
           const compositeBuffer = await compositeDesignOnMockup({
             designUrl: productionDesignUrl,
             mockupUrl: template.imageUrl,
             printZone,
+            anchorY,
             // shirtColorHex intentionally omitted — no forced halftone. Faithful
             // placement by default; halftone is the per-design opt-in (PO 2026-06-07).
           });

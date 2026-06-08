@@ -6,8 +6,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "./_core/trpc";
-import { compositeDesignOnMockup, DEFAULT_PRINT_AREA } from "./mockupCompositor";
-import { getGarmentBbox, resolveZoneToPhoto } from "./garmentDetector";
+import { compositeDesignOnMockup, DEFAULT_PRINT_AREA, anchorForProductType } from "./mockupCompositor";
 import { pickBestColors } from "./mockupColorMatcher";
 import {
   createMockupRender,
@@ -106,29 +105,25 @@ export const mockupRouter = router({
       }
 
       // 4. Get print area from product group (or use default).
-      // Print area = max ink envelope, expressed as fractions of the GARMENT bbox (not the photo).
+      // PHOTO-RELATIVE: the zone is the exact rectangle the human drew on the template
+      // (POD standard). No garment-box guessing — the design lands precisely where placed.
       const hasGroupZone = !!group.printZone;
-      const printAreaRelGarment = (group.printZone as { x: number; y: number; width: number; height: number } | null) ?? DEFAULT_PRINT_AREA;
+      const printZone = (group.printZone as { x: number; y: number; width: number; height: number } | null) ?? DEFAULT_PRINT_AREA;
+      // Per-type vertical anchor: apparel = centered-to-top, objects (mug/cup) = centered.
+      const anchorY = anchorForProductType(group.productType);
       if (!hasGroupZone) {
-        // The #1 cause of "design not in my placement zone": the group has no saved
-        // zone, so we fall back to the large centered DEFAULT. Surface it loudly +
-        // return a flag so the UI can prompt the user to draw a zone for this group.
-        console.warn(`[Mockup] Product group ${input.productGroupId} has NO saved printZone — using large centered DEFAULT_PRINT_AREA. Draw a print zone for this group for precise placement.`);
+        console.warn(`[Mockup] Product group ${input.productGroupId} has NO saved printZone — using DEFAULT. Draw a print zone for this group for precise placement.`);
       }
 
       // 5. Composite each template and store result
       const renders = [];
       for (const template of templates) {
         try {
-          // Detect garment bbox for this template (cached after first call)
-          const garmentBbox = await getGarmentBbox(template.id, template.imageUrl);
-          // Resolve print area from garment-relative to photo-relative
-          const printZone = resolveZoneToPhoto(printAreaRelGarment, garmentBbox);
-
           const compositeBuffer = await compositeDesignOnMockup({
             designUrl,
             mockupUrl: template.imageUrl,
             printZone,
+            anchorY,
           });
 
           // Upload to S3

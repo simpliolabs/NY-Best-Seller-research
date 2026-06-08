@@ -17,7 +17,6 @@ import {
   deleteMockupTemplate,
 } from "./productGroupDb";
 import { storagePut } from "./storage";
-import { getGarmentBbox, resolveZoneToPhoto, type GarmentBbox } from "./garmentDetector";
 
 const pricingTierSchema = z.object({
   sizes: z.array(z.string()),
@@ -90,34 +89,12 @@ export const productGroupRouter = router({
     )
     .mutation(async ({ input }) => {
       const { groupId, referenceTemplateId, ...data } = input;
-
-      // Convert photo-relative print zone to garment-relative if template reference provided
-      let printZoneToStore = data.printZone;
-      if (data.printZone && referenceTemplateId) {
-        try {
-          const templates = await getMockupsByGroup(groupId);
-          const refTemplate = templates.find(t => t.id === referenceTemplateId);
-          if (refTemplate) {
-            const garmentBbox = await getGarmentBbox(refTemplate.id, refTemplate.imageUrl);
-            // Inverse of resolveZoneToPhoto: convert photo-relative → garment-relative
-            printZoneToStore = {
-              x: (data.printZone.x - garmentBbox.x) / garmentBbox.width,
-              y: (data.printZone.y - garmentBbox.y) / garmentBbox.height,
-              width: data.printZone.width / garmentBbox.width,
-              height: data.printZone.height / garmentBbox.height,
-            };
-            // Clamp to 0-1 range
-            printZoneToStore.x = Math.max(0, Math.min(1, printZoneToStore.x));
-            printZoneToStore.y = Math.max(0, Math.min(1, printZoneToStore.y));
-            printZoneToStore.width = Math.min(1 - printZoneToStore.x, printZoneToStore.width);
-            printZoneToStore.height = Math.min(1 - printZoneToStore.y, printZoneToStore.height);
-            console.log(`[PrintZone] Converted photo-relative → garment-relative: ${JSON.stringify(printZoneToStore)}`);
-          }
-        } catch (err) {
-          // If garment detection fails, store as-is (legacy behavior)
-          console.warn("[PrintZone] Garment detection failed, storing photo-relative zone:", err);
-        }
-      }
+      // 2026-06-08 FOUNDATIONAL CHANGE: print zones are stored PHOTO-relative — the exact
+      // rectangle the human drew on the template (POD standard). The old photo→garment
+      // conversion (via the vision-LLM garment box) was removed; that box was unreliable
+      // (LLMs locate boxes poorly) and made placement off-center/off-location. Store as drawn.
+      void referenceTemplateId; // accepted for backward-compat but no longer used
+      const printZoneToStore = data.printZone;
 
       await updateProductGroup(groupId, {
         ...(data.name && { name: data.name }),

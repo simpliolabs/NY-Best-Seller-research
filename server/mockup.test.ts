@@ -207,22 +207,21 @@ describe("productGroup print zone", () => {
     ).rejects.toThrow();
   });
 
-  it("DEFAULT_PRINT_AREA is a large CENTERED fallback zone (2026-06-08 enlargement)", () => {
-    // The default is the FALLBACK used when a product group has no saved printZone.
-    // It was enlarged from a small/high 40%x32% top-anchored zone to a large centered
-    // zone, because the old default placed designs tiny near the collar (PO "designs
-    // not in the placement zone"). Now it must be centered both axes + sizeable.
+  it("DEFAULT_PRINT_AREA is a PHOTO-relative centered chest fallback (2026-06-08 foundational change)", () => {
+    // Print zones are now PHOTO-relative (fractions of the whole photo), not garment-bbox
+    // relative — the LLM garment-box detection was removed. This FALLBACK is a centered
+    // chest rectangle in photo coords for a flat-lay shirt (used only when a group has no
+    // drawn zone). Must be horizontally centered and sit in the upper-mid of the photo.
     const area = DEFAULT_PRINT_ZONE; // alias still exported for compat
-    // Centered horizontally AND vertically (with center-anchor placement, this puts
-    // the design dead-center of the garment).
     const centerX = area.x + area.width / 2;
-    const centerY = area.y + area.height / 2;
-    expect(centerX).toBeCloseTo(0.5, 1);
-    expect(centerY).toBeCloseTo(0.5, 1);
-    // Large: well beyond the old 40%x32% so un-zoned groups don't render tiny prints.
-    expect(area.width).toBeGreaterThanOrEqual(0.55);
-    expect(area.width).toBeLessThanOrEqual(0.75);
-    expect(area.height).toBeGreaterThanOrEqual(0.55);
-    expect(area.height).toBeLessThanOrEqual(0.80);
+    expect(centerX).toBeCloseTo(0.5, 1); // horizontally centered
+    // Upper-mid placement (chest), not full-photo: the print area is a sub-region.
+    expect(area.y).toBeGreaterThan(0.15);
+    expect(area.y + area.height).toBeLessThan(0.75); // doesn't run to the photo's bottom
+    // Photo-relative chest print is a modest centered rectangle, not the whole photo.
+    expect(area.width).toBeGreaterThanOrEqual(0.20);
+    expect(area.width).toBeLessThanOrEqual(0.45);
+    expect(area.height).toBeGreaterThanOrEqual(0.20);
+    expect(area.height).toBeLessThanOrEqual(0.45);
   });
 });

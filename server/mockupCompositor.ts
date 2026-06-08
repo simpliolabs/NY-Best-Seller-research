@@ -30,6 +30,11 @@ export interface CompositeConfig {
    *  a plastic decal. PO insight: halftone effect is shirt-color-dependent, so this
    *  belongs at composite time, not at production time. */
   shirtColorHex?: string;
+  /** Vertical placement of the design WITHIN the print zone. PO rule (2026-06-08):
+   *  apparel (worn) = "top" (centered horizontally, top-anchored so the print sits
+   *  upper-chest); objects (mug/cup/tumbler/tote/poster) = "center" (dead-centered).
+   *  Horizontal is ALWAYS centered. Defaults to "top" (apparel is the primary product). */
+  anchorY?: "top" | "center";
 }
 
 // 8×8 Bayer ordered-dither matrix (0..63). Used by applyShirtAwareHalftone.
@@ -114,23 +119,33 @@ export async function applyShirtAwareHalftone(
     .toBuffer();
 }
 
-/** Default print AREA — converged placement for realistic DTF/DTG mockups.
- * Expressed as fractions of the garment bbox (NOT the photo — Bug 3 lesson).
- * Geometry: 60% width × 68% height of garment, CENTERED (centerX/centerY ≈ 0.5).
- * FALLBACK ONLY — used when a product group has no saved printZone.
- * Was 40%×32% anchored 10% below the neckline; that small/high zone made designs
- * land tiny near the collar whenever a group's zone wasn't applied (2026-06-08:
- * PO "designs not in the placement zone" was this DEFAULT, not the saved group
- * zone — proven by side-by-side render). Enlarged + centered so un-zoned groups
- * still place a design sensibly mid-shirt. Set a per-group zone for precise control.
- * Placement within area: contain-fit + center-anchor.
+/** Default print AREA — PHOTO-RELATIVE fallback (fractions of the whole photo).
+ * 2026-06-08 FOUNDATIONAL CHANGE: print zones are now photo-relative (the exact
+ * rectangle the human draws on the template), NOT garment-bbox-relative. The old
+ * vision-LLM garment-box detection was removed — LLMs locate bounding boxes poorly
+ * (research: often wrong quadrant, ~13% IoU), which made placement off-center/off-
+ * location and was cached so it persisted. POD platforms (Printful/Printify) use
+ * fixed human-defined print areas; we now do the same.
+ * This DEFAULT is a sane centered chest rectangle in PHOTO coords for a flat-lay
+ * shirt — FALLBACK ONLY; draw a per-group zone for precise control. With anchorY
+ * "top" the design sits upper-mid chest; "center" dead-centers it.
  */
 export const DEFAULT_PRINT_AREA: PrintArea = {
-  x: 0.20,
-  y: 0.16,
-  width: 0.60,
-  height: 0.68,
+  x: 0.34,
+  y: 0.30,
+  width: 0.32,
+  height: 0.30,
 };
+
+// Apparel product types are worn on the body → the print is centered-to-TOP of the
+// chest. Everything else (mug, cup, tumbler, tote, poster, sticker) is an object →
+// the print is CENTERED on its surface. Unknown defaults to apparel (primary product).
+const APPAREL_PRODUCT_TYPES = ["t-shirt", "tee", "shirt", "hoodie", "sweatshirt", "tank", "crewneck", "long sleeve", "longsleeve", "apparel"];
+export function anchorForProductType(productType?: string | null): "top" | "center" {
+  const pt = (productType ?? "").toLowerCase().trim();
+  if (!pt) return "top";
+  return APPAREL_PRODUCT_TYPES.some((a) => pt.includes(a)) ? "top" : "center";
+}
 
 /** @deprecated Use DEFAULT_PRINT_AREA instead */
 export const DEFAULT_PRINT_ZONE = DEFAULT_PRINT_AREA;
@@ -530,19 +545,15 @@ export async function compositeDesignOnMockup(config: CompositeConfig): Promise<
     .resize(finalW, finalH, { fit: "fill", background: { r: 0, g: 0, b: 0, alpha: 0 } })
     .toBuffer();
 
-  // 6. Position design: CONTAIN-FIT, horizontally CENTERED + vertically TOP-ANCHORED.
-  // Placement decision history (do NOT flip again without explicit PO sign-off):
-  //   - originally top-anchor ("never drift toward the navel")
-  //   - 53fc5c6 switched to center-anchor (misread of a PO complaint)
-  //   - 2026-06-08 PO reaffirmed TOP-anchor looking at the centered render:
-  //     "Why are there margins on top and bottom?? I want them Centered but
-  //     justified to top." A wide design contain-fits to the zone WIDTH, so it's
-  //     shorter than a tall zone; center-anchor split the slack top+bottom. PO
-  //     wants the design's TOP edge pinned to the zone TOP, with all slack BELOW.
-  // The user draws the zone's TOP edge to control how high the print starts; the
-  // bottom slack is expected and correct (designs vary in aspect ratio).
-  const offsetX = zoneX + Math.round((zoneW - finalW) / 2); // center horizontally
-  const offsetY = zoneY;                                     // top-anchor: design top = zone top
+  // 6. Position design: CONTAIN-FIT, horizontally ALWAYS centered; vertical by anchorY.
+  // PO rule (2026-06-08): apparel = "top" (centered-to-top — print sits upper-chest);
+  //   objects (mug/cup/tumbler/tote/poster) = "center" (dead-centered on the surface).
+  // The print zone is now PHOTO-relative (the exact rectangle the human drew), so the
+  // design lands precisely where they placed it — no garment-box guessing.
+  const offsetX = zoneX + Math.round((zoneW - finalW) / 2); // center horizontally (always)
+  const offsetY = config.anchorY === "center"
+    ? zoneY + Math.round((zoneH - finalH) / 2) // center vertically (mugs/objects)
+    : zoneY;                                    // top-anchor (apparel) — design top = zone top
 
   // 7. Composite design onto mockup, output as WebP (compressed, max 1000x1000)
   const composite = sharp(mockupBuf)
