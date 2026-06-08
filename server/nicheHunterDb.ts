@@ -10,11 +10,14 @@ import { nanoid } from "nanoid";
 
 // ─── Scan Runs ────────────────────────────────────────────────────────────────
 
-export async function createScanRun(workspaceId: string): Promise<NicheScanRun> {
+export async function createScanRun(
+  workspaceId: string,
+  conceptMode: "auto" | "curated" = "auto"
+): Promise<NicheScanRun> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const id = nanoid();
-  await db.insert(nicheScanRuns).values({ id, workspaceId });
+  await db.insert(nicheScanRuns).values({ id, workspaceId, conceptMode });
   const row = await db.select().from(nicheScanRuns).where(eq(nicheScanRuns.id, id)).limit(1);
   if (!row[0]) throw new Error("Failed to create scan run");
   return row[0];
@@ -22,7 +25,7 @@ export async function createScanRun(workspaceId: string): Promise<NicheScanRun> 
 
 export async function updateScanRun(
   id: string,
-  fields: Partial<Pick<NicheScanRun, "status" | "progress" | "patternsFound" | "errorLog" | "completedAt" | "searchLog">>
+  fields: Partial<Pick<NicheScanRun, "status" | "progress" | "patternsFound" | "errorLog" | "completedAt" | "searchLog" | "conceptMode">>
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -162,6 +165,31 @@ export async function updateTrendPatternDtfUrl(
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.update(trendPatterns).set({ dtfImageUrl }).where(eq(trendPatterns.id, id));
+}
+
+/**
+ * Curated mode (PO Option C): store the 2-3 brain-proposed concept options for a
+ * pattern. The human picks one before any image is generated.
+ */
+export async function updateTrendPatternConceptOptions(
+  id: string,
+  conceptOptions: Array<{ title: string; summary: string }>
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(trendPatterns).set({ conceptOptions }).where(eq(trendPatterns.id, id));
+}
+
+/**
+ * Curated mode: record which concept the human chose (seeds production).
+ */
+export async function updateTrendPatternChosenConcept(
+  id: string,
+  chosenConcept: string
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(trendPatterns).set({ chosenConcept }).where(eq(trendPatterns.id, id));
 }
 
 /**
@@ -349,12 +377,19 @@ export async function getStuckProductionPatterns(
   const staleCutoffMs = Date.now() - CLAIM_STALE_MS;
   const isFreshlyClaimed = (r: TrendPattern) =>
     r.claimedAt != null && new Date(r.claimedAt).getTime() >= staleCutoffMs;
+  // Curated mode (Option C): a pattern with conceptOptions but no chosenConcept is
+  // AWAITING the human's pick — it must NOT be auto-generated. Once chosenConcept is
+  // set (human picked), it becomes eligible again (so a 524'd choose-and-generate
+  // gets finished by the retry path).
+  const isAwaitingConceptChoice = (r: TrendPattern) =>
+    Array.isArray(r.conceptOptions) && r.conceptOptions.length > 0 && !r.chosenConcept;
   // Filter in JS: has sourceImageUrl but no productionDesignUrl
   // Exclude dismissed: auto-dismissed-on-no-fit patterns intentionally have null
   // productionDesignUrl and must NOT be re-picked (would cause an infinite re-process loop).
   // Exclude freshly-claimed: another worker is processing it right now.
+  // Exclude awaiting-concept-choice: curated patterns waiting on the human.
   return rows
-    .filter(r => r.sourceImageUrl && !r.productionDesignUrl && r.status !== "dismissed" && !isFreshlyClaimed(r))
+    .filter(r => r.sourceImageUrl && !r.productionDesignUrl && r.status !== "dismissed" && !isFreshlyClaimed(r) && !isAwaitingConceptChoice(r))
     .slice(0, limit);
 }
 
@@ -370,7 +405,12 @@ export async function countStuckProductionPatterns(
     .select()
     .from(trendPatterns)
     .where(eq(trendPatterns.workspaceId, workspaceId));
-  return rows.filter(r => r.sourceImageUrl && !r.productionDesignUrl && r.status !== "dismissed").length;
+  // Exclude curated patterns awaiting the human's concept pick — they are not
+  // "stuck" production work, they're waiting on a decision (mirrors getStuckProductionPatterns).
+  return rows.filter(r =>
+    r.sourceImageUrl && !r.productionDesignUrl && r.status !== "dismissed"
+    && !(Array.isArray(r.conceptOptions) && r.conceptOptions.length > 0 && !r.chosenConcept)
+  ).length;
 }
 
 /**

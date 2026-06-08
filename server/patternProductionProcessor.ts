@@ -285,7 +285,8 @@ async function nicheExpertPlan(
   nicheProfile: any,
   fallbackNiche: string,
   product: string = "t-shirt",
-  avoid: string[] = []
+  avoid: string[] = [],
+  chosenConcept: string = ""
 ): Promise<EditSpec> {
   const knowledge = formatNicheKnowledge(nicheProfile);
   const niche =
@@ -316,6 +317,10 @@ async function nicheExpertPlan(
         content: [
           `You are an expert print-on-demand designer for the "${niche}" niche. A skilled human receives a simple intent and writes a single rich, image-model-ready prompt that produces a faithful edit on the first try. That is your job.`,
           "",
+          ...(chosenConcept ? [
+            `THE CONCEPT IS ALREADY CHOSEN by the PO: "${chosenConcept}". Do NOT pick a different one. Set canConvert=true and write the editPrompt + conceptSummary to realize THIS concept faithfully on the source; set bestMatch to the KB item it is built on. (Only set canConvert=false if the source genuinely cannot render this concept at all.)`,
+            "",
+          ] : []),
           `You are shown the ACTUAL source ${product} mockup image. Reason through three steps and respond as JSON:`,
           "  1. canConvert — STRICT GATE (read carefully): set TRUE only when BOTH conditions hold:",
           "       (a) The source contains a SPECIFIC concrete element you can name and swap (a character/animal you replace, an object you replace, source text whose niche-specific WORDS you swap in place); AND",
@@ -456,6 +461,118 @@ async function nicheExpertPlan(
     console.log(`[PatternProd] nicheExpertPlan editPrompt PREVIEW: "${spec.editPrompt.slice(0, 600)}${spec.editPrompt.length > 600 ? "…" : ""}"`);
   }
   return spec;
+}
+
+// ─── Curated mode: propose concept OPTIONS for the human to pick ──────────────
+
+export type ConceptOption = { title: string; summary: string };
+
+/**
+ * Curated mode (PO Option C, 2026-06-08): instead of the brain auto-picking ONE
+ * concept and generating, it proposes 2-3 DIVERSE, source-matched pickleball
+ * concepts for the human to choose from (the way the PO's manual ChatGPT flow
+ * offered options and they picked the llama). No editPrompt / no image — cheap.
+ *
+ * Reuses the same KB + rejection-learning as nicheExpertPlan, so the options are
+ * on-brand, varied (rotate the palette, don't repeat the safe default), and avoid
+ * the PO's past bad-transfer mistakes. Returns [] if the source can't convert.
+ */
+export async function proposeConcepts(
+  sourceImageUrl: string,
+  nicheProfile: any,
+  fallbackNiche: string,
+  product: string = "t-shirt",
+  avoid: string[] = []
+): Promise<ConceptOption[]> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured (proposeConcepts)");
+  const knowledge = formatNicheKnowledge(nicheProfile);
+  const niche =
+    (typeof nicheProfile?.summary === "string" && nicheProfile.summary.split(",")[0]) ||
+    nicheProfile?.niche || fallbackNiche || "the niche";
+  const brainModel = process.env.BRAIN_MODEL || "gpt-5";
+
+  const system = [
+    `You are an expert print-on-demand designer for the "${niche}" niche. Look at the ACTUAL source ${product} image and propose THREE distinct concept options for adapting it to ${niche} — the kind a human would choose between.`,
+    "",
+    "Each option must:",
+    "  - FULLY re-theme the source into the niche (not a surface word-swap that keeps the source's theme).",
+    "  - Use a SPECIFIC, named item from the knowledge base (a mascot, a real catchphrase, a transferable concept) — and across the three options, USE DIFFERENT KB items (rotate the palette; don't propose three variations of the same phrase).",
+    "  - Reuse the source's composition/structure (pose, count, layout) with only the identity changed.",
+    "  - Render accurate niche detail (e.g. pickleball paddles are rectangular, balls are perforated).",
+    "",
+    "=== NICHE KNOWLEDGE BASE (your ONLY creative palette) ===",
+    knowledge || `Niche: ${niche}.`,
+    "=== END KNOWLEDGE BASE ===",
+    ...(avoid.length ? [
+      "",
+      "=== LEARN FROM THE PO'S REJECTIONS (craft lessons about BAD transfers) ===",
+      ...avoid.map((a, i) => `  ${i + 1}. ${a}`),
+      "Do not propose any option that repeats these failures.",
+      "=== END REJECTIONS ===",
+    ] : []),
+    "",
+    "Return strict JSON: { canConvert: boolean, options: [{title, summary}] }.",
+    "  - title: 3-5 word name of the concept (e.g. \"Stay Out Of The Kitchen\").",
+    "  - summary: one plain sentence describing the design (subject + action + the source structure it reuses).",
+    "  - 3 options when canConvert; [] when the source genuinely cannot become a clean " + niche + " design.",
+  ].join("\n").replace(/\$\{product\}/g, product);
+
+  const body = {
+    model: brainModel,
+    reasoning_effort: "medium" as const,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: [
+        { type: "image_url" as const, image_url: { url: sourceImageUrl, detail: "high" as const } },
+        { type: "text" as const, text: `Propose 3 distinct ${niche} concept options for this source. Target niche: "${niche}".` },
+      ] },
+    ],
+    response_format: {
+      type: "json_schema" as const,
+      json_schema: {
+        name: "concept_options",
+        strict: true,
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            canConvert: { type: "boolean" },
+            options: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: { title: { type: "string" }, summary: { type: "string" } },
+                required: ["title", "summary"],
+              },
+            },
+          },
+          required: ["canConvert", "options"],
+        },
+      },
+    },
+  };
+
+  const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) throw new Error(`proposeConcepts API error (${resp.status}): ${(await resp.text()).slice(0, 200)}`);
+  const data = (await resp.json()) as { choices?: Array<{ message?: { content?: string } }> };
+  const raw = (data.choices?.[0]?.message?.content ?? "").trim();
+  if (!raw) return [];
+  let parsed: { canConvert: boolean; options: ConceptOption[] };
+  try {
+    parsed = JSON.parse(raw.replace(/^```json\s*/i, "").replace(/\s*```$/i, ""));
+  } catch {
+    console.warn(`[PatternProd] proposeConcepts: could not parse: ${raw.slice(0, 150)}`);
+    return [];
+  }
+  const options = (parsed.canConvert ? parsed.options : []).slice(0, 3);
+  console.log(`[PatternProd] proposeConcepts → ${options.length} options: ${options.map(o => o.title).join(" | ")}`);
+  return options;
 }
 
 // ─── Step 4b: Output validation (foundational fix) ───────────────────────────
@@ -972,9 +1089,10 @@ export async function processPatternProduction(
   patternId: string,
   workspaceId: string,
   sourceImageUrl: string,
-  promptDescription: string
+  promptDescription: string,
+  chosenConcept: string = ""
 ): Promise<{ productionDesignUrl: string | null; previewImageUrl: string | null }> {
-  console.log(`[PatternProd] Processing pattern ${patternId}...`);
+  console.log(`[PatternProd] Processing pattern ${patternId}...${chosenConcept ? ` (curated concept: "${chosenConcept.slice(0,60)}")` : ""}`);
 
   // Step 0: NICHE-EXPERT evaluation — primed with the workspace's niche knowledge
   // base, it decides (1) can this be converted at all, (2) which knowledge-base
@@ -989,7 +1107,7 @@ export async function processPatternProduction(
   // concepts (e.g. "dink responsibly" 3x). Now the brain sees what was rejected and
   // chooses a different, source-matched concept from the full KB palette.
   const avoid = await getWorkspaceAvoidList(workspaceId);
-  const editSpec = await nicheExpertPlan(sourceImageUrl, ws?.nicheProfile ?? null, promptDescription, product, avoid);
+  const editSpec = await nicheExpertPlan(sourceImageUrl, ws?.nicheProfile ?? null, promptDescription, product, avoid, chosenConcept);
 
   // If the brain decides the source doesn't fit (canConvert=false), AUTO-DISMISS
   // the pattern with the fit reason — DO NOT throw. The previous behavior of

@@ -372,6 +372,11 @@ export const nicheScanRuns = mysqlTable("niche_scan_runs", {
     resultCount: number;
     searchedAt: string; // ISO timestamp
   }>>(),
+  /** Concept mode for this scan (PO Option C, 2026-06-08).
+   *  'auto'    — brain picks the concept and generates the image (hands-off, fast).
+   *  'curated' — brain proposes concept options per source and STOPS; the human picks
+   *              one (chooseConceptAndGenerate) before any image is generated. */
+  conceptMode: mysqlEnum("conceptMode", ["auto", "curated"]).default("auto").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   completedAt: timestamp("completedAt"),
 });
@@ -486,6 +491,14 @@ export const trendPatterns = mysqlTable("trend_patterns", {
     shouldShip: boolean;
     reasoning: string;
   }>(),
+  /** Curated mode (PO Option C, 2026-06-08): the 2-3 concept proposals the brain
+   *  generated for this source. The human picks one before any image is generated.
+   *  Null in auto mode (the brain picks + generates directly). */
+  conceptOptions: json("conceptOptions").$type<Array<{ title: string; summary: string }>>(),
+  /** The concept the human picked from conceptOptions (curated mode). Seeds
+   *  nicheExpertPlan so it writes the edit prompt FOR this concept instead of
+   *  re-choosing. Null until the human chooses (or in auto mode). */
+  chosenConcept: text("chosenConcept"),
 });
 
 export type TrendPattern = typeof trendPatterns.$inferSelect;

@@ -26,6 +26,7 @@ import {
   recordProductionFailure,
   claimProductionPattern,
   updateScanRun,
+  updateTrendPatternChosenConcept,
 } from "./nicheHunterDb";
 import { runNicheHunterScan } from "./nicheHunter";
 import { processPatternProduction } from "./patternProductionProcessor";
@@ -60,7 +61,12 @@ export const nicheHunterRouter = router({
    * Trigger a new niche hunter scan for the active workspace.
    */
   triggerScan: protectedProcedure
-    .input(z.object({ workspaceId: z.string() }))
+    .input(z.object({
+      workspaceId: z.string(),
+      // PO Option C: 'auto' (brain picks + generates) or 'curated' (brain proposes
+      // concept options per source, human picks before any image is generated).
+      mode: z.enum(["auto", "curated"]).default("auto"),
+    }))
     .mutation(async ({ input }) => {
       const workspace = await getWorkspaceById(input.workspaceId);
       if (!workspace) {
@@ -96,14 +102,15 @@ export const nicheHunterRouter = router({
         }
       }
 
-      const scanRun = await createScanRun(input.workspaceId);
+      const scanRun = await createScanRun(input.workspaceId, input.mode);
 
-      // Scraper-based pipeline: no Etsy API key needed
-      runNicheHunterScan(workspace, scanRun.id).catch((err) =>
+      // Scraper-based pipeline: no Etsy API key needed. conceptMode controls whether
+      // the scan auto-generates (auto) or proposes concept options for the human (curated).
+      runNicheHunterScan(workspace, scanRun.id, undefined, input.mode).catch((err) =>
         console.error("[NicheHunter] Scan failed:", err)
       );
 
-      return { scanId: scanRun.id, alreadyRunning: false };
+      return { scanId: scanRun.id, alreadyRunning: false, mode: input.mode };
     }),
 
   /**
@@ -256,6 +263,42 @@ export const nicheHunterRouter = router({
     }),
 
   /**
+   * Curated mode (PO Option C): the human picked one of the brain's proposed concept
+   * options. Record it, then run production seeded with that concept (the brain writes
+   * the edit prompt FOR the chosen concept instead of re-choosing).
+   *
+   * Cloud-Run-safe: like regenerateProductionImage, this runs synchronously; if it 524s
+   * the chosenConcept is already saved and productionDesignUrl stays null, so
+   * retryStuckPatterns picks it up — BUT retryStuckPatterns calls processPatternProduction
+   * WITHOUT the chosen concept. To keep curated picks faithful on retry, the chosenConcept
+   * is persisted and re-read by the retry path (see retryStuckPatterns).
+   */
+  chooseConceptAndGenerate: protectedProcedure
+    .input(z.object({
+      patternId: z.string(),
+      workspaceId: z.string(),
+      chosenConcept: z.string().min(1).max(500),
+    }))
+    .mutation(async ({ input }) => {
+      const patterns = await getTrendPatternsByWorkspace(input.workspaceId);
+      const pattern = patterns.find((p) => p.id === input.patternId);
+      if (!pattern) throw new TRPCError({ code: "NOT_FOUND", message: "Pattern not found" });
+      if (!pattern.sourceImageUrl) throw new TRPCError({ code: "BAD_REQUEST", message: "No source image URL" });
+
+      // Persist the choice first so a 524 mid-generation doesn't lose it (retry re-reads it).
+      await updateTrendPatternChosenConcept(input.patternId, input.chosenConcept);
+
+      const result = await processPatternProduction(
+        input.patternId,
+        input.workspaceId,
+        pattern.sourceImageUrl,
+        pattern.adaptedConcept ?? "",
+        input.chosenConcept,
+      );
+      return result;
+    }),
+
+  /**
    * Regenerate the productionDesignUrl for an existing pattern.
    *
    * Cloud-Run-safe pattern: NULL OUT productionDesignUrl first (marks the pattern as
@@ -337,11 +380,14 @@ export const nicheHunterRouter = router({
         processedIds.push(pattern.id);
         const promptDesc = (pattern as any).promptDescription ?? pattern.adaptedConcept ?? "";
         try {
+          // Pass chosenConcept so curated picks stay faithful if the original
+          // chooseConceptAndGenerate call 524'd and this retry finishes the job.
           await processPatternProduction(
             pattern.id,
             input.workspaceId,
             pattern.sourceImageUrl!,
-            promptDesc
+            promptDesc,
+            pattern.chosenConcept ?? ""
           );
           console.log(`[retryStuckPatterns] ✅ Processed pattern ${pattern.id}: ${pattern.adaptedConcept?.slice(0, 60)}`);
         } catch (err) {

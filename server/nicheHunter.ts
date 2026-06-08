@@ -35,10 +35,11 @@ import {
   updateTrendPatternScore,
   updateTrendPatternStatus,
   updateTrendPatternStyleData,
+  updateTrendPatternConceptOptions,
   getTrendPatternsByWorkspace,
   recordRejectionSignal,
 } from "./nicheHunterDb";
-import { processPatternProduction } from "./patternProductionProcessor";
+import { processPatternProduction, proposeConcepts, aggregateAvoidList } from "./patternProductionProcessor";
 import { getProductGroupsByWorkspace } from "./productGroupDb";
 import type { Workspace } from "../drizzle/schema";
 
@@ -1073,7 +1074,8 @@ function sharesTheme(candidate: Set<string>, existing: Set<string>, minOverlap =
 export async function runNicheHunterScan(
   workspace: Workspace,
   scanId: string,
-  etsyApiKey?: string
+  etsyApiKey?: string,
+  conceptMode: "auto" | "curated" = "auto"
 ): Promise<void> {
   const profile = (workspace.nicheProfile ?? {}) as NicheProfile;
   const crossNicheCategories = profile.crossNicheCategories ?? [];
@@ -1239,6 +1241,13 @@ export async function runNicheHunterScan(
       const progress = 70 + Math.round((i / totalPatterns) * 25);
       await updateScanRun(scanId, { progress });
 
+      // CURATED MODE (PO Option C): do NOT auto-generate. Concept options are
+      // proposed in a parallel batch AFTER rank+score-gate (see below), and the
+      // human picks one before any image is generated. Skip the production fire here.
+      if (conceptMode === "curated") {
+        continue;
+      }
+
       // Generate production design: fire-and-forget so scan completes fast
       // Images trickle in as they complete — UI polls and shows them when ready
       const rowId = row.id;
@@ -1327,6 +1336,38 @@ export async function runNicheHunterScan(
     }
     if (lowFit.length > 0) {
       console.log(`[NicheHunter] Score gate: dismissed ${lowFit.length}/${thisScanDiscovered.length} patterns from scan ${scanId} (threshold ${LOW_FIT_THRESHOLD})`);
+    }
+
+    // Step 5c: CURATED MODE — propose 2-3 concept OPTIONS per surviving pattern, in
+    // PARALLEL batches (like style extraction), so the scan completes with all options
+    // ready and the human can pick. Synchronous (awaited) — NOT fire-and-forget — there
+    // is no retry mechanism for proposals, so they must finish inside the scan's lifetime.
+    // No image is generated; that happens later via chooseConceptAndGenerate.
+    if (conceptMode === "curated") {
+      const survivors = thisScanDiscovered
+        .filter(p => !lowFit.some(l => l.id === p.id) && p.sourceImageUrl);
+      const dismissed = await getTrendPatternsByWorkspace(workspace.id, "dismissed");
+      const avoidForProposals = aggregateAvoidList(dismissed);
+      console.log(`[NicheHunter] Curated mode: proposing concepts for ${survivors.length} patterns`);
+      const CONCURRENCY = 8;
+      for (let i = 0; i < survivors.length; i += CONCURRENCY) {
+        const batch = survivors.slice(i, i + CONCURRENCY);
+        await Promise.all(batch.map(async (p) => {
+          try {
+            const options = await proposeConcepts(
+              p.sourceImageUrl!, profile, p.sourceCategory ?? "the niche", "t-shirt", avoidForProposals
+            );
+            if (options.length > 0) await updateTrendPatternConceptOptions(p.id, options);
+            else {
+              // No clean conversion → dismiss so it doesn't sit option-less forever.
+              await updateTrendPatternStatus(p.id, "dismissed");
+              await recordRejectionSignal(p.id, "No clean pickleball concept could be proposed for this source.", ["off_brand"]);
+            }
+          } catch (e) {
+            console.warn(`[NicheHunter] proposeConcepts failed for ${p.id} (non-fatal):`, e instanceof Error ? e.message : e);
+          }
+        }));
+      }
     }
 
     await updateScanRun(scanId, {
