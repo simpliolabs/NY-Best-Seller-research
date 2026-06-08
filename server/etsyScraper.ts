@@ -39,7 +39,11 @@ export interface EtsySearchResult {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const LISTING_SELECTOR = "data-listing-id";
-const TILE_CAP = 12;
+// 36, raised from 12 (PO 2026-06-08: "JUST on this page there are 30+ designs that
+// will work" — the cap was hiding tiles 13-36, which matters doubly on saturated
+// categories where the top bestsellers are already in the DB and get deduped, so the
+// genuinely-NEW convertible designs live further down the page.
+const TILE_CAP = 36;
 const SCRAPFLY_TIMEOUT_MS = 90_000; // 90s fetch timeout (Scrapfly renders in ~36s)
 
 // Badge selector: Etsy renders badges as <clg-signal color="neutral" size="large">Bestseller</clg-signal>
