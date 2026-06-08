@@ -23,6 +23,7 @@ import {
   updateTrendPatternProductionUrl,
   getStuckProductionPatterns,
   countStuckProductionPatterns,
+  failDeadProductionPatterns,
   recordProductionFailure,
   claimProductionPattern,
   updateScanRun,
@@ -55,6 +56,12 @@ const REJECTION_TAGS = [
   "too_generic",
   "transfer_failed",
 ] as const;
+
+// Watchdog: a production pattern (sourceImageUrl, no productionDesignUrl) stuck longer than
+// this is treated as abandoned (Cloud Run killed the generation mid-flight — that path never
+// throws, so the attempt-based retry cap can't fire). Generous vs. the real ~30-60s production
+// time + a few minutes of queue/council. Reaped on the read path (getPatterns) + before retry.
+const PRODUCTION_DEAD_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes
 
 export const nicheHunterRouter = router({
   /**
@@ -150,6 +157,15 @@ export const nicheHunterRouter = router({
       })
     )
     .query(async ({ input }) => {
+      // WATCHDOG ON THE READ PATH: the page polls getPatterns continuously even when no
+      // scan/retry is triggered. Reap DEAD production patterns here (stuck > threshold with
+      // no output → Cloud Run killed mid-generation, which never throws so the attempt-based
+      // cap can't fire) so the UI stops showing "Generating…" forever. Non-blocking.
+      try {
+        await failDeadProductionPatterns(input.workspaceId, PRODUCTION_DEAD_THRESHOLD_MS);
+      } catch (err) {
+        console.warn("[getPatterns] dead-pattern watchdog failed (non-blocking):", err);
+      }
       return getTrendPatternsByWorkspace(input.workspaceId, input.status);
     }),
 
@@ -352,6 +368,13 @@ export const nicheHunterRouter = router({
   retryStuckPatterns: protectedProcedure
     .input(z.object({ workspaceId: z.string() }))
     .mutation(async ({ input }) => {
+      // Reap DEAD patterns first (age-based) so we never re-retry one that's been stuck
+      // past the threshold (it would just re-hang and re-die). Only fresh stuck ones retry.
+      try {
+        await failDeadProductionPatterns(input.workspaceId, PRODUCTION_DEAD_THRESHOLD_MS);
+      } catch (err) {
+        console.warn("[retryStuckPatterns] dead-pattern reap failed (non-blocking):", err);
+      }
       const RETRY_BATCH_SIZE = 3;
       const stuck = await getStuckProductionPatterns(input.workspaceId, RETRY_BATCH_SIZE);
       if (stuck.length === 0) {

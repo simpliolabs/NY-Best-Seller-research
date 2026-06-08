@@ -420,6 +420,66 @@ export async function countStuckProductionPatterns(
 }
 
 /**
+ * WATCHDOG — auto-dismiss DEAD production patterns (age-based; robust to Cloud Run kills).
+ *
+ * The attempt-based retry cap (recordProductionFailure → dismiss after N) only fires when
+ * production THROWS. A Cloud Run container killed mid-generation does NOT throw — the
+ * void/awaited work just vanishes — so productionAttempts never increments and the row sits
+ * at "Generating…" forever (PO-confirmed: stuck >1hr). This catches that case purely by AGE:
+ * a pattern with a sourceImageUrl but no productionDesignUrl that has been around longer than
+ * deadThresholdMs is treated as abandoned and dismissed.
+ *
+ * Mirrors getStuckProductionPatterns' exclusions so it never kills a pattern that is
+ * legitimately waiting on a human (awaiting-concept-choice) or being actively retried right
+ * now (freshly-claimed). Age basis = claimedAt (when production last started) ?? createdAt.
+ * Tags the dismissal NEUTRALLY (NOT "transfer_failed") so a technical timeout never pollutes
+ * the craft-level style-preference learning. Returns the dismissed pattern IDs.
+ */
+export async function failDeadProductionPatterns(
+  workspaceId: string,
+  deadThresholdMs: number
+): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select()
+    .from(trendPatterns)
+    .where(eq(trendPatterns.workspaceId, workspaceId));
+  const now = Date.now();
+  const staleCutoffMs = now - CLAIM_STALE_MS;
+  const isFreshlyClaimed = (r: TrendPattern) =>
+    r.claimedAt != null && new Date(r.claimedAt).getTime() >= staleCutoffMs;
+  const isAwaitingConceptChoice = (r: TrendPattern) =>
+    !r.chosenConcept && (
+      r.awaitingConcept === true ||
+      (Array.isArray(r.conceptOptions) && r.conceptOptions.length > 0)
+    );
+  const ageMs = (r: TrendPattern) =>
+    now - new Date(r.claimedAt ?? r.createdAt).getTime();
+
+  const dead = rows.filter(r =>
+    r.sourceImageUrl && !r.productionDesignUrl && r.status !== "dismissed"
+    && !isAwaitingConceptChoice(r) && !isFreshlyClaimed(r)
+    && ageMs(r) > deadThresholdMs
+  );
+  for (const r of dead) {
+    await db.update(trendPatterns)
+      .set({
+        status: "dismissed",
+        rejectionReason: `Production abandoned by watchdog — stuck ${Math.round(ageMs(r) / 60000)}min with no output (likely Cloud Run container killed mid-generation).`,
+        rejectionTags: [], // NEUTRAL: a technical timeout is not a craft signal — keep it out of style learning
+        claimedAt: null,
+        dismissedAt: new Date(),
+      })
+      .where(eq(trendPatterns.id, r.id));
+  }
+  if (dead.length) {
+    console.warn(`[Watchdog] Auto-dismissed ${dead.length} dead production pattern(s) in ${workspaceId}: ${dead.map(d => d.id).join(", ")}`);
+  }
+  return dead.map(d => d.id);
+}
+
+/**
  * Get all approved patterns that have a previewImageUrl but no dtfImageUrl.
  * Used by the deferred DTF extraction trigger.
  */
