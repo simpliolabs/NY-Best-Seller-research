@@ -52,6 +52,7 @@ import {
 import { getGarmentBbox, resolveZoneToPhoto } from "./garmentDetector";
 import {
   updateTrendPatternImage,
+  updateTrendPatternConcept,
   updateTrendPatternPreviewUrls,
   updateTrendPatternProductionUrl,
   updateTrendPatternStatus,
@@ -226,6 +227,15 @@ export type EditSpec = {
    * Legacy fields removed: the per-image vividness lives in this string now.
    */
   editPrompt: string;
+  /**
+   * One-line, plain-English description of the NEW design this plan produces — written
+   * for the human, not the image model. e.g. "Three capybaras playing pickleball around
+   * a glowing pickleball moon, painterly vintage style." Saved back to the pattern's
+   * adaptedConcept after production so the CARD matches the actual IMAGE. Without this,
+   * the card showed the scan-time brain's guess (e.g. "T-Rex/Llama/Octopus") while the
+   * image showed something else — the two-brain disconnect. Empty when canConvert=false.
+   */
+  conceptSummary: string;
 };
 
 /**
@@ -342,6 +352,9 @@ async function nicheExpertPlan(
           "4. Always fill `bestMatch` (use {type:'none', item:'-', why:'...'} when canConvert is false). editPrompt must be empty string when canConvert is false.",
           "5. Respect AVOID TOPICS.",
           "6. KEEP THE SOURCE'S ORIGINAL COLOURS AND PALETTE. Do NOT recolour the design to suit shirt colours. The proven-bestseller transfers preserve the source's exact palette — a dark mystical glow stays a dark mystical glow, an earthy muted cartoon stays earthy and muted. The ONLY change is the subject identity (and any swapped text); the colour scheme, ink treatment, and overall mood are inherited verbatim from the source. (Shirt-colour suitability is handled later by choosing WHICH shirt colours to offer per design — never by altering the design's palette.)",
+          `7. PICKLEBALL EQUIPMENT MUST BE ACCURATE. A pickleball PADDLE is a SOLID, FLAT paddle with a broad rectangular/elongated face and rounded corners and a short handle — it is NOT a round table-tennis/ping-pong paddle. A PICKLEBALL is a hollow plastic ball COVERED IN ROUND HOLES (like a wiffle ball), NOT a smooth tennis ball or a solid sphere. Whenever the design includes a paddle or ball, name these specifics in the editPrompt so the image model renders real pickleball gear, not generic ping-pong/tennis.`,
+          `8. CONVERT THE WHOLE SCENE — leave NO source-domain props behind. Every element tied to the source's theme must become a ${niche} element or be removed. (E.g. a camping source: tents, campfires, RVs, lanterns, fishing rods must each become a ${niche} activity/prop — a tent does NOT stay a tent.) If the source is a grid of N activities, produce N ${niche} activities. A half-converted design (pickleball text over a camper van) is a FAILURE.`,
+          `9. conceptSummary — write ONE plain-English sentence describing the NEW design you are producing (subject + what they're doing + style), for a human to read on a product card. e.g. "Three capybaras playing pickleball around a glowing pickleball-moon, painterly vintage style." This MUST match the editPrompt's actual output. Empty string when canConvert is false.`,
         ].join("\n").replace(/\$\{product\}/g, product),
       },
       {
@@ -376,8 +389,9 @@ async function nicheExpertPlan(
               required: ["type", "item", "why"],
             },
             editPrompt: { type: "string" },
+            conceptSummary: { type: "string" },
           },
-          required: ["canConvert", "fitReason", "bestMatch", "editPrompt"],
+          required: ["canConvert", "fitReason", "bestMatch", "editPrompt", "conceptSummary"],
         },
       },
     },
@@ -415,9 +429,11 @@ async function nicheExpertPlan(
     );
   }
   spec.editPrompt ??= "";
+  spec.conceptSummary ??= "";
   console.log(
     `[PatternProd] nicheExpertPlan canConvert=${spec.canConvert} ` +
       `match="${spec.bestMatch?.item ?? ""}" editPromptChars=${spec.editPrompt.length} ` +
+      `concept="${(spec.conceptSummary || "").slice(0, 80)}" ` +
       `reason="${(spec.fitReason || "").slice(0, 80)}"`
   );
   if (spec.editPrompt) {
@@ -971,6 +987,18 @@ export async function processPatternProduction(
     await recordRejectionSignal(patternId, reason, ["off_brand"]);
     return { productionDesignUrl: null, previewImageUrl: null };
   }
+  // Card = image: overwrite the scan brain's adaptedConcept guess with the production
+  // brain's plain-English summary of what it's ACTUALLY making. Kills the two-brain
+  // disconnect (card said "T-Rex/Llama/Octopus" while the image was capybaras).
+  // Non-fatal: a display update must never block production.
+  if (editSpec.conceptSummary) {
+    try {
+      await updateTrendPatternConcept(patternId, editSpec.conceptSummary);
+    } catch (e) {
+      console.warn(`[PatternProd] updateTrendPatternConcept failed (non-fatal) for ${patternId}:`, e);
+    }
+  }
+
   // Reject-feedback: inject the workspace's previously-rejected reasons so the
   // regeneration avoids repeating mistakes the PO already dismissed.
   const avoid = await getWorkspaceAvoidList(workspaceId);

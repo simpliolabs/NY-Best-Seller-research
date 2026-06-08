@@ -165,6 +165,24 @@ export async function updateTrendPatternDtfUrl(
 }
 
 /**
+ * Overwrite a pattern's adaptedConcept with the production brain's plain-English
+ * concept summary, so the CARD matches the actual generated IMAGE. The scan-time
+ * brain (deconstructAndAdapt) writes adaptedConcept first for ranking/early display,
+ * but it's a guess made before the image exists (it produced generic boilerplate like
+ * "T-Rex/Llama/Octopus" while the image was capybaras). The production brain
+ * (nicheExpertPlan) is the one that actually looks at the image and makes the design,
+ * so its conceptSummary is the source of truth for display. PO-confirmed 2026-06-08.
+ */
+export async function updateTrendPatternConcept(
+  id: string,
+  adaptedConcept: string
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(trendPatterns).set({ adaptedConcept }).where(eq(trendPatterns.id, id));
+}
+
+/**
  * Persist the vision-LLM validation report for a pattern. Run AFTER assertTransparentPng
  * and BEFORE storagePut so we can auto-dismiss bad outputs without writing them as
  * approved-looking assets. See ValidationReport in patternProductionProcessor.ts.
