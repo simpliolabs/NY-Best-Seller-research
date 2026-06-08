@@ -207,19 +207,22 @@ describe("productGroup print zone", () => {
     ).rejects.toThrow();
   });
 
-  it("DEFAULT_PRINT_AREA values match converged chest print zone (~40%x32%)", () => {
-    // Verify the default area represents the converged chest print zone
+  it("DEFAULT_PRINT_AREA is a large CENTERED fallback zone (2026-06-08 enlargement)", () => {
+    // The default is the FALLBACK used when a product group has no saved printZone.
+    // It was enlarged from a small/high 40%x32% top-anchored zone to a large centered
+    // zone, because the old default placed designs tiny near the collar (PO "designs
+    // not in the placement zone"). Now it must be centered both axes + sizeable.
     const area = DEFAULT_PRINT_ZONE; // alias still exported for compat
-    // Horizontal center should be roughly 0.5
+    // Centered horizontally AND vertically (with center-anchor placement, this puts
+    // the design dead-center of the garment).
     const centerX = area.x + area.width / 2;
+    const centerY = area.y + area.height / 2;
     expect(centerX).toBeCloseTo(0.5, 1);
-    // Area should start in upper portion (top 15%)
-    expect(area.y).toBeLessThan(0.15);
-    // Area should be ~40% of garment width (converged chest print)
-    expect(area.width).toBeGreaterThanOrEqual(0.35);
-    expect(area.width).toBeLessThanOrEqual(0.50);
-    // Area should be ~32% of garment height (converged top-anchored)
-    expect(area.height).toBeGreaterThanOrEqual(0.25);
-    expect(area.height).toBeLessThanOrEqual(0.40);
+    expect(centerY).toBeCloseTo(0.5, 1);
+    // Large: well beyond the old 40%x32% so un-zoned groups don't render tiny prints.
+    expect(area.width).toBeGreaterThanOrEqual(0.55);
+    expect(area.width).toBeLessThanOrEqual(0.75);
+    expect(area.height).toBeGreaterThanOrEqual(0.55);
+    expect(area.height).toBeLessThanOrEqual(0.80);
   });
 });

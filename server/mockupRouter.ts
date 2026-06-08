@@ -63,7 +63,16 @@ export const mockupRouter = router({
         });
       }
       const isProductionReady = !!concept[productionUrlKey];
-      console.log(`[Mockup] Using ${isProductionReady ? 'production (transparent)' : 'raw (needs bg removal)'} URL for concept ${input.conceptId} variation ${input.variationKey}`);
+      if (isProductionReady) {
+        console.log(`[Mockup] Using production (transparent) URL for concept ${input.conceptId} variation ${input.variationKey}`);
+      } else {
+        // No AI-extracted transparent PNG — compositeDesignOnMockup will auto-strip
+        // the background (cheap white-flood-fill; AI fallback for full mockups). That
+        // handles white/near-white backgrounds well but CANNOT cleanly remove a
+        // colored/scene background. Warn + flag so the UI can tell the user this
+        // design wasn't pre-processed (background auto-removed, may be imperfect).
+        console.warn(`[Mockup] Concept ${input.conceptId} variation ${input.variationKey} has NO transparent productionUrl — compositing raw image with auto background-removal (may be imperfect on colored backgrounds). Process this design for production for a clean cutout.`);
+      }
 
       // 1b. Workspace ownership guard — concept and product group must belong to same workspace
       const conceptRunRow = await db.select({ workspaceId: botRuns.workspaceId })
@@ -98,7 +107,14 @@ export const mockupRouter = router({
 
       // 4. Get print area from product group (or use default).
       // Print area = max ink envelope, expressed as fractions of the GARMENT bbox (not the photo).
+      const hasGroupZone = !!group.printZone;
       const printAreaRelGarment = (group.printZone as { x: number; y: number; width: number; height: number } | null) ?? DEFAULT_PRINT_AREA;
+      if (!hasGroupZone) {
+        // The #1 cause of "design not in my placement zone": the group has no saved
+        // zone, so we fall back to the large centered DEFAULT. Surface it loudly +
+        // return a flag so the UI can prompt the user to draw a zone for this group.
+        console.warn(`[Mockup] Product group ${input.productGroupId} has NO saved printZone — using large centered DEFAULT_PRINT_AREA. Draw a print zone for this group for precise placement.`);
+      }
 
       // 5. Composite each template and store result
       const renders = [];
@@ -157,13 +173,13 @@ export const mockupRouter = router({
             ? qualityCheck.choices[0].message.content : "{}";
           const qa = JSON.parse(qaContent);
           // Attach QA result to response
-          return { success: true, mockupCount: renders.length, renders, qualityCheck: qa };
+          return { success: true, mockupCount: renders.length, renders, qualityCheck: qa, usedDefaultZone: !hasGroupZone, productionReady: isProductionReady };
         } catch (qaErr) {
           console.warn("[Mockup QA] Vision check failed (non-blocking):", qaErr);
         }
       }
 
-      return { success: true, mockupCount: renders.length, renders, qualityCheck: null };
+      return { success: true, mockupCount: renders.length, renders, qualityCheck: null, usedDefaultZone: !hasGroupZone, productionReady: isProductionReady };
     }),
 
   /** Get all mockup renders for a concept (all variations) */

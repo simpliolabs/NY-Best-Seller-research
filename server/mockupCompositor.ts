@@ -116,16 +116,20 @@ export async function applyShirtAwareHalftone(
 
 /** Default print AREA — converged placement for realistic DTF/DTG mockups.
  * Expressed as fractions of the garment bbox (NOT the photo — Bug 3 lesson).
- * Geometry: 40% width × 32% height of garment, centered horizontally, 10% below neckline.
- * This produces a natural chest-print look (not oversized full-front).
- * Reference: standard DTF chest print is ~10"×8" on a 20"×28" front ≈ 40%×32%.
- * Placement within area: contain-fit + top-anchor (not center-anchor).
+ * Geometry: 60% width × 68% height of garment, CENTERED (centerX/centerY ≈ 0.5).
+ * FALLBACK ONLY — used when a product group has no saved printZone.
+ * Was 40%×32% anchored 10% below the neckline; that small/high zone made designs
+ * land tiny near the collar whenever a group's zone wasn't applied (2026-06-08:
+ * PO "designs not in the placement zone" was this DEFAULT, not the saved group
+ * zone — proven by side-by-side render). Enlarged + centered so un-zoned groups
+ * still place a design sensibly mid-shirt. Set a per-group zone for precise control.
+ * Placement within area: contain-fit + center-anchor.
  */
 export const DEFAULT_PRINT_AREA: PrintArea = {
-  x: 0.30,
-  y: 0.10,
-  width: 0.40,
-  height: 0.32,
+  x: 0.20,
+  y: 0.16,
+  width: 0.60,
+  height: 0.68,
 };
 
 /** @deprecated Use DEFAULT_PRINT_AREA instead */
@@ -526,22 +530,19 @@ export async function compositeDesignOnMockup(config: CompositeConfig): Promise<
     .resize(finalW, finalH, { fit: "fill", background: { r: 0, g: 0, b: 0, alpha: 0 } })
     .toBuffer();
 
-  // 6. Position design: CONTAIN-FIT + CENTER-ANCHOR within the print area.
-  // Was TOP-ANCHOR previously, on the rationale "never drift toward the navel".
-  // But gpt-image-1 outputs are fixed-square (706×706 after trim) and users tend
-  // to draw TALL portrait print zones (e.g. 408×538, aspect 0.76). Contain-fit
-  // a square into a tall zone fills only the width — leaves ~130px empty below.
-  // Top-anchor made that empty space appear at the bottom and PO read it as
-  // "design not placed within SET range" (zone-on-preview overlay confirmed
-  // 2026-06-07: the design IS within the zone, just hugging the top, leaving
-  // visible empty zone below).
-  // Centering the design WITHIN the user-defined zone matches what commercial
-  // print mockups do (Frog Moon, Salty Dinker, etc. — chest-centered, not chest-top).
-  // The user-defined zone IS the chest area; centering inside it puts the design
-  // dead-center of the chest. If the user wants the design higher, they shorten
-  // the zone in the UI — the compositor follows the zone faithfully either way.
+  // 6. Position design: CONTAIN-FIT, horizontally CENTERED + vertically TOP-ANCHORED.
+  // Placement decision history (do NOT flip again without explicit PO sign-off):
+  //   - originally top-anchor ("never drift toward the navel")
+  //   - 53fc5c6 switched to center-anchor (misread of a PO complaint)
+  //   - 2026-06-08 PO reaffirmed TOP-anchor looking at the centered render:
+  //     "Why are there margins on top and bottom?? I want them Centered but
+  //     justified to top." A wide design contain-fits to the zone WIDTH, so it's
+  //     shorter than a tall zone; center-anchor split the slack top+bottom. PO
+  //     wants the design's TOP edge pinned to the zone TOP, with all slack BELOW.
+  // The user draws the zone's TOP edge to control how high the print starts; the
+  // bottom slack is expected and correct (designs vary in aspect ratio).
   const offsetX = zoneX + Math.round((zoneW - finalW) / 2); // center horizontally
-  const offsetY = zoneY + Math.round((zoneH - finalH) / 2); // center vertically
+  const offsetY = zoneY;                                     // top-anchor: design top = zone top
 
   // 7. Composite design onto mockup, output as WebP (compressed, max 1000x1000)
   const composite = sharp(mockupBuf)

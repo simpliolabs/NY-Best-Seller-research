@@ -112,6 +112,11 @@ export interface SourceInstrumentation {
  *   Pass 1: is_best_seller filter
  *   Pass 2 (if pass 1 yields < 2 tiles per category): is_popular_now filter
  */
+// Max total search categories per scan (general terms + cross-niche). Raised 5→8
+// (PO 2026-06-08) so the scan covers more niches per run. Higher = more designs but
+// slower scans (more Scrapfly fetches + image-gen).
+const MAX_SCAN_CATEGORIES = 8;
+
 async function fetchCrossNicheHotSellers(
   crossNicheCategories: string[],
   _etsyApiKey?: string,       // retained for signature compatibility; unused
@@ -121,10 +126,11 @@ async function fetchCrossNicheHotSellers(
 ): Promise<{ sellers: HotSeller[]; instrumentation: SourceInstrumentation; searchLog: Array<{ query: string; url: string; filter: "is_best_seller" | "is_popular_now"; resultCount: number; searchedAt: string }> }> {
   // Prepend general best-seller terms BEFORE cross-niche categories
   // Cap general terms at 2 (1-2 broad market searches, not the whole list)
-  // Total category budget: 5 per PO spec (e.g. 2 general + 3 cross-niche, or 0 general
-  // + 5 cross-niche) — paired with the 4-designs-per-category cap (max 5×4 = 20 saved).
+  // Total category budget: MAX_SCAN_CATEGORIES (raised 5→8 per PO 2026-06-08 to cover
+  // more niches per run; e.g. 2 general + 6 cross-niche). Trade-off: more Scrapfly
+  // fetches + image-gen per run = slower scans. Paired with the per-category cap below.
   const generalTerms = (generalBestSellerTerms ?? []).slice(0, 2);
-  const crossNiche = crossNicheCategories.slice(0, 5 - generalTerms.length);
+  const crossNiche = crossNicheCategories.slice(0, MAX_SCAN_CATEGORIES - generalTerms.length);
   const categories = [...generalTerms, ...crossNiche];
   const searchLog: Array<{ query: string; url: string; filter: "is_best_seller" | "is_popular_now"; resultCount: number; searchedAt: string }> = [];
   const instrumentation: SourceInstrumentation = {
@@ -1015,10 +1021,13 @@ function deriveSearchTermsFromProductTypes(productTypes: string[]): string[] {
 
 // ─── Main scan orchestrator ───────────────────────────────────────────────────
 
-// PO spec: 5 categories MAX × 4 designs per category = 20 total per scan.
-// Combined with MAX_PATTERNS_PER_CATEGORY enforcement in the save loop below.
+// Caps: up to MAX_SCAN_CATEGORIES (8) categories × MAX_PATTERNS_PER_CATEGORY designs,
+// bounded by MAX_PATTERNS_PER_SCAN total per scan.
+// Per-category raised 4→10 (PO 2026-06-08): a single rich vein (e.g. "funny graphic
+// shirt") can hold 10+ convertible designs, so don't cut it off at 4. Per-scan stays
+// 20 so a few rich categories can fill the budget. Trade-off: more image-gen per run.
 const MAX_PATTERNS_PER_SCAN = 20;
-const MAX_PATTERNS_PER_CATEGORY = 4;
+const MAX_PATTERNS_PER_CATEGORY = 10;
 
 // ─── Theme-level dedup (vs Concept Library) ──────────────────────────────────
 // PO directive: the Concept Library = winning designs we've already explored.
