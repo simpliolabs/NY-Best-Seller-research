@@ -284,7 +284,8 @@ async function nicheExpertPlan(
   sourceImageUrl: string,
   nicheProfile: any,
   fallbackNiche: string,
-  product: string = "t-shirt"
+  product: string = "t-shirt",
+  avoid: string[] = []
 ): Promise<EditSpec> {
   const knowledge = formatNicheKnowledge(nicheProfile);
   const niche =
@@ -328,6 +329,17 @@ async function nicheExpertPlan(
           knowledge || `Niche: ${niche}. (No detailed profile available; use general expert judgement.)`,
           "=== END KNOWLEDGE BASE ===",
           "",
+          ...(avoid.length ? [
+            "=== LEARN FROM THE PO'S REJECTIONS (take these seriously) ===",
+            "The PO has REJECTED previous designs for these reasons. Treat each as a hard lesson:",
+            ...avoid.map((a, i) => `  ${i + 1}. ${a}`),
+            "Rules from these rejections:",
+            "  - Do NOT reuse a catchphrase/mascot/concept that was just rejected — pick a DIFFERENT one from the knowledge base. The KB has many catchphrases and mascots; rotate through them, do not default to the same few (e.g. if 'dink responsibly' or 'one more game' keep getting rejected, choose another).",
+            "  - If a rejection names a specific flaw (wrong equipment, left source props in, weak/forced pun, off-style), make sure THIS design does not repeat that flaw.",
+            "  - Favour FRESH, varied, source-matched concepts over the safest/most-obvious one. A real expert does not put the same phrase on every shirt.",
+            "=== END REJECTIONS ===",
+            "",
+          ] : []),
           "HOW TO WRITE `editPrompt` — five parts as one paragraph:",
           "",
           `  A. SCENE LOCK — open by enumerating what is in the source so the model has anchors: "Edit this ${product} mockup directly. Keep the exact flat-lay composition: [the ${product} colour/style + every prop visible + surface/background + lighting/folds + camera angle]." Be specific — not 'preserve composition' but 'the cream tee with rolled sleeves, the wicker placemat, the pale wood floor, the laces at lower right'.`,
@@ -967,7 +979,15 @@ export async function processPatternProduction(
   // item fits this design best, (3) the minimal swaps.
   const ws = await getWorkspaceById(workspaceId);
   const product = await getWorkspaceProductType(workspaceId); // agentic: "t-shirt", "mug", etc.
-  const editSpec = await nicheExpertPlan(sourceImageUrl, ws?.nicheProfile ?? null, promptDescription, product);
+  // Rejection-learning (PO directive 2026-06-08: "training/rejection reasons must be
+  // taken seriously"). Fetch the workspace's AVOID list (dismissed patterns' reasons
+  // + tags) BEFORE the brain runs and feed it INTO concept selection — not just the
+  // edit prompt. Previously AVOID only hit buildEditPrompt (the image render), AFTER
+  // the brain had already picked the concept, so the brain kept re-picking rejected
+  // concepts (e.g. "dink responsibly" 3x). Now the brain sees what was rejected and
+  // chooses a different, source-matched concept from the full KB palette.
+  const avoid = await getWorkspaceAvoidList(workspaceId);
+  const editSpec = await nicheExpertPlan(sourceImageUrl, ws?.nicheProfile ?? null, promptDescription, product, avoid);
 
   // If the brain decides the source doesn't fit (canConvert=false), AUTO-DISMISS
   // the pattern with the fit reason — DO NOT throw. The previous behavior of
@@ -999,9 +1019,9 @@ export async function processPatternProduction(
     }
   }
 
-  // Reject-feedback: inject the workspace's previously-rejected reasons so the
-  // regeneration avoids repeating mistakes the PO already dismissed.
-  const avoid = await getWorkspaceAvoidList(workspaceId);
+  // Reject-feedback also steers the image RENDER (not just concept selection above):
+  // reuse the same `avoid` list fetched before the brain. Rejections now influence
+  // BOTH what concept is chosen AND how it's rendered.
   const editPrompt = buildEditPrompt(editSpec, avoid, product);
 
   // Step 1: Surgically edit the source product photo using only the planned swaps.
