@@ -608,19 +608,24 @@ export async function compositeDesignOnMockup(config: CompositeConfig): Promise<
   const offsetX = zoneX + boxOffsetX;  // box left + centered-within-box offset
   const offsetY = zoneY + boxOffsetY;  // box top + anchorY offset
 
-  // 7. Composite design onto mockup, output as WebP (compressed, max 1000x1000)
-  const composite = sharp(mockupBuf)
-    .composite([{ input: resizedDesign, left: offsetX, top: offsetY }]);
+  // 7. Composite at FULL resolution FIRST, bake to a buffer, THEN resize in a SEPARATE Sharp
+  // instance. CRITICAL (root cause of the long-standing placement bug): on a single chained
+  // instance, sharp(mockup).composite(overlay).resize() applies .resize() to the BASE before
+  // compositing, so the overlay is dropped at its original-space left/top AND original size onto
+  // the now-shrunk canvas — design ends up ~1.5x too large and shifted right/down. Materializing
+  // the composite to a buffer forces the overlay to bake in at full res; the resize then scales
+  // the whole composited image together, preserving placement. Verified visually (PO 2026-06-09).
+  const compositedFull = await sharp(mockupBuf)
+    .composite([{ input: resizedDesign, left: offsetX, top: offsetY }])
+    .toBuffer();
 
-  // Resize to max 1000x1000 if larger
-  const compositeW = mockupW;
-  const compositeH = mockupH;
-  if (compositeW > 1000 || compositeH > 1000) {
-    composite.resize(1000, 1000, { fit: "inside", withoutEnlargement: true });
+  let out = sharp(compositedFull);
+  if (mockupW > 1000 || mockupH > 1000) {
+    out = out.resize(1000, 1000, { fit: "inside", withoutEnlargement: true });
   }
 
   // Output as compressed WebP for Shopify
-  const result = await composite
+  const result = await out
     .webp({ quality: 82, effort: 4 })
     .toBuffer();
 
