@@ -1,11 +1,11 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import { ImageThumbnail } from "@/components/ImageThumbnail";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { LayoutGrid, List, ChevronDown, ChevronRight, BookOpen, Zap, ExternalLink, Trash2, Paintbrush, Wand2, Shirt, Loader2 } from "lucide-react";
+import { LayoutGrid, List, ChevronDown, ChevronRight, BookOpen, Zap, ExternalLink, Trash2, Paintbrush, Wand2, Shirt, Loader2, Upload } from "lucide-react";
 import { Link } from "wouter";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { toast } from "sonner";
@@ -30,6 +30,38 @@ export default function Library() {
   // Lightbox state
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxConcept, setLightboxConcept] = useState<any>(null);
+
+  // Upload state
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadName, setUploadName] = useState("");
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const utils = trpc.useUtils();
+  const uploadMutation = trpc.library.uploadConcept.useMutation({
+    onSuccess: () => {
+      toast.success("Design uploaded!");
+      utils.library.list.invalidate();
+      setUploadOpen(false);
+      setUploadName("");
+      setUploadFile(null);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  function handleUploadSubmit() {
+    if (!uploadFile || !uploadName.trim() || !workspaceId) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = (reader.result as string).split(",")[1];
+      uploadMutation.mutate({
+        workspaceId,
+        name: uploadName.trim(),
+        imageBase64: base64,
+        mimeType: uploadFile.type as "image/png" | "image/jpeg" | "image/webp",
+      });
+    };
+    reader.readAsDataURL(uploadFile);
+  }
 
   // Expanded books in group-by-book view
   const [expandedBooks, setExpandedBooks] = useState<Set<string>>(new Set());
@@ -132,9 +164,59 @@ export default function Library() {
               <LayoutGrid className="h-4 w-4" /> Grid
             </button>
           </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setUploadOpen(true)}
+            className="gap-1.5"
+          >
+            <Upload className="h-4 w-4" />
+            Upload Design
+          </Button>
           <span className="font-mono bg-muted px-2 py-1 rounded text-sm text-muted-foreground">{total}</span>
         </div>
       </div>
+
+      {/* Upload Dialog */}
+      {uploadOpen && (
+        <Card className="p-4 border-primary/30 bg-primary/5">
+          <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-end">
+            <div className="space-y-1 flex-1 min-w-0">
+              <label className="text-xs font-medium text-muted-foreground">Design Name</label>
+              <input
+                type="text"
+                value={uploadName}
+                onChange={(e) => setUploadName(e.target.value)}
+                placeholder="e.g. My Custom Design"
+                className="w-full h-9 px-3 rounded-md border border-input bg-background text-sm"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Image (PNG/JPEG/WebP)</label>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)}
+                className="text-sm file:mr-2 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-primary file:text-primary-foreground hover:file:bg-primary/90"
+              />
+            </div>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                onClick={handleUploadSubmit}
+                disabled={!uploadFile || !uploadName.trim() || uploadMutation.isPending}
+              >
+                {uploadMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Upload className="h-4 w-4 mr-1" />}
+                Upload
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => { setUploadOpen(false); setUploadName(""); setUploadFile(null); }}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* Filters Bar */}
       <Card className="p-4">
