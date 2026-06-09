@@ -3,6 +3,7 @@
  * Generates design revisions using GPT Image with reference image.
  * Karpathy: single-purpose functions, no speculative abstractions.
  */
+import sharp from "sharp";
 import { generateImage } from "./_core/imageGeneration";
 import { removeBackground } from "./mockupCompositor";
 import { storagePut } from "./storage";
@@ -113,4 +114,87 @@ export async function generateRevision(
   });
 
   return { revisionId, imageUrl };
+}
+
+/**
+ * Deterministically crop a design to its STRONG content — opaque pixels that are either dark
+ * (navy/ink) OR saturated (the real graphic) — dropping faint/light low-contrast tails such as
+ * the small disclaimer text under a design, and trimming surrounding empty space. NOTHING is
+ * regenerated: every remaining pixel is byte-identical (PO 2026-06-09: "remove the white text +
+ * trim, everything else stays the same" — AI revision can't guarantee that because it redraws the
+ * whole image and hallucinates new elements). If no strong region is found (e.g. an all-light
+ * design), falls back to a plain opaque-content trim so it never crops to nothing.
+ */
+export async function trimToStrongContent(designBuf: Buffer): Promise<Buffer> {
+  const { data, info } = await sharp(designBuf).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const { width: w, height: h, channels: ch } = info;
+  const STRONG_LUM = 110;   // below = dark ink (navy/black)
+  const STRONG_SAT = 70;    // above = saturated design color (yellow/blue/etc.)
+  const PAD = 8;
+  let sMinX = w, sMaxX = -1, sMinY = h, sMaxY = -1;        // strong-content bbox
+  let aMinX = w, aMaxX = -1, aMinY = h, aMaxY = -1;        // any-opaque bbox (fallback)
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * ch;
+      if (data[i + 3] <= 30) continue;                     // transparent — skip
+      if (x < aMinX) aMinX = x; if (x > aMaxX) aMaxX = x; if (y < aMinY) aMinY = y; if (y > aMaxY) aMaxY = y;
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+      const sat = Math.max(r, g, b) - Math.min(r, g, b);
+      if (lum < STRONG_LUM || sat > STRONG_SAT) {
+        if (x < sMinX) sMinX = x; if (x > sMaxX) sMaxX = x; if (y < sMinY) sMinY = y; if (y > sMaxY) sMaxY = y;
+      }
+    }
+  }
+  // Prefer the strong bbox when it covers a meaningful area; else fall back to opaque bbox.
+  const strongOk = sMaxX >= sMinX && (sMaxX - sMinX) > w * 0.05 && (sMaxY - sMinY) > h * 0.05;
+  const minX = strongOk ? sMinX : aMinX, maxX = strongOk ? sMaxX : aMaxX;
+  const minY = strongOk ? sMinY : aMinY, maxY = strongOk ? sMaxY : aMaxY;
+  if (maxX < minX || maxY < minY) return designBuf;        // nothing found — return as-is
+  const left = Math.max(0, minX - PAD), top = Math.max(0, minY - PAD);
+  const cw = Math.min(w - left, maxX - minX + 1 + PAD * 2);
+  const cht = Math.min(h - top, maxY - minY + 1 + PAD * 2);
+  return sharp(designBuf).extract({ left, top, width: cw, height: cht }).png().toBuffer();
+}
+
+/**
+ * Deterministic "Clean & Trim" revision (NO AI): strip a solid white background to transparency
+ * (edge-connected flood-fill — preserves interior whites like leggings), then crop to strong
+ * content (removes faint disclaimer tails + trims). Produces a revision record like generateRevision
+ * so it slots into the Design Studio accept/revert flow, but the design itself is untouched.
+ */
+export async function trimAndCleanRevision(
+  conceptId: number,
+  variationKey: string,
+  referenceImageUrl: string,
+): Promise<{ revisionId: string; imageUrl: string }> {
+  const res = await fetch(referenceImageUrl);
+  if (!res.ok) throw new Error(`Failed to download reference image: ${referenceImageUrl} (${res.status})`);
+  const raw = Buffer.from(await res.arrayBuffer());
+  // removeBackground here is deterministic for a design reference: passthrough if already
+  // transparent, edge-connected white flood-fill if on white. (AI extraction only triggers for a
+  // colored/scene background, which a clean design reference never has.)
+  const noBg = await removeBackground(raw);
+  const cleaned = await trimToStrongContent(noBg);
+
+  const { url } = await storagePut(
+    `revisions/${conceptId}-${variationKey}-${Date.now()}.png`,
+    cleaned,
+    "image/png",
+  );
+
+  const iterationNumber = await getNextIterationNumber(conceptId, variationKey);
+  const revisionId = nanoid();
+  await insertRevision({
+    id: revisionId,
+    conceptId,
+    variationKey,
+    iterationNumber,
+    instruction: "Clean & Trim — remove faint text + trim (deterministic, no AI)",
+    referenceImageUrl,
+    resultImageUrl: url,
+    accepted: false,
+  });
+
+  return { revisionId, imageUrl: url };
 }

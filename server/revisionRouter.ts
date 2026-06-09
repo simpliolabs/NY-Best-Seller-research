@@ -6,7 +6,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "./_core/trpc";
-import { generateRevision } from "./revisionEngine";
+import { generateRevision, trimAndCleanRevision } from "./revisionEngine";
 import {
   getRevisionsByConceptVariation,
   getRevisionById,
@@ -99,6 +99,52 @@ export const revisionRouter = router({
         }
       );
 
+      return { revisionId: result.revisionId, imageUrl: result.imageUrl };
+    }),
+
+  /**
+   * Deterministic "Clean & Trim" — remove faint text (e.g. the disclaimer under the design) and
+   * trim to content, with NO AI regeneration so everything else stays pixel-identical. Resolves
+   * the current image the same way submitRevision does (latest revision, else the original).
+   */
+  trimAndClean: protectedProcedure
+    .input(
+      z.object({
+        conceptId: z.number(),
+        variationKey: z.enum(["A", "B", "C"]),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const concept = await getConceptById(input.conceptId);
+      if (!concept) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Concept not found" });
+      }
+      const imageUrlMap: Record<string, string | null> = {
+        A: concept.imageUrlA,
+        B: concept.imageUrlB,
+        C: concept.imageUrlC,
+      };
+      const referenceImageUrl = imageUrlMap[input.variationKey];
+      if (!referenceImageUrl) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `No image exists for variation ${input.variationKey}`,
+        });
+      }
+      const existingRevisions = await getRevisionsByConceptVariation(
+        input.conceptId,
+        input.variationKey
+      );
+      const actualReference =
+        existingRevisions.length > 0
+          ? existingRevisions[0].resultImageUrl
+          : referenceImageUrl;
+
+      const result = await trimAndCleanRevision(
+        input.conceptId,
+        input.variationKey,
+        actualReference
+      );
       return { revisionId: result.revisionId, imageUrl: result.imageUrl };
     }),
 
