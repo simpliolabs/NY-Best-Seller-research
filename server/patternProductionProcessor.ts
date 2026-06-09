@@ -47,8 +47,8 @@ import {
 } from "./productGroupDb";
 import {
   compositeDesignOnMockup,
-  DEFAULT_PRINT_AREA,
   anchorForProductType,
+  resolvePrintZone,
 } from "./mockupCompositor";
 import {
   updateTrendPatternImage,
@@ -1248,12 +1248,14 @@ export async function processPatternProduction(
       .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
     for (const group of sortedGroups) {
       const templates = await getMockupsByGroup(group.id);
-      // PHOTO-RELATIVE zone (the rectangle the human drew) — placed directly, no
-      // garment-box guessing. Per-type anchor: apparel = centered-to-top, objects = center.
-      const printZone = (group.printZone as { x: number; y: number; width: number; height: number } | null) ?? DEFAULT_PRINT_AREA;
+      // PER-TEMPLATE print area (PO 2026-06-09): resolved per-iteration so the niche-hunter
+      // preview matches the mockup path exactly (each color uses its OWN calibrated box).
+      // Per-type anchor (group-level): apparel = centered-to-top, objects = center.
       const anchorY = anchorForProductType(group.productType);
       for (const template of templates) {
         try {
+          // Per-template box wins, then the group zone, then DEFAULT (resolvePrintZone is total).
+          const printZone = resolvePrintZone(template.garmentBbox ?? null, group.printZone ?? null);
           const compositeBuffer = await compositeDesignOnMockup({
             designUrl: productionDesignUrl,
             mockupUrl: template.imageUrl,

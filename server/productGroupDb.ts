@@ -66,7 +66,7 @@ export async function createMockupTemplate(
 
 export async function updateMockupTemplate(
   id: string,
-  data: Partial<Pick<InsertMockupTemplate, "colorName" | "colorHex" | "availableSizes" | "sortOrder">>
+  data: Partial<Pick<InsertMockupTemplate, "colorName" | "colorHex" | "availableSizes" | "sortOrder" | "garmentBbox">>
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");

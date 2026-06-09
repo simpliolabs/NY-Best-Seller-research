@@ -6,7 +6,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "./_core/trpc";
-import { compositeDesignOnMockup, DEFAULT_PRINT_AREA, anchorForProductType } from "./mockupCompositor";
+import { compositeDesignOnMockup, anchorForProductType, resolvePrintZone } from "./mockupCompositor";
 import { pickBestColors } from "./mockupColorMatcher";
 import {
   createMockupRender,
@@ -104,21 +104,23 @@ export const mockupRouter = router({
         templates = await pickBestColors(designUrl, templates, input.colorCount);
       }
 
-      // 4. Get print area from product group (or use default).
-      // PHOTO-RELATIVE: the zone is the exact rectangle the human drew on the template
-      // (POD standard). No garment-box guessing — the design lands precisely where placed.
+      // 4. PER-TEMPLATE print area (PO 2026-06-09): each color template carries its OWN
+      // calibrated box (template.garmentBbox, repurposed as that color's print rectangle),
+      // resolved per-iteration below. Falls back to the group's shared zone, then DEFAULT —
+      // so legacy single-zone groups keep working until each color is recalibrated.
       const hasGroupZone = !!group.printZone;
-      const printZone = (group.printZone as { x: number; y: number; width: number; height: number } | null) ?? DEFAULT_PRINT_AREA;
-      // Per-type vertical anchor: apparel = centered-to-top, objects (mug/cup) = centered.
+      // Per-type vertical anchor (group-level): apparel = centered-to-top, objects = centered.
       const anchorY = anchorForProductType(group.productType);
-      if (!hasGroupZone) {
-        console.warn(`[Mockup] Product group ${input.productGroupId} has NO saved printZone — using DEFAULT. Draw a print zone for this group for precise placement.`);
+      if (!hasGroupZone && !templates.some((t) => !!t.garmentBbox)) {
+        console.warn(`[Mockup] Product group ${input.productGroupId} has NO per-template or group print zone — using DEFAULT. Calibrate a print area per color for precise placement.`);
       }
 
       // 5. Composite each template and store result
       const renders = [];
       for (const template of templates) {
         try {
+          // Per-template box wins, then the group zone, then DEFAULT (resolvePrintZone is total).
+          const printZone = resolvePrintZone(template.garmentBbox ?? null, group.printZone ?? null);
           const compositeBuffer = await compositeDesignOnMockup({
             designUrl,
             mockupUrl: template.imageUrl,

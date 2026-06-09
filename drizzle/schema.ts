@@ -322,8 +322,11 @@ export const productGroups = mysqlTable("product_groups", {
   compareAtPrice: decimal("compareAtPrice", { precision: 10, scale: 2 }),
   /** JSON: [{sizes: ["S","M","L","XL"], price: 34.95}, {sizes: ["2XL"], price: 37.95}, ...] */
   pricingTiers: json("pricingTiers").$type<Array<{ sizes: string[]; price: number }>>(),
-  /** Print zone definition — ratios 0-1 relative to mockup image dimensions */
-  printZone: json("printZone").$type<{ x: number; y: number; width: number; height: number }>(),
+  /** Print zone — photo-relative ratios 0-1. x/y/width/height = the GROUP-level fallback box
+   * (used when a color template has no per-template box). widthIn/heightIn = the real-world MAX
+   * print-area size in INCHES (shared per group; the editor aspect-locks each box to this).
+   * ADDITIVE $type widening 2026-06-09 (TS-only, no DDL — JSON column unchanged). */
+  printZone: json("printZone").$type<{ x: number; y: number; width: number; height: number; widthIn?: number; heightIn?: number }>(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -344,8 +347,13 @@ export const mockupTemplates = mysqlTable("mockup_templates", {
   /** JSON: ["S","M","L","XL","2XL","3XL"] */
   availableSizes: json("availableSizes").$type<string[]>().notNull(),
   sortOrder: int("sortOrder").default(0).notNull(),
-  /** Cached garment bounding box (vision-detected). Fractions 0-1 relative to photo dimensions.
-   * Null = not yet detected. Populated on first composite or manual trigger. */
+  /** PER-TEMPLATE PRINT AREA (repurposed 2026-06-09). Photo-relative ratios 0-1 = the print
+   * rectangle the human calibrated on THIS color's own photo (client API field name: printArea).
+   * Resolved first by resolvePrintZone (template box → group.printZone → DEFAULT). Null = this
+   * color not yet calibrated (falls back to the group zone).
+   * NOTE: column kept named `garmentBbox` (NO rename) to keep the shared tsc gate green; the
+   * old vision-LLM bbox meaning is dead. One-time NULL-clear of stale vision boxes is a deploy
+   * prerequisite so they don't win the fallback. (A later cosmetic rename can align the name.) */
   garmentBbox: json("garmentBbox").$type<{ x: number; y: number; width: number; height: number }>(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });

@@ -35,6 +35,13 @@ export interface CompositeConfig {
    *  upper-chest); objects (mug/cup/tumbler/tote/poster) = "center" (dead-centered).
    *  Horizontal is ALWAYS centered. Defaults to "top" (apparel is the primary product). */
   anchorY?: "top" | "center";
+  /** OPTIONAL perspective warp (DEFERRED — off by default). When set, the design is
+   *  keystone-warped to these 4 corner points (0..1 photo-relative) instead of placed in
+   *  the axis-aligned box — for fabric-drape/angle realism (PSD smart-object parity).
+   *  Not implemented yet (sharp has no native perspective op); the param exists so the
+   *  future quad layer has a stable home. Today: if set, we fall through to the affine
+   *  box placement (no crash) and warn. */
+  quad?: { tl: [number, number]; tr: [number, number]; br: [number, number]; bl: [number, number] };
 }
 
 // 8×8 Bayer ordered-dither matrix (0..63). Used by applyShirtAwareHalftone.
@@ -136,6 +143,51 @@ export const DEFAULT_PRINT_AREA: PrintArea = {
   width: 0.32,
   height: 0.30,
 };
+
+/**
+ * Resolve the print area for ONE template (PO 2026-06-09, per-template print areas).
+ * Priority: the per-template box (mockup_templates.garmentBbox — repurposed as that color's
+ * own calibrated print rectangle) → the group's shared zone → DEFAULT_PRINT_AREA.
+ * TOTAL + divide-safe: validates each candidate (finite + positive width/height) and returns a
+ * FRESH {x,y,width,height}; malformed/empty values fall through instead of crashing the
+ * per-template composite loop. Takes PRIMITIVES (not Drizzle rows) so this module stays
+ * schema-free. Inches (widthIn/heightIn) are intentionally NOT used here — the box is placed
+ * VERBATIM (the editor already aspect-locked it to inches on that color's own photo; reshaping
+ * here would re-introduce per-color drift).
+ */
+export function resolvePrintZone(
+  templateArea: PrintArea | null | undefined,
+  groupZone: PrintArea | null | undefined,
+): PrintArea {
+  const ok = (z: PrintArea | null | undefined): z is PrintArea =>
+    !!z && Number.isFinite(z.x) && Number.isFinite(z.y) &&
+    Number.isFinite(z.width) && Number.isFinite(z.height) && z.width > 0 && z.height > 0;
+  if (ok(templateArea)) return { x: templateArea.x, y: templateArea.y, width: templateArea.width, height: templateArea.height };
+  if (ok(groupZone)) return { x: groupZone.x, y: groupZone.y, width: groupZone.width, height: groupZone.height };
+  return { ...DEFAULT_PRINT_AREA };
+}
+
+/**
+ * Place a design inside a box (CONTAIN-FIT, aspect preserved). Pure helper extracted
+ * byte-identically from the inline composite math (PO 2026-06-09) so the deferred quad-warp
+ * branch has a single home. Given design + box PIXEL dims + the vertical anchor, returns the
+ * resized dims and the offset WITHIN the box (the caller adds the box's top-left). Horizontal is
+ * ALWAYS centered; vertical "top" (apparel) pins to 0, "center" (objects) centers.
+ */
+function placeInBox(
+  designW: number,
+  designH: number,
+  boxW: number,
+  boxH: number,
+  anchorY: "top" | "center" | undefined,
+): { finalW: number; finalH: number; offsetX: number; offsetY: number } {
+  const scale = Math.min(boxW / designW, boxH / designH);
+  const finalW = Math.round(designW * scale);
+  const finalH = Math.round(designH * scale);
+  const offsetX = Math.round((boxW - finalW) / 2);
+  const offsetY = anchorY === "center" ? Math.round((boxH - finalH) / 2) : 0;
+  return { finalW, finalH, offsetX, offsetY };
+}
 
 // Apparel product types are worn on the body → the print is centered-to-TOP of the
 // chest. Everything else (mug, cup, tumbler, tote, poster, sticker) is an object →
@@ -533,29 +585,28 @@ export async function compositeDesignOnMockup(config: CompositeConfig): Promise<
   const designW = designMeta.width!;
   const designH = designMeta.height!;
 
-  // 5. Scale design to CONTAIN within the print zone (aspect-ratio preserved).
-  // The zone is the source of truth — the design fits inside it, never overflows.
-  const scaleByWidth = zoneW / designW;
-  const scaleByHeight = zoneH / designH;
-  const scale = Math.min(scaleByWidth, scaleByHeight);
-  let finalW = Math.round(designW * scale);
-  let finalH = Math.round(designH * scale);
+  // 5–6. CONTAIN-FIT the design into the print area + position WITHIN it (placeInBox).
+  // The print area is the PER-TEMPLATE box the human calibrated (drawn + inch-sized) on THAT
+  // color's own photo; the design is placed RELATIVE TO IT, verbatim (no reshape — the editor
+  // already aspect-locked the box). Horizontal centered; vertical by anchorY (apparel "top",
+  // objects "center"). placeInBox returns offsets WITHIN the box; we add the box top-left.
+  const { finalW, finalH, offsetX: boxOffsetX, offsetY: boxOffsetY } =
+    placeInBox(designW, designH, zoneW, zoneH, config.anchorY);
 
   const resizedDesign = await sharp(trimmedDesign)
     .resize(finalW, finalH, { fit: "fill", background: { r: 0, g: 0, b: 0, alpha: 0 } })
     .toBuffer();
 
-  // 6. Position design: CONTAIN-FIT to the print area (size), then position WITHIN it.
-  // The print area is the box the human drew + sized in inches (10.5x13 etc.), positioned
-  // ON the garment. So the design is placed RELATIVE TO THAT BOX — the box you place IS
-  // where the print goes (PO 2026-06-08; reverts the photo-midline auto-center, which
-  // ignored your box position).
-  // HORIZONTAL — centered within the box. VERTICAL — by anchorY: apparel = "top"
-  // (centered-to-top, print sits at the area's top); objects = "center" (dead-centered).
-  const offsetX = zoneX + Math.round((zoneW - finalW) / 2);  // center within the print area
-  const offsetY = config.anchorY === "center"
-    ? zoneY + Math.round((zoneH - finalH) / 2) // center vertically (mugs/objects)
-    : zoneY;                                    // top-anchor (apparel) — design top = area top
+  // DEFERRED quad/perspective warp (off by default). When config.quad is set, the future layer
+  // warps resizedDesign to the 4 corner points instead of the axis-aligned placement below.
+  // Not implemented yet (sharp has no native perspective op) — fall through to affine + warn,
+  // never crash, so the param is safe to wire ahead of the implementation.
+  if (config.quad) {
+    console.warn("[Compositor] config.quad set but perspective warp is not implemented yet — using affine box placement.");
+  }
+
+  const offsetX = zoneX + boxOffsetX;  // box left + centered-within-box offset
+  const offsetY = zoneY + boxOffsetY;  // box top + anchorY offset
 
   // 7. Composite design onto mockup, output as WebP (compressed, max 1000x1000)
   const composite = sharp(mockupBuf)
