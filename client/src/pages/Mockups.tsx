@@ -17,7 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Loader2, Image as ImageIcon, Shirt, RefreshCw, Trash2 } from "lucide-react";
+import { Loader2, Image as ImageIcon, Shirt, RefreshCw, Trash2, AlertTriangle } from "lucide-react";
 
 export default function Mockups() {
   const { activeWorkspace } = useWorkspace();
@@ -35,6 +35,10 @@ export default function Mockups() {
   const [selectedVariation, setSelectedVariation] = useState<string>("");
   const [selectedGroupId, setSelectedGroupId] = useState<string>("");
   const [colorCount, setColorCount] = useState<number>(5);
+
+  // Track whether the last generation used a default zone
+  const [usedDefaultZone, setUsedDefaultZone] = useState<boolean>(false);
+  const [productionReady, setProductionReady] = useState<boolean>(true);
 
   // Fetch concepts that have images (all concepts, not just winners)
   const conceptsQuery = trpc.library.list.useQuery(
@@ -57,7 +61,9 @@ export default function Mockups() {
   // Generate mutation
   const generateMutation = trpc.mockup.generate.useMutation({
     onSuccess: (data) => {
-      // QA check data is internal-only — never surface scores/issues to user
+      // Surface usedDefaultZone and productionReady flags
+      setUsedDefaultZone(!!data.usedDefaultZone);
+      setProductionReady(!!data.productionReady);
       toast.success(`Generated ${data.mockupCount} mockup${data.mockupCount !== 1 ? "s" : ""}`);
       mockupsQuery.refetch();
     },
@@ -110,6 +116,9 @@ export default function Mockups() {
 
   function handleGenerate() {
     if (!canGenerate) return;
+    // Clear previous warning state
+    setUsedDefaultZone(false);
+    setProductionReady(true);
     generateMutation.mutate({
       conceptId: Number(selectedConceptId),
       variationKey: selectedVariation as "A" | "B" | "C",
@@ -138,13 +147,13 @@ export default function Mockups() {
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* Concept selector */}
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 min-w-0">
               <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                 Concept
               </label>
               <Select value={selectedConceptId} onValueChange={(v) => { setSelectedConceptId(v); setSelectedVariation(""); }}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select concept…" />
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Select concept…" className="truncate" />
                 </SelectTrigger>
                 <SelectContent>
                   {conceptsWithImages.map((c) => (
@@ -180,7 +189,7 @@ export default function Mockups() {
             </div>
 
             {/* Product group selector */}
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 min-w-0">
               <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                 Product Group
               </label>
@@ -208,7 +217,7 @@ export default function Mockups() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {[3, 5, 8, 10, 15, 20].map((n) => (
+                  {[3, 5, 6, 7, 8, 10, 15, 20].map((n) => (
                     <SelectItem key={n} value={String(n)}>
                       {n} colors
                     </SelectItem>
@@ -233,6 +242,28 @@ export default function Mockups() {
           </Button>
         </CardContent>
       </Card>
+
+      {/* Warning banner: usedDefaultZone */}
+      {usedDefaultZone && (
+        <div className="flex items-start gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3">
+          <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
+          <div className="text-sm text-amber-200">
+            <span className="font-semibold">No print zone set for this group</span> — using default.
+            Draw one for precise placement.
+          </div>
+        </div>
+      )}
+
+      {/* Warning banner: not production ready (no transparent PNG) */}
+      {!productionReady && (
+        <div className="flex items-start gap-3 rounded-lg border border-orange-500/40 bg-orange-500/10 px-4 py-3">
+          <AlertTriangle className="h-5 w-5 text-orange-400 shrink-0 mt-0.5" />
+          <div className="text-sm text-orange-200">
+            <span className="font-semibold">Design not production-ready</span> — background was auto-removed (may be imperfect on colored backgrounds).
+            Process this design for production for a clean cutout.
+          </div>
+        </div>
+      )}
 
       {/* Mockup Gallery */}
       {selectedConceptId && mockupsQuery.data && mockupsQuery.data.length > 0 && (
