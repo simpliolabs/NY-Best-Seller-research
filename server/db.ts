@@ -1150,7 +1150,7 @@ export async function getConceptWithBookById(conceptId: number) {
 export async function updateConceptProductionUrl(
   conceptId: number,
   variation: "A" | "B" | "C",
-  url: string
+  url: string | null
 ): Promise<void> {
   const db = await getDb();
   if (!db) return;

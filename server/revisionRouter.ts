@@ -13,7 +13,7 @@ import {
   markRevisionAccepted,
   deleteRevisionsByConceptVariation,
 } from "./revisionDb";
-import { getConceptById, getConceptsByRunId } from "./db";
+import { getConceptById, getConceptsByRunId, updateConceptProductionUrl } from "./db";
 
 export const revisionRouter = router({
   /**
@@ -164,6 +164,17 @@ export const revisionRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Revision not found" });
       }
       await markRevisionAccepted(input.revisionId);
+
+      // WIRE TO DOWNSTREAM: the accepted revision IS the design now. Write it into the concept's
+      // productionUrl<variation> — the field the mockup generator AND color matcher actually read
+      // (productionUrlX || imageUrlX). Without this, Accept only flips a flag in the revisions
+      // table and the Mockups page keeps compositing the OLD image. Revision images are already
+      // background-stripped/transparent, so they're production-ready as-is.
+      await updateConceptProductionUrl(
+        rev.conceptId,
+        rev.variationKey as "A" | "B" | "C",
+        rev.resultImageUrl
+      );
       return { success: true };
     }),
 
@@ -193,6 +204,11 @@ export const revisionRouter = router({
     )
     .mutation(async ({ input }) => {
       await deleteRevisionsByConceptVariation(input.conceptId, input.variationKey);
+      // Clear the production override so downstream falls back to the ORIGINAL: with
+      // productionUrl<variation> = null, mockup.generate re-derives it from the original
+      // imageUrl<variation> (auto-process). Otherwise it would keep serving the now-deleted
+      // accepted revision's image.
+      await updateConceptProductionUrl(input.conceptId, input.variationKey, null);
       return { success: true };
     }),
 
