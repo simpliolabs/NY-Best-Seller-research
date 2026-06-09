@@ -298,7 +298,7 @@ export default function ReportDetail() {
             </h2>
             <div className="flex flex-wrap gap-4">
               {winners.map((c: any) => {
-                const hasImage = c.imageUrlA || c.imageUrlB || c.imageUrlC;
+                const hasImage = c.productionUrlA || c.imageUrlA || c.productionUrlB || c.imageUrlB || c.productionUrlC || c.imageUrlC;
                 const book = books.find((b: any) => b.id === c.bookId);
                 return (
                   <Card key={c.id} className="w-[180px] overflow-hidden border-amber-200 bg-amber-50/20 cursor-pointer hover:shadow-md transition-shadow"
@@ -307,7 +307,7 @@ export default function ReportDetail() {
                     <div className="aspect-square relative bg-muted">
                       {hasImage ? (
                         <ImageThumbnail
-                          src={c.imageUrlA || c.imageUrlB || c.imageUrlC}
+                          src={c.productionUrlA || c.imageUrlA || c.productionUrlB || c.imageUrlB || c.productionUrlC || c.imageUrlC}
                           alt={c.conceptName}
                           size={180}
                           badge={`#${c.globalRank}`}
@@ -396,9 +396,9 @@ export default function ReportDetail() {
           conceptId={lightboxConcept.id}
           conceptName={lightboxConcept.conceptName}
           images={{
-            A: lightboxConcept.imageUrlA,
-            B: lightboxConcept.imageUrlB,
-            C: lightboxConcept.imageUrlC,
+            A: lightboxConcept.productionUrlA || lightboxConcept.imageUrlA,
+            B: lightboxConcept.productionUrlB || lightboxConcept.imageUrlB,
+            C: lightboxConcept.productionUrlC || lightboxConcept.imageUrlC,
           }}
           detail={(() => {
             const book = books.find((b: any) => b.id === lightboxConcept.bookId);

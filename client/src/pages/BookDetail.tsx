@@ -399,7 +399,7 @@ export default function BookDetail() {
                   {winnerConcepts.map((c: any) => (
                     <ImageThumbnail
                       key={c.id}
-                      src={c.imageUrlA || c.imageUrlB || c.imageUrlC}
+                      src={c.productionUrlA || c.imageUrlA || c.productionUrlB || c.imageUrlB || c.productionUrlC || c.imageUrlC}
                       alt={c.conceptName}
                       size={56}
                       badge={`#${c.globalRank}`}
@@ -552,6 +552,9 @@ export default function BookDetail() {
                       imageUrlA={c.imageUrlA}
                       imageUrlB={c.imageUrlB}
                       imageUrlC={c.imageUrlC}
+                      productionUrlA={c.productionUrlA}
+                      productionUrlB={c.productionUrlB}
+                      productionUrlC={c.productionUrlC}
                       imagePromptA={c.imagePromptA}
                       imagePromptB={c.imagePromptB}
                       imagePromptC={c.imagePromptC}
@@ -603,13 +606,16 @@ export default function BookDetail() {
                       imageUrlA={c.imageUrlA}
                       imageUrlB={c.imageUrlB}
                       imageUrlC={c.imageUrlC}
+                      productionUrlA={c.productionUrlA}
+                      productionUrlB={c.productionUrlB}
+                      productionUrlC={c.productionUrlC}
                       imagePromptA={c.imagePromptA}
                       imagePromptB={c.imagePromptB}
                       imagePromptC={c.imagePromptC}
                       isWinner={false}
                       globalRank={c.globalRank}
                       marketValidation={mv ?? null}
-                      showImages={false}
+                      showImages={true}
                       compact={true}
                       refreshSource={c.refreshSource}
                       signalTags={Array.isArray(c.signalTags) ? c.signalTags : []}
@@ -651,13 +657,16 @@ export default function BookDetail() {
                       imageUrlA={c.imageUrlA}
                       imageUrlB={c.imageUrlB}
                       imageUrlC={c.imageUrlC}
+                      productionUrlA={c.productionUrlA}
+                      productionUrlB={c.productionUrlB}
+                      productionUrlC={c.productionUrlC}
                       imagePromptA={c.imagePromptA}
                       imagePromptB={c.imagePromptB}
                       imagePromptC={c.imagePromptC}
                       isWinner={false}
                       globalRank={c.globalRank}
                       marketValidation={mv ?? null}
-                      showImages={false}
+                      showImages={true}
                       compact={true}
                       refreshSource={c.refreshSource}
                       signalTags={Array.isArray(c.signalTags) ? c.signalTags : []}
@@ -724,9 +733,9 @@ export default function BookDetail() {
           conceptId={lightboxConcept.id}
           conceptName={lightboxConcept.conceptName}
           images={{
-            A: lightboxConcept.imageUrlA,
-            B: lightboxConcept.imageUrlB,
-            C: lightboxConcept.imageUrlC,
+            A: lightboxConcept.productionUrlA || lightboxConcept.imageUrlA,
+            B: lightboxConcept.productionUrlB || lightboxConcept.imageUrlB,
+            C: lightboxConcept.productionUrlC || lightboxConcept.imageUrlC,
           }}
           detail={{
             headline: lightboxConcept.headline,

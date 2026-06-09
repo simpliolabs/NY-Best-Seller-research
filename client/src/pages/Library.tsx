@@ -253,7 +253,7 @@ export default function Library() {
           {groupedByBook.map((group) => {
             const isExpanded = expandedBooks.has(group.bookTitle);
             const winnerCount = group.concepts.filter((c: any) => c.isWinner).length;
-            const imageCount = group.concepts.filter((c: any) => c.imageUrlA || c.imageUrlB || c.imageUrlC).length;
+            const imageCount = group.concepts.filter((c: any) => c.productionUrlA || c.imageUrlA || c.productionUrlB || c.imageUrlB || c.productionUrlC || c.imageUrlC).length;
 
             return (
               <Card key={group.bookTitle} className="overflow-hidden">
@@ -364,9 +364,9 @@ export default function Library() {
           conceptId={lightboxConcept.id}
           conceptName={lightboxConcept.conceptName}
           images={{
-            A: lightboxConcept.imageUrlA,
-            B: lightboxConcept.imageUrlB,
-            C: lightboxConcept.imageUrlC,
+            A: lightboxConcept.productionUrlA || lightboxConcept.imageUrlA,
+            B: lightboxConcept.productionUrlB || lightboxConcept.imageUrlB,
+            C: lightboxConcept.productionUrlC || lightboxConcept.imageUrlC,
           }}
           detail={{
             headline: lightboxConcept.headline,
@@ -406,9 +406,9 @@ export default function Library() {
 function ConceptCard({ concept, onOpenLightbox, onDeleted }: { concept: any; onOpenLightbox: () => void; onDeleted?: (id: number) => void }) {
   const { activeWorkspace } = useWorkspace();
   const slug = activeWorkspace?.slug ?? "";
-  const hasImage = concept.imageUrlA || concept.imageUrlB || concept.imageUrlC;
-  const primaryImage = concept.imageUrlA || concept.imageUrlB || concept.imageUrlC;
-  const imageCount = [concept.imageUrlA, concept.imageUrlB, concept.imageUrlC].filter(Boolean).length;
+  const hasImage = concept.productionUrlA || concept.imageUrlA || concept.productionUrlB || concept.imageUrlB || concept.productionUrlC || concept.imageUrlC;
+  const primaryImage = concept.productionUrlA || concept.imageUrlA || concept.productionUrlB || concept.imageUrlB || concept.productionUrlC || concept.imageUrlC;
+  const imageCount = [concept.productionUrlA || concept.imageUrlA, concept.productionUrlB || concept.imageUrlB, concept.productionUrlC || concept.imageUrlC].filter(Boolean).length;
   const utils = trpc.useUtils();
   const deleteMutation = trpc.library.deleteConcept.useMutation({
     onSuccess: () => {

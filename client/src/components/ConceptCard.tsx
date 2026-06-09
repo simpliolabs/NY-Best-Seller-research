@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Heart, Trophy, Crown, ChevronDown, Camera, ChevronRight, ExternalLink, Trash2, Wand2, Loader2 } from "lucide-react";
+import { Heart, Trophy, Crown, ChevronDown, Camera, ChevronRight, ExternalLink, Trash2, Wand2, Loader2, Paintbrush, Shirt } from "lucide-react";
 import { Link } from "wouter";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { ColorSwatch } from "./ColorSwatch";
@@ -47,6 +47,9 @@ interface ConceptCardProps {
   imageUrlA?: string | null;
   imageUrlB?: string | null;
   imageUrlC?: string | null;
+  productionUrlA?: string | null;
+  productionUrlB?: string | null;
+  productionUrlC?: string | null;
   imagePromptA?: string | null;
   imagePromptB?: string | null;
   imagePromptC?: string | null;
@@ -85,6 +88,9 @@ export function ConceptCard({
   imageUrlA,
   imageUrlB,
   imageUrlC,
+  productionUrlA,
+  productionUrlB,
+  productionUrlC,
   imagePromptA,
   imagePromptB,
   imagePromptC,
@@ -117,7 +123,11 @@ export function ConceptCard({
     },
   });
 
-  const imageCount = [imageUrlA, imageUrlB, imageUrlC].filter(Boolean).length;
+  // Prefer accepted/production design over raw generated image
+  const displayUrlA = productionUrlA || imageUrlA;
+  const displayUrlB = productionUrlB || imageUrlB;
+  const displayUrlC = productionUrlC || imageUrlC;
+  const imageCount = [displayUrlA, displayUrlB, displayUrlC].filter(Boolean).length;
 
   const winnerBorder = isWinner
     ? "border-amber-400 bg-gradient-to-br from-amber-50/60 to-yellow-50/30 shadow-lg ring-2 ring-amber-300/40"
@@ -205,6 +215,26 @@ export function ConceptCard({
             )}
           </div>
           <div className="flex items-center gap-1 shrink-0">
+            {(displayUrlA || displayUrlB || displayUrlC) && (
+              <>
+                <Link
+                  href={`/${slug}/design-studio?conceptId=${id}`}
+                  onClick={(e: React.MouseEvent) => e.stopPropagation()}
+                  className="p-1 rounded hover:bg-primary/10 text-primary transition-colors"
+                  title="Edit in Design Studio"
+                >
+                  <Paintbrush className="h-3.5 w-3.5" />
+                </Link>
+                <Link
+                  href={`/${slug}/mockups?conceptId=${id}`}
+                  onClick={(e: React.MouseEvent) => e.stopPropagation()}
+                  className="p-1 rounded hover:bg-primary/10 text-primary transition-colors"
+                  title="Generate product mockups"
+                >
+                  <Shirt className="h-3.5 w-3.5" />
+                </Link>
+              </>
+            )}
             {onGenerateImage && !imageUrlA && !imageUrlB && !imageUrlC && (
               <Button
                 variant="ghost"
@@ -350,11 +380,11 @@ export function ConceptCard({
         )}
 
         {/* AI-generated design images — 3 variations for winners */}
-        {(showImages || (compact && expanded)) && (imageUrlA || imageUrlB || imageUrlC) && (
+        {(showImages || (compact && expanded)) && (displayUrlA || displayUrlB || displayUrlC) && (
           <DesignImagePair
-            imageUrlA={imageUrlA ?? null}
-            imageUrlB={imageUrlB ?? null}
-            imageUrlC={imageUrlC}
+            imageUrlA={displayUrlA ?? null}
+            imageUrlB={displayUrlB ?? null}
+            imageUrlC={displayUrlC}
             imagePromptA={imagePromptA ?? null}
             imagePromptB={imagePromptB ?? null}
             imagePromptC={imagePromptC}
