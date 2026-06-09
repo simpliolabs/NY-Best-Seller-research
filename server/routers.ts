@@ -42,6 +42,7 @@ import {
   updateConceptImages,
   getOrCreateManualUploadBook,
   insertConcept,
+  updateConceptStyle,
 } from "./db";
 import { runPipeline, recoverStaleRuns, regenerateImagesForRun } from "./pipeline";
 import { processConceptProductionImages, processDesignForProduction } from "./productionImageProcessor";
@@ -753,7 +754,7 @@ export const appRouter = router({
         }
 
         // Build a simplified prompt for the concept
-        const promptSystem = `You are a senior art director. Write THREE image generation prompts for a t-shirt graphic design concept. Each prompt should be detailed (200+ words) and describe a print-ready design with transparent/white background suitable for DTF printing. Return ONLY a JSON object with keys: variation_a, variation_b, variation_c.`;
+        const promptSystem = `You are a senior art director. Write THREE image generation prompts for a t-shirt graphic design concept. Each prompt should be detailed (200+ words) and describe a print-ready design with transparent/white background suitable for DTF printing. Render the design in the concept's stated art style. ABSOLUTE RULE: NEVER cartoonish, clip-art, kawaii, chibi, or childish/exaggerated cartoon styling — under any circumstances. Return ONLY a JSON object with keys: variation_a, variation_b, variation_c.`;
         const userMsg = `Design concept:
 Name: ${concept.conceptName}
 Format: ${concept.format}
@@ -809,6 +810,84 @@ Font: ${concept.fontSuggestion ?? "not specified"}`;
         } catch (err: any) {
           console.error(`[GenerateSingleImage] Failed for concept ${input.conceptId}:`, err);
           return { success: false, message: err?.message ?? "Image generation failed." };
+        }
+      }),
+
+    /**
+     * Regenerate a concept's images in a CHOSEN art style (manual re-roll) — so a good concept
+     * isn't lost when its image came out wrong (e.g. cartoonish). Overwrites the 3 variations,
+     * updates the concept's style label, and CLEARS the cached production renders so mockups
+     * re-process the new image. Never cartoonish.
+     */
+    regenerateImage: protectedProcedure
+      .input(z.object({
+        conceptId: z.number(),
+        style: z.string().min(1).max(200),
+      }))
+      .mutation(async ({ input }) => {
+        const concept = await getConceptById(input.conceptId);
+        if (!concept) return { success: false, message: "Concept not found." };
+
+        const promptSystem = `You are a senior art director. Write THREE image generation prompts for a print-ready t-shirt graphic. Each: 200+ words, transparent/white background, DTF-ready. RENDER THE DESIGN ENTIRELY IN THIS ART STYLE: "${input.style}" — commit fully; every prompt must read unmistakably as that style. ABSOLUTE RULE: NEVER cartoonish, clip-art, kawaii, chibi, or childish/exaggerated cartoon styling — under any circumstances. Return ONLY a JSON object with keys: variation_a, variation_b, variation_c.`;
+        const userMsg = `Design concept:
+Name: ${concept.conceptName}
+Format: ${concept.format}
+Art style (USE THIS EXACTLY): ${input.style}
+Headline: ${concept.headline ?? "none"}
+Subtext: ${concept.subtext ?? "none"}
+Color Palette: ${(concept.colorPalette as string[] ?? []).join(", ") || "not specified"}
+Layout: ${concept.layoutDescription ?? "not specified"}
+Font: ${concept.fontSuggestion ?? "not specified"}`;
+
+        try {
+          const promptResult = await invokeLLM({
+            messages: [
+              { role: "system", content: promptSystem },
+              { role: "user", content: userMsg },
+            ],
+            response_format: { type: "json_object" },
+          });
+          const promptContent = typeof promptResult.choices[0]?.message?.content === "string"
+            ? promptResult.choices[0].message.content : "";
+          const parsed = JSON.parse(promptContent);
+          const prompts = {
+            A: parsed.variation_a ?? parsed.prompt ?? "",
+            B: parsed.variation_b ?? "",
+            C: parsed.variation_c ?? "",
+          };
+
+          const results = await Promise.allSettled(
+            (["A", "B", "C"] as const).filter((v) => prompts[v]).map(async (variation) => {
+              const img = await generateImage({ prompt: prompts[variation] });
+              return { variation, url: img.url ?? null, prompt: prompts[variation] };
+            })
+          );
+
+          const update: Parameters<typeof updateConceptImages>[1] = {};
+          const regenerated: Array<"A" | "B" | "C"> = [];
+          for (const r of results) {
+            if (r.status !== "fulfilled" || !r.value.url) continue;
+            const { variation, url, prompt } = r.value;
+            regenerated.push(variation);
+            if (variation === "A") { update.imageUrlA = url; update.imagePromptA = prompt; }
+            if (variation === "B") { update.imageUrlB = url; update.imagePromptB = prompt; }
+            if (variation === "C") { update.imageUrlC = url; update.imagePromptC = prompt; }
+          }
+          if (regenerated.length === 0) {
+            return { success: false, message: "Image generation returned no images." };
+          }
+
+          // Overwrite the images (non-null overwrite is allowed by the immutability guard), update
+          // the style label, and CLEAR the cached production renders for the regenerated variations
+          // so mockups re-process the NEW image instead of serving the old one.
+          await updateConceptImages(input.conceptId, update);
+          await updateConceptStyle(input.conceptId, input.style);
+          await Promise.all(regenerated.map((v) => updateConceptProductionUrl(input.conceptId, v, null)));
+
+          return { success: true, message: `Regenerated ${regenerated.length} image(s) in "${input.style}" style.` };
+        } catch (err: any) {
+          console.error(`[RegenerateImage] Failed for concept ${input.conceptId}:`, err);
+          return { success: false, message: err?.message ?? "Regeneration failed." };
         }
       }),
 

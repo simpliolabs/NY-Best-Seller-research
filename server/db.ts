@@ -459,6 +459,14 @@ export async function getConceptsByRunId(runId: number): Promise<DesignConcept[]
   return db.select().from(designConcepts).where(eq(designConcepts.runId, runId));
 }
 
+/** Update a concept's free-text style label (used when re-rolling a concept's image in a chosen
+ *  style, so the Library filter + future prompts reflect the new style). */
+export async function updateConceptStyle(conceptId: number, style: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(designConcepts).set({ style }).where(eq(designConcepts.id, conceptId));
+}
+
 export async function updateConceptImages(
   conceptId: number,
   data: {
