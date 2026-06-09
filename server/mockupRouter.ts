@@ -8,6 +8,7 @@ import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "./_core/trpc";
 import { compositeDesignOnMockup, anchorForProductType, resolvePrintZone } from "./mockupCompositor";
 import { pickBestColors } from "./mockupColorMatcher";
+import { processDesignForProduction } from "./productionImageProcessor";
 import {
   createMockupRender,
   getMockupsByConcept,
@@ -54,23 +55,39 @@ export const mockupRouter = router({
       // productionUrl* is set by processDesignForProduction after AI background removal.
       const productionUrlKey = `productionUrl${input.variationKey}` as "productionUrlA" | "productionUrlB" | "productionUrlC";
       const imageUrlKey = `imageUrl${input.variationKey}` as "imageUrlA" | "imageUrlB" | "imageUrlC";
-      const designUrl = concept[productionUrlKey] || concept[imageUrlKey];
-      if (!designUrl) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `No image found for variation ${input.variationKey}`,
-        });
-      }
-      const isProductionReady = !!concept[productionUrlKey];
-      if (isProductionReady) {
+      const imagePromptKey = `imagePrompt${input.variationKey}` as "imagePromptA" | "imagePromptB" | "imagePromptC";
+
+      // Prefer the production (clean, transparent, content-cropped) design. If it doesn't exist
+      // yet, AUTO-PROCESS the raw image into a clean cutout NOW (PO 2026-06-09). Why this matters:
+      // compositing the RAW image relies on composite-time background-removal that is unreliable
+      // on colored/scene backgrounds — it leaves the design un-cropped, so contain-fit places a
+      // padded canvas and the visible art lands OFF-CENTER + over/undersized. A production cutout
+      // is content-cropped + centered, so it fills the print zone correctly. processDesignForProduction
+      // caches its result to productionUrl* (updateConceptProductionUrl), so this runs at most once
+      // per variation; on failure we fall back to the raw image (degraded, but never blocks).
+      let designUrl: string | null | undefined = concept[productionUrlKey];
+      let isProductionReady = !!designUrl;
+      if (designUrl) {
         console.log(`[Mockup] Using production (transparent) URL for concept ${input.conceptId} variation ${input.variationKey}`);
       } else {
-        // No AI-extracted transparent PNG — compositeDesignOnMockup will auto-strip
-        // the background (cheap white-flood-fill; AI fallback for full mockups). That
-        // handles white/near-white backgrounds well but CANNOT cleanly remove a
-        // colored/scene background. Warn + flag so the UI can tell the user this
-        // design wasn't pre-processed (background auto-removed, may be imperfect).
-        console.warn(`[Mockup] Concept ${input.conceptId} variation ${input.variationKey} has NO transparent productionUrl — compositing raw image with auto background-removal (may be imperfect on colored backgrounds). Process this design for production for a clean cutout.`);
+        const rawUrl = concept[imageUrlKey];
+        if (!rawUrl) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: `No image found for variation ${input.variationKey}` });
+        }
+        try {
+          const promptDesc = concept[imagePromptKey] || `${concept.conceptName || "design"} in ${concept.style || "graphic tee"} style`;
+          console.log(`[Mockup] No productionUrl${input.variationKey} for concept ${input.conceptId} — auto-processing the raw design into a clean transparent cutout…`);
+          designUrl = await processDesignForProduction(rawUrl, input.conceptId, input.variationKey, promptDesc);
+          isProductionReady = true;
+          console.log(`[Mockup] Auto-process complete → ${designUrl}`);
+        } catch (err) {
+          console.warn(`[Mockup] Auto-process FAILED for concept ${input.conceptId} variation ${input.variationKey}; falling back to the raw image (placement may be off-center / imperfect):`, err);
+          designUrl = rawUrl;
+          isProductionReady = false;
+        }
+      }
+      if (!designUrl) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `No image found for variation ${input.variationKey}` });
       }
 
       // 1b. Workspace ownership guard — concept and product group must belong to same workspace
@@ -115,6 +132,12 @@ export const mockupRouter = router({
         console.warn(`[Mockup] Product group ${input.productGroupId} has NO per-template or group print zone — using DEFAULT. Calibrate a print area per color for precise placement.`);
       }
 
+      // 4c. Capture the prior render set for this concept+variation. We DELETE it only AFTER new
+      // renders succeed (below) so "Generate Mockups" REPLACES the set instead of accumulating
+      // stale duplicates — without risking data loss if compositing fails. (PO: regenerate kept
+      // showing the same old off-center renders because createMockupRender only ever inserts.)
+      const priorRenders = await getMockupsByConceptVariation(input.conceptId, input.variationKey);
+
       // 5. Composite each template and store result
       const renders = [];
       for (const template of templates) {
@@ -143,6 +166,15 @@ export const mockupRouter = router({
         } catch (err) {
           // Log but continue — don't fail the whole batch for one template
           console.error(`[Mockup] Failed to composite template ${template.id}:`, err);
+        }
+      }
+
+      // 5b. Fresh renders exist → remove the prior set (REPLACE semantics so the UI updates
+      // instead of showing stale renders). Guarded on success so a total failure never wipes
+      // the previous good renders.
+      if (renders.length > 0 && priorRenders.length > 0) {
+        for (const pr of priorRenders) {
+          await deleteMockupRender(pr.id);
         }
       }
 
