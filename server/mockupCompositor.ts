@@ -585,6 +585,7 @@ export async function compositeDesignOnMockup(config: CompositeConfig): Promise<
   const designW = designMeta.width!;
   const designH = designMeta.height!;
 
+
   // 5–6. CONTAIN-FIT the design into the print area + position WITHIN it (placeInBox).
   // The print area is the PER-TEMPLATE box the human calibrated (drawn + inch-sized) on THAT
   // color's own photo; the design is placed RELATIVE TO IT, verbatim (no reshape — the editor
@@ -593,9 +594,11 @@ export async function compositeDesignOnMockup(config: CompositeConfig): Promise<
   const { finalW, finalH, offsetX: boxOffsetX, offsetY: boxOffsetY } =
     placeInBox(designW, designH, zoneW, zoneH, config.anchorY);
 
+
   const resizedDesign = await sharp(trimmedDesign)
     .resize(finalW, finalH, { fit: "fill", background: { r: 0, g: 0, b: 0, alpha: 0 } })
     .toBuffer();
+
 
   // DEFERRED quad/perspective warp (off by default). When config.quad is set, the future layer
   // warps resizedDesign to the 4 corner points instead of the axis-aligned placement below.
@@ -608,26 +611,28 @@ export async function compositeDesignOnMockup(config: CompositeConfig): Promise<
   const offsetX = zoneX + boxOffsetX;  // box left + centered-within-box offset
   const offsetY = zoneY + boxOffsetY;  // box top + anchorY offset
 
-  // 7. Composite at FULL resolution FIRST, bake to a buffer, THEN resize in a SEPARATE Sharp
-  // instance. CRITICAL (root cause of the long-standing placement bug): on a single chained
-  // instance, sharp(mockup).composite(overlay).resize() applies .resize() to the BASE before
-  // compositing, so the overlay is dropped at its original-space left/top AND original size onto
-  // the now-shrunk canvas — design ends up ~1.5x too large and shifted right/down. Materializing
-  // the composite to a buffer forces the overlay to bake in at full res; the resize then scales
-  // the whole composited image together, preserving placement. Verified visually (PO 2026-06-09).
-  const compositedFull = await sharp(mockupBuf)
+
+  // 7. Composite design onto mockup at full resolution FIRST, then resize.
+  // CRITICAL: Sharp's lazy pipeline reorders .composite().resize() — it resizes the
+  // base image BEFORE compositing the overlay, causing the design to appear too large.
+  // Fix: composite to buffer in one step, then resize in a SEPARATE Sharp instance.
+  const composited = await sharp(mockupBuf)
     .composite([{ input: resizedDesign, left: offsetX, top: offsetY }])
+    .png()
     .toBuffer();
 
-  let out = sharp(compositedFull);
+  // Resize to max 1000x1000 if larger (separate pipeline to avoid reorder)
+  let outputBuf: Buffer;
   if (mockupW > 1000 || mockupH > 1000) {
-    out = out.resize(1000, 1000, { fit: "inside", withoutEnlargement: true });
+    outputBuf = await sharp(composited)
+      .resize(1000, 1000, { fit: "inside", withoutEnlargement: true })
+      .webp({ quality: 82, effort: 4 })
+      .toBuffer();
+  } else {
+    outputBuf = await sharp(composited)
+      .webp({ quality: 82, effort: 4 })
+      .toBuffer();
   }
 
-  // Output as compressed WebP for Shopify
-  const result = await out
-    .webp({ quality: 82, effort: 4 })
-    .toBuffer();
-
-  return result;
+  return outputBuf;
 }
