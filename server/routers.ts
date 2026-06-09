@@ -40,6 +40,8 @@ import {
   updateBookForumSignals,
   deleteConceptById,
   updateConceptImages,
+  getOrCreateManualUploadBook,
+  insertConcept,
 } from "./db";
 import { runPipeline, recoverStaleRuns, regenerateImagesForRun } from "./pipeline";
 import { processConceptProductionImages, processDesignForProduction } from "./productionImageProcessor";
@@ -656,6 +658,39 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         await deleteConceptById(input.conceptId);
         return { success: true };
+      }),
+
+    /**
+     * Manually upload a design image as a new concept (no AI). Stores the image, attaches it to
+     * the workspace's "Manual Uploads" book, and creates a concept with the image as Variation A —
+     * so it shows in the Library and is immediately usable in Design Studio + Mockups. Stored
+     * as-is (raw); the user can Clean & Trim it in the Design Studio.
+     */
+    uploadConcept: protectedProcedure
+      .input(z.object({
+        workspaceId: z.string(),
+        name: z.string().min(1).max(255),
+        imageBase64: z.string(),
+        mimeType: z.enum(["image/jpeg", "image/png", "image/webp"]),
+      }))
+      .mutation(async ({ input }) => {
+        const buffer = Buffer.from(input.imageBase64, "base64");
+        const ext = input.mimeType === "image/jpeg" ? "jpg" : input.mimeType === "image/png" ? "png" : "webp";
+        const { bookId, runId } = await getOrCreateManualUploadBook(input.workspaceId);
+        const { url } = await storagePut(
+          `manual-uploads/${input.workspaceId}/${Date.now()}.${ext}`,
+          buffer,
+          input.mimeType,
+        );
+        const conceptId = await insertConcept({
+          bookId,
+          runId,
+          conceptName: input.name,
+          format: "Manual",
+          style: "Manual upload",
+          imageUrlA: url,
+        });
+        return { success: true, conceptId, imageUrl: url };
       }),
   }),
 

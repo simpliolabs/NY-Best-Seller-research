@@ -264,6 +264,31 @@ export async function insertBook(book: InsertBook): Promise<number> {
   return result[0].insertId;
 }
 
+/** Title of the per-workspace "Manual Uploads" sentinel book that holds manually-uploaded
+ *  designs (a concept requires bookId+runId; this gives manual uploads one to attach to and a
+ *  Library group to appear under). */
+export const MANUAL_UPLOAD_BOOK_TITLE = "Manual Uploads";
+
+/** Find (or create once) the workspace's "Manual Uploads" book + run. All manual design uploads
+ *  for a workspace share this one book/run, so they appear together in the Library (which filters
+ *  by run.workspaceId) and flow through Design Studio + Mockups like any concept. */
+export async function getOrCreateManualUploadBook(
+  workspaceId: string
+): Promise<{ bookId: number; runId: number }> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const existing = await db
+    .select({ bookId: books.id, runId: books.runId })
+    .from(books)
+    .innerJoin(botRuns, eq(books.runId, botRuns.id))
+    .where(and(eq(botRuns.workspaceId, workspaceId), eq(books.title, MANUAL_UPLOAD_BOOK_TITLE)))
+    .limit(1);
+  if (existing[0]) return { bookId: existing[0].bookId, runId: existing[0].runId };
+  const runId = await createRun(workspaceId);
+  const bookId = await insertBook({ runId, title: MANUAL_UPLOAD_BOOK_TITLE, author: "Manual Upload" });
+  return { bookId, runId };
+}
+
 export async function insertBooks(bookList: InsertBook[]): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
