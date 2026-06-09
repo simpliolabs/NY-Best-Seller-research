@@ -4,6 +4,8 @@
  * Karpathy: single-purpose functions, no speculative abstractions.
  */
 import { generateImage } from "./_core/imageGeneration";
+import { removeBackground } from "./mockupCompositor";
+import { storagePut } from "./storage";
 import { nanoid } from "nanoid";
 import { insertRevision, getNextIterationNumber } from "./revisionDb";
 
@@ -69,8 +71,30 @@ export async function generateRevision(
     prompt,
     originalImages: [{ url: referenceImageUrl, mimeType: "image/png" }],
   });
-  const imageUrl = result.url;
-  if (!imageUrl) throw new Error("Image generation returned no URL");
+  const rawUrl = result.url;
+  if (!rawUrl) throw new Error("Image generation returned no URL");
+
+  // 2b. Strip the background BEFORE storing. The image model bakes in a white/opaque background
+  // (it can't emit true transparency), so without this the Design Studio shows the revised design
+  // sitting on a white box instead of transparency — the reported "it adds a background" bug.
+  // removeBackground = edge-connected white flood-fill (preserves interior whites) with an
+  // AI-extraction fallback for colored backgrounds; same cleanup every other design path uses.
+  // On any failure we keep the raw image rather than blocking the revision.
+  let imageUrl = rawUrl;
+  try {
+    const res = await fetch(rawUrl);
+    if (res.ok) {
+      const transparent = await removeBackground(Buffer.from(await res.arrayBuffer()));
+      const { url } = await storagePut(
+        `revisions/${conceptId}-${variationKey}-${Date.now()}.png`,
+        transparent,
+        "image/png",
+      );
+      imageUrl = url;
+    }
+  } catch (err) {
+    console.warn(`[Revision] background removal failed for concept ${conceptId} ${variationKey}; using raw image:`, err);
+  }
 
   // 3. Get next iteration number
   const iterationNumber = await getNextIterationNumber(conceptId, variationKey);
