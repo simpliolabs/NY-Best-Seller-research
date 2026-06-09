@@ -16,7 +16,14 @@ import {
   Sparkles,
   History,
   ArrowRight,
+  Scissors,
 } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface RevisionPanelProps {
   conceptId: number;
@@ -40,6 +47,16 @@ export function RevisionPanel({
     { conceptId, variationKey },
     { enabled: true }
   );
+
+  const trimAndCleanMutation = trpc.revision.trimAndClean.useMutation({
+    onSuccess: () => {
+      toast.success("Clean & Trim done!");
+      utils.revision.getHistory.invalidate({ conceptId, variationKey });
+    },
+    onError: (err) => {
+      toast.error(`Clean & Trim failed: ${err.message}`);
+    },
+  });
 
   const submitMutation = trpc.revision.submitRevision.useMutation({
     onSuccess: (data) => {
@@ -206,29 +223,55 @@ export function RevisionPanel({
           rows={3}
           className="resize-none"
         />
-        <Button
-          onClick={() =>
-            submitMutation.mutate({
-              conceptId,
-              variationKey,
-              instruction,
-            })
-          }
-          disabled={!instruction.trim() || submitMutation.isPending}
-          className="w-full"
-        >
-          {submitMutation.isPending ? (
-            <>
-              <Loader2 className="h-4 w-4 animate-spin mr-2" />
-              Generating revision...
-            </>
-          ) : (
-            <>
-              <Sparkles className="h-4 w-4 mr-2" />
-              Generate Revision
-            </>
-          )}
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            onClick={() =>
+              submitMutation.mutate({
+                conceptId,
+                variationKey,
+                instruction,
+              })
+            }
+            disabled={!instruction.trim() || submitMutation.isPending || trimAndCleanMutation.isPending}
+            className="flex-1"
+          >
+            {submitMutation.isPending ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                Generating revision...
+              </>
+            ) : (
+              <>
+                <Sparkles className="h-4 w-4 mr-2" />
+                Generate Revision
+              </>
+            )}
+          </Button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    trimAndCleanMutation.mutate({ conceptId, variationKey })
+                  }
+                  disabled={trimAndCleanMutation.isPending || submitMutation.isPending}
+                  className="shrink-0"
+                >
+                  {trimAndCleanMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Scissors className="h-4 w-4" />
+                  )}
+                  <span className="ml-2">Clean &amp; Trim</span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-xs">
+                Remove faint text + trim — no AI, keeps the design exactly the same.
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
       </div>
 
       {/* Revision history timeline */}
