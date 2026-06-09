@@ -10,10 +10,12 @@ import { Button } from "@/components/ui/button";
 import { Save, RotateCcw, Move } from "lucide-react";
 
 export interface PrintZoneCoords {
-  x: number; // left edge, 0-1
+  x: number; // left edge, 0-1 (fraction of photo)
   y: number; // top edge, 0-1
   width: number; // 0-1
   height: number; // 0-1
+  widthIn?: number;  // real-world MAX print-area width in inches (e.g. 10.5)
+  heightIn?: number; // real-world MAX print-area height in inches (e.g. 13)
 }
 
 interface PrintZoneEditorProps {
@@ -31,11 +33,13 @@ interface PrintZoneEditorProps {
 
 type DragMode = "none" | "draw" | "move" | "resize-tl" | "resize-tr" | "resize-bl" | "resize-br";
 
-/** Default print AREA = maximum realistic ink envelope on the garment.
- * Design-independent: this is the largest area where any print could go.
- * Designs are contain-fit + top-anchored within this envelope at composite time.
- * 60% width × 50% height of garment, starting 10% below neckline. */
-const DEFAULT_ZONE: PrintZoneCoords = { x: 0.20, y: 0.10, width: 0.60, height: 0.50 };
+/** Default print AREA = the MAX print area, sized in real INCHES (PO 2026-06-08).
+ * The box is the total print area (e.g. 10.5" × 13"); designs are contain-fit +
+ * top-anchored INSIDE it. You type the real inches, the box locks to that aspect
+ * ratio, and you position/scale it on the garment where the print goes. */
+const DEFAULT_WIDTH_IN = 10.5;
+const DEFAULT_HEIGHT_IN = 13;
+const DEFAULT_ZONE: PrintZoneCoords = { x: 0.28, y: 0.18, width: 0.44, height: 0.545, widthIn: DEFAULT_WIDTH_IN, heightIn: DEFAULT_HEIGHT_IN };
 const MIN_SIZE = 0.05; // minimum 5% of image dimension
 
 export function PrintZoneEditor({
@@ -51,13 +55,35 @@ export function PrintZoneEditor({
   const [dragMode, setDragMode] = useState<DragMode>("none");
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [zoneAtDragStart, setZoneAtDragStart] = useState<PrintZoneCoords>(zone);
+  // Real-world MAX print-area size in inches. The box locks to this aspect ratio.
+  const [widthIn, setWidthIn] = useState<number>(initialZone?.widthIn ?? DEFAULT_WIDTH_IN);
+  const [heightIn, setHeightIn] = useState<number>(initialZone?.heightIn ?? DEFAULT_HEIGHT_IN);
 
   // Reset zone when initialZone changes
   useEffect(() => {
     if (initialZone) {
       setZone(initialZone);
+      if (initialZone.widthIn) setWidthIn(initialZone.widthIn);
+      if (initialZone.heightIn) setHeightIn(initialZone.heightIn);
     }
   }, [initialZone]);
+
+  // ASPECT-LOCK: keep the box's on-screen shape equal to the real inch ratio. The box's
+  // pixel aspect must equal widthIn:heightIn, so height(frac) = width(frac) * (containerW/
+  // containerH) * (heightIn/widthIn). Reactive to width + inches: whenever the width or the
+  // inch values change (draw/resize/typing), height auto-follows. The user controls width +
+  // position; the shape is always correct for the real print area.
+  useEffect(() => {
+    if (!imageLoaded || !widthIn || !heightIn || !containerRef.current) return;
+    const r = containerRef.current.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    const factor = (r.width / r.height) * (heightIn / widthIn);
+    let targetH = zone.width * factor;
+    if (zone.y + targetH > 1) targetH = 1 - zone.y; // clamp at the photo's bottom edge
+    if (Math.abs(targetH - zone.height) > 0.002) {
+      setZone((z) => ({ ...z, height: targetH }));
+    }
+  }, [zone.width, zone.y, widthIn, heightIn, imageLoaded]);
 
   const handleImageLoad = useCallback(() => {
     setImageLoaded(true);
@@ -196,8 +222,10 @@ export function PrintZoneEditor({
       y: Math.round(zone.y * 1000) / 1000,
       width: Math.round(zone.width * 1000) / 1000,
       height: Math.round(zone.height * 1000) / 1000,
+      widthIn,
+      heightIn,
     });
-  }, [zone, onSave]);
+  }, [zone, widthIn, heightIn, onSave]);
 
   // Zone pixel positions for overlay
   const zoneStyle = imageLoaded
@@ -215,9 +243,33 @@ export function PrintZoneEditor({
       <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/50 rounded-lg px-3 py-2">
         <Move className="h-4 w-4 shrink-0" />
         <span>
-          Drag the rectangle to define the maximum print area (ink envelope). Designs will be
-          contain-fit and top-anchored within this area. Click outside to draw a new one.
+          1) Type your MAX print area in inches below. 2) Drag the box onto the shirt where the
+          print goes and scale it to match — it stays locked to your inch ratio. Designs are
+          contain-fit + top-anchored inside this area. Click outside the box to draw a new one.
         </span>
+      </div>
+
+      {/* Print area size in INCHES — the real-world max print area. Locks the box aspect ratio. */}
+      <div className="flex items-center gap-3 text-sm bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+        <span className="font-medium text-blue-900">Max print area:</span>
+        <label className="flex items-center gap-1">
+          <input
+            type="number" min={1} max={30} step={0.5} value={widthIn}
+            onChange={(e) => setWidthIn(Math.max(1, Number(e.target.value) || 0))}
+            className="w-16 rounded border px-2 py-1 text-right font-mono"
+          />
+          <span className="text-muted-foreground">in W</span>
+        </label>
+        <span className="text-muted-foreground">×</span>
+        <label className="flex items-center gap-1">
+          <input
+            type="number" min={1} max={30} step={0.5} value={heightIn}
+            onChange={(e) => setHeightIn(Math.max(1, Number(e.target.value) || 0))}
+            className="w-16 rounded border px-2 py-1 text-right font-mono"
+          />
+          <span className="text-muted-foreground">in H</span>
+        </label>
+        <span className="text-xs text-blue-700">(box locks to this {widthIn}:{heightIn} ratio)</span>
       </div>
 
       {/* Canvas area — container is locked to the image's natural aspect ratio so there are zero letterbox bars.
@@ -281,23 +333,11 @@ export function PrintZoneEditor({
         )}
       </div>
 
-      {/* Coordinates readout */}
-      <div className="grid grid-cols-4 gap-2 text-xs font-mono text-muted-foreground bg-muted/30 rounded-lg px-3 py-2">
-        <div>X: {(zone.x * 100).toFixed(1)}%</div>
-        <div>Y: {(zone.y * 100).toFixed(1)}%</div>
-        <div className={zone.width < 0.50 ? "text-amber-500 font-bold" : ""}>W: {(zone.width * 100).toFixed(1)}%{zone.width < 0.50 ? " ⚠" : ""}</div>
-        <div>H: {(zone.height * 100).toFixed(1)}%</div>
+      {/* Readout: real inch size (primary) + photo-relative position/size (secondary) */}
+      <div className="grid grid-cols-2 gap-2 text-xs font-mono text-muted-foreground bg-muted/30 rounded-lg px-3 py-2">
+        <div className="font-semibold text-foreground">Print area: {widthIn}″ × {heightIn}″</div>
+        <div>pos {(zone.x * 100).toFixed(0)}%,{(zone.y * 100).toFixed(0)}% · size {(zone.width * 100).toFixed(0)}%×{(zone.height * 100).toFixed(0)}%</div>
       </div>
-      {zone.width < 0.50 && (
-        <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-          ⚠ Area width is {Math.round(zone.width * 100)}% — recommended minimum is 50%. This is the max ink envelope; designs are contain-fit inside it. Aim for 50–65% of garment width.
-        </div>
-      )}
-      {zone.height > 0.60 && (
-        <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-          ⚠ Area height is {Math.round(zone.height * 100)}% — exceeds typical max print envelope (50%). Designs are top-anchored so excess height adds empty space below, not navel-drift.
-        </div>
-      )}
 
       {/* Action buttons */}
       <div className="flex items-center gap-2">

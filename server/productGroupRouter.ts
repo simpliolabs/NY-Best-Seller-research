@@ -52,7 +52,7 @@ export const productGroupRouter = router({
         productType: z.string().max(100).optional(),
         compareAtPrice: z.number().positive().optional(),
         pricingTiers: z.array(pricingTierSchema).optional(),
-        printZone: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional(),
+        printZone: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number(), widthIn: z.number().optional(), heightIn: z.number().optional() }).optional(),
       })
     )
     .mutation(async ({ input }) => {
@@ -81,7 +81,7 @@ export const productGroupRouter = router({
         productType: z.string().max(100).optional(),
         compareAtPrice: z.number().positive().optional(),
         pricingTiers: z.array(pricingTierSchema).optional(),
-        printZone: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional(),
+        printZone: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number(), widthIn: z.number().optional(), heightIn: z.number().optional() }).optional(),
         /** Template ID whose photo was used to draw the print zone.
          * Required when printZone is provided — used to convert photo-relative → garment-relative. */
         referenceTemplateId: z.string().optional(),

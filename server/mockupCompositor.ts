@@ -545,18 +545,17 @@ export async function compositeDesignOnMockup(config: CompositeConfig): Promise<
     .resize(finalW, finalH, { fit: "fill", background: { r: 0, g: 0, b: 0, alpha: 0 } })
     .toBuffer();
 
-  // 6. Position design: CONTAIN-FIT to the zone (size), then position.
-  // HORIZONTAL — AUTO-CENTER ON THE GARMENT (PO 2026-06-08): center on the PHOTO's
-  // horizontal midline, NOT the drawn zone's x. Flat-lay garments are shot centered, so
-  // photo-center = garment-center; this makes the design ALWAYS dead-centered and removes
-  // any small left/right error from how the zone was drawn. (The zone's WIDTH still caps
-  // the print size via the contain-fit above; only horizontal POSITION is auto-centered.)
-  // VERTICAL — by anchorY: apparel = "top" (centered-to-top, print sits upper-chest);
-  //   objects (mug/cup/tumbler/tote/poster) = "center" (dead-centered on the surface).
-  const offsetX = Math.round((mockupW - finalW) / 2);        // auto-center on the garment (photo midline)
+  // 6. Position design: CONTAIN-FIT to the print area (size), then position WITHIN it.
+  // The print area is the box the human drew + sized in inches (10.5x13 etc.), positioned
+  // ON the garment. So the design is placed RELATIVE TO THAT BOX — the box you place IS
+  // where the print goes (PO 2026-06-08; reverts the photo-midline auto-center, which
+  // ignored your box position).
+  // HORIZONTAL — centered within the box. VERTICAL — by anchorY: apparel = "top"
+  // (centered-to-top, print sits at the area's top); objects = "center" (dead-centered).
+  const offsetX = zoneX + Math.round((zoneW - finalW) / 2);  // center within the print area
   const offsetY = config.anchorY === "center"
     ? zoneY + Math.round((zoneH - finalH) / 2) // center vertically (mugs/objects)
-    : zoneY;                                    // top-anchor (apparel) — design top = zone top
+    : zoneY;                                    // top-anchor (apparel) — design top = area top
 
   // 7. Composite design onto mockup, output as WebP (compressed, max 1000x1000)
   const composite = sharp(mockupBuf)
