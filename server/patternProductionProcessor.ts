@@ -237,6 +237,25 @@ export type EditSpec = {
    * image showed something else — the two-brain disconnect. Empty when canConvert=false.
    */
   conceptSummary: string;
+  /**
+   * EDIT KIND — routes how the edit instruction is built.
+   *   "clean_swap" = a single 1:1 swap on a STANDALONE subject/text/number/object where the
+   *     source structure is kept 100% (the CLEAN-SWAP SHORTCUT case). For this kind the system
+   *     IGNORES the brain's free-text editPrompt and builds a BASIC, deterministic instruction
+   *     from swapFrom/swapTo ("Replace X with Y, change nothing else") — so no model gets the
+   *     latitude to recompose (PO directive 2026-06-10: "NONE of the models should recompose
+   *     with a basic instruction").
+   *   "retheme" = a scene/grid/multi-element re-theme where the rich five-part editPrompt is
+   *     genuinely needed. For this kind the brain's editPrompt is used verbatim.
+   */
+  editKind: "clean_swap" | "retheme";
+  /** clean_swap ONLY: the EXACT source element being replaced (quote source text verbatim; name
+   *  the source subject concretely, e.g. "the kitten", "the score 567.9", "the word VELOCIREADER").
+   *  Empty string for retheme / canConvert=false. */
+  swapFrom: string;
+  /** clean_swap ONLY: the replacement (e.g. "a raccoon (KB mascot) in the identical pose", "the
+   *  score 0-0-2", "VELOCIDINKER"). Empty string for retheme / canConvert=false. */
+  swapTo: string;
 };
 
 /**
@@ -339,6 +358,12 @@ async function nicheExpertPlan(
           "     Explain in `fitReason`: if TRUE, name the exact one-sentence swap; if FALSE, name why there is no clean/easy conversion.",
           "  2. bestMatch — the SINGLE knowledge-base item the adaptation is built on (mascot / inside joke / pain point / rivalry / transferable concept). {type, item, why}. Must literally appear in the KB below.",
           "  3. editPrompt — WRITE the rich Kontext-ready prompt as one flowing paragraph (no headings, no bullets in the output). Empty string when canConvert is false.",
+          "  4. editKind + swapFrom + swapTo — CLASSIFY the edit so the system can guarantee a faithful render:",
+          "       • editKind='clean_swap' when you used the CLEAN-SWAP SHORTCUT (a single 1:1 swap on a STANDALONE subject/text/number/object, source structure kept 100%, NOTHING added). Then set swapFrom = the EXACT source element (quote source text VERBATIM; name the source subject concretely, e.g. 'the kitten', 'the score 567.9', 'the word VELOCIREADER') and swapTo = the replacement (e.g. 'a raccoon — the KB mascot — in the IDENTICAL pose and style', 'the score 0-0-2', 'VELOCIDINKER').",
+          "         ⚠ For a clean_swap the SYSTEM builds the image-edit instruction itself from swapFrom/swapTo as a strict 'replace X with Y, change NOTHING else' command — your free-text editPrompt is IGNORED for this case. So getting swapFrom/swapTo EXACT matters more than the paragraph. There is NO room to restyle, re-pose, or add a prop — and that is intentional.",
+          "       • editKind='retheme' ONLY for a genuine scene/grid/multi-element re-theme where the single swap cannot carry it. Then swapFrom='' and swapTo='' and your rich editPrompt is used verbatim.",
+          "       • When in doubt between the two, choose 'clean_swap' — changing LESS is always safer (PO directive).",
+          "       • canConvert=false → editKind='clean_swap', swapFrom='', swapTo='' (unused).",
           "",
           "=== NICHE KNOWLEDGE BASE (your ONLY creative palette — every mascot/word/concept you use must literally come from here) ===",
           knowledge || `Niche: ${niche}. (No detailed profile available; use general expert judgement.)`,
@@ -455,8 +480,11 @@ async function nicheExpertPlan(
             },
             editPrompt: { type: "string" },
             conceptSummary: { type: "string" },
+            editKind: { type: "string", enum: ["clean_swap", "retheme"] },
+            swapFrom: { type: "string" },
+            swapTo: { type: "string" },
           },
-          required: ["canConvert", "fitReason", "bestMatch", "editPrompt", "conceptSummary"],
+          required: ["canConvert", "fitReason", "bestMatch", "editPrompt", "conceptSummary", "editKind", "swapFrom", "swapTo"],
         },
       },
     },
@@ -495,9 +523,19 @@ async function nicheExpertPlan(
   }
   spec.editPrompt ??= "";
   spec.conceptSummary ??= "";
+  // Defensive defaults (the gpt-4o fallback brain isn't bound by the strict schema):
+  // if the swap fields are missing/blank, fall back to the rich editPrompt path ("retheme")
+  // rather than emitting a clean_swap with no swapFrom/swapTo.
+  spec.swapFrom = (spec.swapFrom ?? "").trim();
+  spec.swapTo = (spec.swapTo ?? "").trim();
+  spec.editKind =
+    spec.editKind === "clean_swap" && spec.swapFrom && spec.swapTo
+      ? "clean_swap"
+      : "retheme";
   console.log(
-    `[PatternProd] nicheExpertPlan canConvert=${spec.canConvert} ` +
+    `[PatternProd] nicheExpertPlan canConvert=${spec.canConvert} editKind=${spec.editKind} ` +
       `match="${spec.bestMatch?.item ?? ""}" editPromptChars=${spec.editPrompt.length} ` +
+      (spec.editKind === "clean_swap" ? `swap="${spec.swapFrom}" → "${spec.swapTo}" ` : "") +
       `concept="${(spec.conceptSummary || "").slice(0, 80)}" ` +
       `reason="${(spec.fitReason || "").slice(0, 80)}"`
   );
@@ -782,14 +820,44 @@ async function validateNicheOutput(
  * block-heavy designs is handled later by the OPT-IN halftone step (applied per
  * design when the PO chooses it), not by constraining generation up front.
  */
-export function buildEditPrompt(spec: EditSpec, avoid: string[] = [], _product: string = "t-shirt"): string {
+export function buildEditPrompt(spec: EditSpec, avoid: string[] = [], product: string = "t-shirt"): string {
   const avoidLine = avoid.length
     ? `AVOID (these were rejected on previous designs in this shop; do NOT repeat them): ${avoid.join("; ")}.`
     : null;
+  // CLEAN-SWAP path (PO directive 2026-06-10: "NONE of the models should recompose with a basic
+  // instruction: swap lizard to raccoon, everything else should stay the same"). For a 1:1 swap we
+  // do NOT trust the brain's rich free-text editPrompt (GPT-5 embellishes → the image model treats
+  // the extra latitude as licence to recompose). We build the instruction OURSELVES as a strict,
+  // minimal "replace X with Y, change nothing else" command. This is model-agnostic — gpt-image-1,
+  // Kontext, or anything else gets the same un-embellishable command.
+  const base =
+    spec.editKind === "clean_swap" && spec.swapFrom && spec.swapTo
+      ? buildCleanSwapInstruction(spec.swapFrom, spec.swapTo, product)
+      : (spec.editPrompt || "").trim();
   return [
-    (spec.editPrompt || "").trim(),
+    base,
     ...(avoidLine ? [avoidLine] : []),
   ].filter(Boolean).join("\n\n");
+}
+
+/**
+ * The deterministic BASIC swap instruction for a 1:1 clean swap. Encodes the PO's exact
+ * requirement — "swap X to Y, everything else stays the same" — leaving the image model no
+ * latitude to restyle, re-pose, recolour, or invent props. Paired with gpt-image-1
+ * input_fidelity:"high" (which anchors to the source pixels), this is what keeps a kitten→raccoon
+ * swap faithful instead of a restyle-plus-popsicle recomposition.
+ */
+export function buildCleanSwapInstruction(swapFrom: string, swapTo: string, product: string = "t-shirt"): string {
+  return (
+    `Edit ONLY the printed graphic on the ${product} in this mockup — do not touch the garment, ` +
+    `background, lighting, props, folds, or camera. Replace ${swapFrom} with ${swapTo}, in the exact ` +
+    `same position, size, and placement. Change NOTHING else: keep the identical composition, pose, ` +
+    `arrangement, line-work, art style, texture, distress, grain, and colour palette, and keep every ` +
+    `other element and all other text pixel-for-pixel identical. Do NOT restyle, re-pose, re-letter, ` +
+    `recolour, simplify, or vectorize anything, and do NOT add or remove anything (no new props, ` +
+    `paddles, drinks, snacks, badges, or decorations) — swap ONLY that one element and leave the rest ` +
+    `exactly as it is.`
+  );
 }
 
 /**

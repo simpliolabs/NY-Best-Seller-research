@@ -365,6 +365,10 @@ const SAMPLE_SPEC: EditSpec = {
   fitReason: "wordmark and figure both map to on-brand pickleball mascots",
   bestMatch: { type: "mascot", item: "Capybara — zen dinker", why: "calm dink energy maps to the woman's pose" },
   editPrompt: BRAIN_PROMPT,
+  conceptSummary: "A woman in a yellow dress holding a pickleball paddle, vintage two-colour screen-print.",
+  editKind: "retheme",
+  swapFrom: "",
+  swapTo: "",
 };
 
 const SKIP_SPEC: EditSpec = {
@@ -372,6 +376,26 @@ const SKIP_SPEC: EditSpec = {
   fitReason: "specific pop-culture reference outside the knowledge base",
   bestMatch: { type: "none", item: "-", why: "no on-brand angle" },
   editPrompt: "",
+  conceptSummary: "",
+  editKind: "retheme",
+  swapFrom: "",
+  swapTo: "",
+};
+
+// A 1:1 clean swap (the PO's "swap lizard to raccoon, everything else stays" case). The brain's
+// free-text editPrompt here is deliberately over-rich/embellished — buildEditPrompt must IGNORE it
+// and emit the deterministic basic instruction instead.
+const CLEAN_SWAP_SPEC: EditSpec = {
+  canConvert: true,
+  fitReason: "standalone kitten → on-brand raccoon mascot, identical pose",
+  bestMatch: { type: "mascot", item: "Raccoon — trash-panda dinker", why: "on-brand mascot, same cute standalone framing" },
+  editPrompt:
+    "Edit this t-shirt mockup. Replace the kitten with a charming raccoon holding a popsicle, " +
+    "restyled into a bold modern vector with fresh sparkles and a pickleball paddle bolted on…",
+  conceptSummary: "A raccoon in the kitten's original pose and style.",
+  editKind: "clean_swap",
+  swapFrom: "the kitten",
+  swapTo: "a raccoon (the KB mascot) in the identical pose and art style",
 };
 
 const dp = (o: Partial<TrendPattern>): TrendPattern =>
@@ -410,6 +434,32 @@ describe("buildEditPrompt — assembles the brain prompt + guardrails", () => {
     const p = buildEditPrompt(SKIP_SPEC, []);
     expect(p).toBe("");
     expect(p).not.toContain("Edit this t-shirt mockup");
+  });
+
+  // PO directive 2026-06-10: "NONE of the models should recompose with a basic instruction —
+  // swap lizard to raccoon, everything else should stay the same."
+  it("clean_swap: IGNORES the brain's rich editPrompt and emits the basic deterministic instruction", () => {
+    const p = buildEditPrompt(CLEAN_SWAP_SPEC, []);
+    // The deterministic instruction names the exact swap and forbids everything else.
+    expect(p).toContain("Replace the kitten with a raccoon (the KB mascot) in the identical pose and art style");
+    expect(p).toContain("Change NOTHING else");
+    expect(p).toContain("swap ONLY that one element");
+    // The brain's embellishments must NOT survive — this is the whole point of the routing.
+    expect(p).not.toContain("popsicle");
+    expect(p).not.toContain("sparkles");
+    expect(p).not.toContain("paddle bolted on");
+  });
+  it("clean_swap with a missing swapTo falls back to the rich editPrompt (never emits a half instruction)", () => {
+    const p = buildEditPrompt({ ...CLEAN_SWAP_SPEC, swapTo: "" }, []);
+    // No deterministic basic instruction (swapTo blank) → use the brain's editPrompt instead.
+    expect(p).not.toContain("Change NOTHING else");
+    expect(p).toContain("Replace the kitten with a charming raccoon");
+  });
+  it("clean_swap still appends the AVOID block", () => {
+    const p = buildEditPrompt(CLEAN_SWAP_SPEC, ["salt shaker again"]);
+    expect(p).toContain("Change NOTHING else");
+    expect(p).toContain("AVOID");
+    expect(p).toContain("salt shaker again");
   });
 });
 
