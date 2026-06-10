@@ -80,6 +80,14 @@ export async function updateWorkspace(
   return updated;
 }
 
+/** Curate the per-workspace art-style allowlist. Merges allowedStyles INTO the existing
+ *  styleProfile (preserving its other fields). The concept pipeline reads
+ *  styleProfile.allowedStyles to constrain each concept's style. */
+export async function setWorkspaceAllowedStyles(id: string, allowedStyles: string[]): Promise<Workspace> {
+  const ws = await getWorkspaceById(id);
+  return updateWorkspace(id, { styleProfile: { ...(ws?.styleProfile ?? {}), allowedStyles } as any });
+}
+
 /** Simple key-value credential lookup. No typed interface until multiple providers are needed. */
 export async function getCredential(
   workspaceId: string,

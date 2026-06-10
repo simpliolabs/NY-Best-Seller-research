@@ -12,6 +12,7 @@ import {
   getWorkspacesForUser,
   createWorkspace,
   updateWorkspace,
+  setWorkspaceAllowedStyles,
   deleteWorkspace,
   setCredential,
   getCredential,
@@ -104,6 +105,17 @@ export const workspaceRouter = router({
     .mutation(async ({ input }) => {
       const { id, ...fields } = input;
       return updateWorkspace(id, fields as any);
+    }),
+
+  /** Curate the per-workspace art-style allowlist the concept council picks each concept's style
+   *  from (cartoonish stays excluded by convention — it's never offered in the UI). */
+  setAllowedStyles: protectedProcedure
+    .input(z.object({
+      id: z.string(),
+      allowedStyles: z.array(z.string().min(1).max(100)).min(1).max(40),
+    }))
+    .mutation(async ({ input }) => {
+      return setWorkspaceAllowedStyles(input.id, input.allowedStyles);
     }),
 
   /** Store a credential for a workspace (Shopify token, Etsy key, etc.) */
