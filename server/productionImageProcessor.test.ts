@@ -345,7 +345,7 @@ describe("assertTransparentPng", () => {
 });
 
 // ─── buildEditPrompt routing + reject-feedback (AVOID) tests ───────────────────
-import { buildEditPrompt, aggregateAvoidList, type EditSpec } from "./patternProductionProcessor";
+import { buildEditPrompt, aggregateAvoidList, isSceneLikeSwapTo, buildCleanSwapInstruction, type EditSpec } from "./patternProductionProcessor";
 import type { TrendPattern } from "../drizzle/schema";
 
 // Sample of the kind of rich, image-model-ready prompt the brain (nicheExpertPlan)
@@ -460,6 +460,41 @@ describe("buildEditPrompt — assembles the brain prompt + guardrails", () => {
     expect(p).toContain("Change NOTHING else");
     expect(p).toContain("AVOID");
     expect(p).toContain("salt shaker again");
+  });
+});
+
+// isSceneLikeSwapTo guards the clean-swap guarantee: if the brain smuggles an added prop/activity
+// into swapTo, the deterministic "replace X with Y" command would itself describe a recompose.
+// nicheExpertPlan demotes those to retheme. The guard must trip on additions but NOT on the
+// legitimate minimal swapTo (which may carry a "same pose/style" preservation phrase).
+describe("isSceneLikeSwapTo — demote scene-smuggling swapTo to retheme", () => {
+  it("does NOT flag a bare replacement subject (the good case)", () => {
+    expect(isSceneLikeSwapTo("a raccoon (the KB mascot) in the identical pose and art style")).toBe(false);
+    expect(isSceneLikeSwapTo("the score 0-0-2")).toBe(false);
+    expect(isSceneLikeSwapTo("VELOCIDINKER")).toBe(false);
+    expect(isSceneLikeSwapTo("a llama, same line-work and colours")).toBe(false);
+  });
+  it("flags an added prop / activity / placement (the recompose-smuggling case)", () => {
+    expect(isSceneLikeSwapTo("a raccoon holding a popsicle")).toBe(true);
+    expect(isSceneLikeSwapTo("a raccoon with a paddle, dinking on a court")).toBe(true);
+    expect(isSceneLikeSwapTo("a llama playing pickleball at the net")).toBe(true);
+    expect(isSceneLikeSwapTo("a capybara wearing a visor")).toBe(true);
+  });
+  it("is empty-safe", () => {
+    expect(isSceneLikeSwapTo("")).toBe(false);
+  });
+});
+
+describe("buildCleanSwapInstruction — product-agnostic wording", () => {
+  it("uses 'garment' for apparel", () => {
+    const p = buildCleanSwapInstruction("the kitten", "a raccoon", "t-shirt");
+    expect(p).toContain("do not touch the garment");
+    expect(p).toContain("Replace the kitten with a raccoon");
+  });
+  it("uses the product name (not 'garment') for non-apparel", () => {
+    const p = buildCleanSwapInstruction("the kitten", "a raccoon", "mug");
+    expect(p).toContain("do not touch the mug");
+    expect(p).not.toContain("garment");
   });
 });
 

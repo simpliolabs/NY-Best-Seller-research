@@ -360,6 +360,7 @@ async function nicheExpertPlan(
           "  3. editPrompt — WRITE the rich Kontext-ready prompt as one flowing paragraph (no headings, no bullets in the output). Empty string when canConvert is false.",
           "  4. editKind + swapFrom + swapTo — CLASSIFY the edit so the system can guarantee a faithful render:",
           "       • editKind='clean_swap' when you used the CLEAN-SWAP SHORTCUT (a single 1:1 swap on a STANDALONE subject/text/number/object, source structure kept 100%, NOTHING added). Then set swapFrom = the EXACT source element (quote source text VERBATIM; name the source subject concretely, e.g. 'the kitten', 'the score 567.9', 'the word VELOCIREADER') and swapTo = the replacement (e.g. 'a raccoon — the KB mascot — in the IDENTICAL pose and style', 'the score 0-0-2', 'VELOCIDINKER').",
+          "         ⚠ swapTo MUST name ONLY the replacement subject/object/text itself (optionally with a short 'in the same pose/style' preservation phrase) — NEVER a scene. Do NOT write swapTo as the subject HOLDING/WEARING/PLAYING-with a prop, on a court, at the net, or doing an activity. The system drops your editPrompt for a clean_swap and renders 'replace swapFrom with swapTo, change NOTHING else' literally — so any prop/activity you put in swapTo becomes a recomposition. If the design needs an ADDED paddle/ball/net/activity/scene to read as the niche, that is a RETHEME: set editKind='retheme' and put the scene in editPrompt instead. A standalone mascot swap adds NOTHING.",
           "         ⚠ For a clean_swap the SYSTEM builds the image-edit instruction itself from swapFrom/swapTo as a strict 'replace X with Y, change NOTHING else' command — your free-text editPrompt is IGNORED for this case. So getting swapFrom/swapTo EXACT matters more than the paragraph. There is NO room to restyle, re-pose, or add a prop — and that is intentional.",
           "       • editKind='retheme' ONLY for a genuine scene/grid/multi-element re-theme where the single swap cannot carry it. Then swapFrom='' and swapTo='' and your rich editPrompt is used verbatim.",
           "       • When in doubt between the two, choose 'clean_swap' — changing LESS is always safer (PO directive).",
@@ -532,6 +533,18 @@ async function nicheExpertPlan(
     spec.editKind === "clean_swap" && spec.swapFrom && spec.swapTo
       ? "clean_swap"
       : "retheme";
+  // Guard (audit wf_24525956): a clean_swap's swapTo must be a minimal subject/object/text, NOT a
+  // scene. If the brain smuggled an added prop/activity into swapTo ("a raccoon holding a paddle,
+  // dinking on a court"), the deterministic "replace X with Y" command would itself describe a
+  // recomposition — defeating the whole guarantee. Demote those to retheme (use the brain's
+  // editPrompt) and log it. Conservative: only ADDITION markers trip this, never preservation
+  // phrasing like "in the identical pose and style".
+  if (spec.editKind === "clean_swap" && isSceneLikeSwapTo(spec.swapTo)) {
+    console.warn(
+      `[PatternProd] clean_swap swapTo looks scene-like ("${spec.swapTo}") — demoting to retheme to avoid a smuggled recompose.`
+    );
+    spec.editKind = "retheme";
+  }
   console.log(
     `[PatternProd] nicheExpertPlan canConvert=${spec.canConvert} editKind=${spec.editKind} ` +
       `match="${spec.bestMatch?.item ?? ""}" editPromptChars=${spec.editPrompt.length} ` +
@@ -688,6 +701,7 @@ export type ValidationReport = {
   textInImage: string;        // OCR-style read of any visible text
   textMatchesPlan: boolean;   // does the visible text match brain's intent AND is correctly spelled?
   hasTypo: boolean;           // is any visible word obviously misspelled?
+  recomposed: boolean;        // clean_swap ONLY: did the model restyle/re-pose/add props beyond the bare swap? (false for retheme)
   shouldShip: boolean;        // overall: ship to user or auto-dismiss?
   reasoning: string;          // 1-2 sentences explaining the shouldShip decision
 };
@@ -695,7 +709,8 @@ export type ValidationReport = {
 async function validateNicheOutput(
   designPngBuf: Buffer,
   spec: EditSpec,
-  niche: string
+  niche: string,
+  sourceImageUrl?: string
 ): Promise<ValidationReport | null> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -703,6 +718,11 @@ async function validateNicheOutput(
     return null;
   }
   const dataUri = `data:image/png;base64,${designPngBuf.toString("base64")}`;
+  // For a clean_swap we also show the SOURCE design so the auditor can catch a RECOMPOSE — the
+  // model restyling/re-posing the swapped subject or inventing props beyond the bare swap. Only
+  // clean_swap gets the source image (retheme deliberately re-themes, so a "did it stay faithful?"
+  // check would be meaningless and just add cost). (Audit wf_24525956.)
+  const isCleanSwap = spec.editKind === "clean_swap" && !!sourceImageUrl;
   // Validator defaults to gpt-4o — a fast vision model. This is a read-and-compare
   // check (OCR the text, judge niche fit, match against the plan), NOT a reasoning
   // task, so GPT-5's slow reasoning is wasted here (~15s/pattern). gpt-4o returns
@@ -714,9 +734,25 @@ async function validateNicheOutput(
     `You are a quality auditor for print-on-demand designs in the "${niche}" niche.`,
     "",
     "A brain LLM planned an adaptation of a hot-selling shirt design. An image-gen",
-    "model then produced it. You are shown the design PRINTED ON A SHIRT MOCKUP —",
-    "judge ONLY the printed graphic artwork. Ignore the shirt fabric, shirt colour,",
-    "folds, and the photo background; they are not part of the design.",
+    "model then produced it.",
+    ...(isCleanSwap
+      ? [
+          "You are shown TWO images:",
+          "  (1) the SOURCE design we adapted FROM, and",
+          "  (2) the OUTPUT design, PRINTED ON A SHIRT MOCKUP.",
+          "Judge ONLY the printed graphic artwork in the OUTPUT. Ignore the shirt fabric, shirt",
+          "colour, folds, and the photo background; they are not part of the design.",
+          "",
+          "This was a FAITHFUL 1:1 CLEAN SWAP. The ONLY intended change was:",
+          `    replace "${spec.swapFrom}" with "${spec.swapTo}".`,
+          "Everything else — pose, composition, arrangement, line-work, art style, texture, and",
+          "colours — MUST stay faithful to the SOURCE.",
+        ]
+      : [
+          "You are shown the design PRINTED ON A SHIRT MOCKUP —",
+          "judge ONLY the printed graphic artwork. Ignore the shirt fabric, shirt colour,",
+          "folds, and the photo background; they are not part of the design.",
+        ]),
     "",
     "BRAIN PLANNED THIS:",
     `  bestMatch.type:  ${spec.bestMatch?.type ?? "(none)"}`,
@@ -735,8 +771,21 @@ async function validateNicheOutput(
     "  - textMatchesPlan:  true if the text matches what the editPrompt asked for AND",
     "                       every word is correctly spelled. false on ANY typo or off-plan text.",
     "  - hasTypo:          true if any visible word is misspelled (PART vs PARK, RFICHEN vs KITCHEN).",
-    "  - shouldShip:       false if nicheRelevance < 60, OR hasTypo == true,",
-    "                       OR matchesPlan == false. Otherwise true.",
+    ...(isCleanSwap
+      ? [
+          "  - recomposed:       true if the OUTPUT changed ANYTHING beyond the single intended swap —",
+          "                       e.g. the swapped subject was restyled or re-posed, or a new prop/element",
+          "                       was added (a paddle, popsicle, drink, badge) or removed, or the art",
+          "                       style/colours/composition drifted from the SOURCE. false ONLY if it is",
+          "                       the SAME design as the source with just that one swap applied.",
+          "  - shouldShip:       false if nicheRelevance < 60, OR hasTypo == true, OR matchesPlan ==",
+          "                       false, OR recomposed == true. Otherwise true.",
+        ]
+      : [
+          "  - recomposed:       set false (not applicable — this design was a re-theme, not a clean swap).",
+          "  - shouldShip:       false if nicheRelevance < 60, OR hasTypo == true,",
+          "                       OR matchesPlan == false. Otherwise true.",
+        ]),
     "  - reasoning:        1-2 sentences explaining your shouldShip decision (will be shown",
     "                       to the human as the dismissal reason if shouldShip=false).",
   ].join("\n");
@@ -750,8 +799,20 @@ async function validateNicheOutput(
       {
         role: "user",
         content: [
+          ...(isCleanSwap && sourceImageUrl
+            ? [
+                { type: "text" as const, text: "IMAGE 1 — the SOURCE design we adapted from:" },
+                { type: "image_url" as const, image_url: { url: sourceImageUrl, detail: "low" as const } },
+                { type: "text" as const, text: "IMAGE 2 — the OUTPUT design printed on a shirt:" },
+              ]
+            : []),
           { type: "image_url" as const, image_url: { url: dataUri, detail: "low" as const } },
-          { type: "text" as const, text: "Audit this design (shown printed on a shirt) and return the JSON." },
+          {
+            type: "text" as const,
+            text: isCleanSwap
+              ? "Audit the OUTPUT design (printed on a shirt) against the SOURCE and return the JSON."
+              : "Audit this design (shown printed on a shirt) and return the JSON.",
+          },
         ],
       },
     ],
@@ -769,10 +830,11 @@ async function validateNicheOutput(
             textInImage: { type: "string" },
             textMatchesPlan: { type: "boolean" },
             hasTypo: { type: "boolean" },
+            recomposed: { type: "boolean" },
             shouldShip: { type: "boolean" },
             reasoning: { type: "string" },
           },
-          required: ["nicheRelevance", "matchesPlan", "textInImage", "textMatchesPlan", "hasTypo", "shouldShip", "reasoning"],
+          required: ["nicheRelevance", "matchesPlan", "textInImage", "textMatchesPlan", "hasTypo", "recomposed", "shouldShip", "reasoning"],
         },
       },
     },
@@ -848,8 +910,12 @@ export function buildEditPrompt(spec: EditSpec, avoid: string[] = [], product: s
  * swap faithful instead of a restyle-plus-popsicle recomposition.
  */
 export function buildCleanSwapInstruction(swapFrom: string, swapTo: string, product: string = "t-shirt"): string {
+  // Product-agnostic wording (audit wf_24525956): "garment" is wrong for mugs/totes. Mirror the
+  // isApparel pattern used by extractTransparentFromShirt so non-apparel products read cleanly.
+  const isApparel = /shirt|tee|hoodie|sweat|tank|apparel|garment|jersey|sleeve/i.test(product);
+  const surface = isApparel ? "garment" : product;
   return (
-    `Edit ONLY the printed graphic on the ${product} in this mockup — do not touch the garment, ` +
+    `Edit ONLY the printed graphic on the ${product} in this mockup — do not touch the ${surface}, ` +
     `background, lighting, props, folds, or camera. Replace ${swapFrom} with ${swapTo}, in the exact ` +
     `same position, size, and placement. Change NOTHING else: keep the identical composition, pose, ` +
     `arrangement, line-work, art style, texture, distress, grain, and colour palette, and keep every ` +
@@ -858,6 +924,20 @@ export function buildCleanSwapInstruction(swapFrom: string, swapTo: string, prod
     `paddles, drinks, snacks, badges, or decorations) — swap ONLY that one element and leave the rest ` +
     `exactly as it is.`
   );
+}
+
+/**
+ * Is a clean_swap's swapTo describing a SCENE (added prop/activity/placement) rather than a bare
+ * replacement subject/object/text? If so the deterministic "replace X with Y" command would smuggle
+ * a recomposition, so nicheExpertPlan demotes it to retheme. Conservative — matches only clear
+ * ADDITION markers (holding/wearing/playing/with-a-prop/on-a-court), never preservation phrases like
+ * "in the identical pose and style". Exported for unit testing. (Audit wf_24525956.)
+ */
+export function isSceneLikeSwapTo(swapTo: string): boolean {
+  const s = (swapTo || "").toLowerCase();
+  const ADDITION =
+    /\b(holding|wearing|playing|dinking|serving|on a court|at the net|next to|in front of|surrounded by|with (a|an|the) (paddle|ball|net|drink|wine|beer|snack|popsicle|pizza|cup|mug|sign|banner|flag|bag))\b/;
+  return ADDITION.test(s);
 }
 
 /**
@@ -1286,10 +1366,10 @@ export async function processPatternProduction(
     (ws?.nicheProfile as any)?.niche ||
     promptDescription ||
     "the niche";
-  const validation = await validateNicheOutput(shirtMockup, editSpec, niche);
+  const validation = await validateNicheOutput(shirtMockup, editSpec, niche, sourceImageUrl);
   if (validation) {
     console.log(
-      `[PatternProd] Validation pattern=${patternId}: relevance=${validation.nicheRelevance} matchesPlan=${validation.matchesPlan} hasTypo=${validation.hasTypo} shouldShip=${validation.shouldShip} text="${validation.textInImage.slice(0, 60)}"`
+      `[PatternProd] Validation pattern=${patternId}: relevance=${validation.nicheRelevance} matchesPlan=${validation.matchesPlan} hasTypo=${validation.hasTypo} recomposed=${validation.recomposed} shouldShip=${validation.shouldShip} text="${validation.textInImage.slice(0, 60)}"`
     );
     await updateTrendPatternValidationReport(patternId, validation);
     // Re-ground the displayed fit score on the ACTUAL generated design. The scan-time rank
