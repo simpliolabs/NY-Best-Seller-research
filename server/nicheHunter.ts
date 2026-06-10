@@ -1052,12 +1052,22 @@ const TITLE_STOPWORDS = new Set([
   "more","less","new","old","day","days","year","years","time","times",
 ]);
 
+// Niche-generic words in nearly EVERY pickleball concept name (dink/dinker family +
+// pickleball). Stripped from the CONCEPT fingerprint so dedup keys on the DISTINCTIVE word
+// (Salty/Happy/Mountain/Master/Squad), not the shared niche root. Without this,
+// "Pickleball Dink Master" vs "Pickleball Dink Squad" share {pickleball,dink}=2 and falsely
+// dedup (adversarial-review catch 2026-06-10). Exact-name dedup (below) still catches true
+// repeats. Pickleball-only module today; harmless no-op for other niches (tokens won't appear).
+const NICHE_GENERIC_STOPWORDS = new Set([
+  "pickleball","pickleballs","pickle","dink","dinks","dinker","dinkers","dinking",
+]);
+
 function extractFingerprint(text: string): Set<string> {
   return new Set(
     (text || "")
       .toLowerCase()
       .split(/[^a-z0-9]+/)
-      .filter((w) => w.length >= 3 && !TITLE_STOPWORDS.has(w))
+      .filter((w) => w.length >= 3 && !TITLE_STOPWORDS.has(w) && !NICHE_GENERIC_STOPWORDS.has(w))
   );
 }
 
@@ -1153,7 +1163,7 @@ export async function runNicheHunterScan(
     // SAME Etsy listing twice — that's a different concern from theme dedup.
     const approvedPatterns = existingPatterns.filter(ep => ep.status === "approved");
     const existingFingerprints: Set<string>[] = approvedPatterns
-      .map(ep => extractFingerprint(`${ep.sourceTitle ?? ""} ${ep.patternName ?? ""}`))
+      .map(ep => extractFingerprint(ep.patternName ?? ""))
       .filter(fp => fp.size > 0);
     console.log(`[NicheHunter] Dedup baseline: ${existingPatterns.length} total / ${approvedPatterns.length} approved → ${existingFingerprints.length} theme fingerprints`);
 
@@ -1192,10 +1202,14 @@ export async function runNicheHunterScan(
         continue;
       }
       // Theme-fingerprint dedup (PO: respect Concept Library "winning designs").
-      // Builds the fingerprint from both the source title AND the LLM-generated pattern
-      // name so we catch BOTH "same Etsy theme, different listing" (Salty Girl Shirt vs
-      // Salty Girl Tee) AND "same LLM concept, different source" (Salty Dinker reused).
-      const candidateFp = extractFingerprint(`${srcTitle} ${patName}`);
+      // Fingerprint = the niche CONCEPT (patternName) ONLY, NOT the source title. PO yield
+      // fix 2026-06-10: title-based dedup blocked an ENTIRE source vein once one design from
+      // it was approved (approving "Happy Camper→Happy Dinker" then deduped EVERY future
+      // camping source), collapsing yield to ~1 — the cat-tee was the only un-mined vein.
+      // Concept-based dedup lets one vein yield MULTIPLE distinct pickleball concepts; only a
+      // repeated CONCEPT (Salty Dinker reused) dedups. Identical source LISTINGS are still
+      // caught by the exact-title check above, so we never re-mine the same listing twice.
+      const candidateFp = extractFingerprint(patName);
       const overlapIdx = existingFingerprints.findIndex(ef => sharesTheme(candidateFp, ef));
       if (overlapIdx >= 0) {
         const overlap = Array.from(candidateFp).filter(w => existingFingerprints[overlapIdx].has(w)).slice(0, 5);
