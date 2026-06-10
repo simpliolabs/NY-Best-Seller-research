@@ -1379,7 +1379,11 @@ export async function createConceptFromPattern(
     humorFramework: (pattern.transferablePattern ?? "").slice(0, 500) || null,
     isWinner: false,
     globalRank: null,
-    imageUrlA: pattern.previewImageUrl ?? null,
+    // The Design Studio REVISES this image, so it must be the canonical CLEAN design
+    // (productionDesignUrl), NOT previewImageUrl — which is compositor(design + shirt template),
+    // i.e. the on-shirt MOCKUP (PO-flagged 2026-06-10: revisions were landing on the shirt photo).
+    // Fall back to the mockup, then null, only if the canonical design isn't produced yet.
+    imageUrlA: pattern.productionDesignUrl ?? pattern.previewImageUrl ?? null,
     imageUrlB: null,
     imageUrlC: null,
     imagePromptA: null,
