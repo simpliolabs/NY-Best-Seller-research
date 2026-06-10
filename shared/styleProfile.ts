@@ -43,4 +43,10 @@ export const DEFAULT_ALLOWED_STYLES: string[] = [
   "Streetwear/Y2K",
   "Watercolor",
   "Tactical/Militarycore",
+  // Added from LIVE Etsy "funny graphic shirts" best-sellers (PO 2026-06-09).
+  "Vintage 90's",
+  "Vintage Hand-Drawn Illustration",
+  "Western/Cowboy",
+  "Outdoors/Cabincore",
+  "Retro Groovy",
 ];
