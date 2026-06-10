@@ -107,22 +107,17 @@ export default function WorkspaceSettings() {
   });
 
   // ─── Design Styles allowlist ──────────────────────────────────────────────
-  const ALL_STYLES = [
-    "Vintage/Distressed", "Retro 70s-80s", "Halftone Screen-Print", "Bold Typographic",
-    "Minimalist Line-Art", "Gritty Realism", "Photorealistic", "Dark Academia",
-    "Collegiate/Varsity", "Cottagecore", "Streetwear/Y2K", "Watercolor", "Tactical/Militarycore",
-    "Vintage 90's", "Vintage Hand-Drawn Illustration", "Western/Cowboy", "Outdoors/Cabincore", "Retro Groovy",
-  ];
+  const { data: ALL_STYLES = [] } = trpc.workspace.styleOptions.useQuery();
   const [allowedStyles, setAllowedStyles] = useState<string[]>(ALL_STYLES);
   const [stylesDirty, setStylesDirty] = useState(false);
 
   useEffect(() => {
-    if (workspace) {
+    if (workspace && ALL_STYLES.length > 0) {
       const saved = (workspace as any).styleProfile?.allowedStyles as string[] | undefined;
       setAllowedStyles(saved && saved.length > 0 ? saved : ALL_STYLES);
       setStylesDirty(false);
     }
-  }, [workspace]);
+  }, [workspace, ALL_STYLES]);
 
   const setStylesMutation = trpc.workspace.setAllowedStyles.useMutation({
     onSuccess: () => {

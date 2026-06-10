@@ -110,6 +110,7 @@ export function ConceptCard({
   const [expanded, setExpanded] = useState(false);
   const [whyExpanded, setWhyExpanded] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const { data: styleOptions = ["Vintage/Distressed"] } = trpc.workspace.styleOptions.useQuery();
   const [regenStyle, setRegenStyle] = useState("Vintage/Distressed");
   const utils = trpc.useUtils();
   const regenerateMutation = trpc.concepts.regenerateImage.useMutation({
@@ -413,26 +414,7 @@ export function ConceptCard({
               className="flex-1 h-8 px-2 rounded-md border border-input bg-background text-xs"
               disabled={regenerateMutation.isPending}
             >
-              {[
-                "Vintage/Distressed",
-                "Retro 70s-80s",
-                "Halftone Screen-Print",
-                "Bold Typographic",
-                "Minimalist Line-Art",
-                "Gritty Realism",
-                "Photorealistic",
-                "Dark Academia",
-                "Collegiate/Varsity",
-                "Cottagecore",
-                "Streetwear/Y2K",
-                "Watercolor",
-                "Tactical/Militarycore",
-                "Vintage 90's",
-                "Vintage Hand-Drawn Illustration",
-                "Western/Cowboy",
-                "Outdoors/Cabincore",
-                "Retro Groovy",
-              ].map((s) => (
+              {styleOptions.map((s) => (
                 <option key={s} value={s}>{s}</option>
               ))}
             </select>
