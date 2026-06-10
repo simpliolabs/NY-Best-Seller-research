@@ -754,7 +754,7 @@ export const appRouter = router({
         }
 
         // Build a simplified prompt for the concept
-        const promptSystem = `You are a senior art director. Write THREE image generation prompts for a t-shirt graphic design concept. Each prompt should be detailed (200+ words) and describe a print-ready design with transparent/white background suitable for DTF printing. Render the design in the concept's stated art style. ABSOLUTE RULE: NEVER cartoonish, clip-art, kawaii, chibi, or childish/exaggerated cartoon styling — under any circumstances. Return ONLY a JSON object with keys: variation_a, variation_b, variation_c.`;
+        const promptSystem = `You are a senior art director. Write THREE image generation prompts for a t-shirt graphic design concept. Each prompt should be detailed (200+ words) and describe a print-ready design with transparent/white background suitable for DTF printing. Aim for professional, commercial-grade, Etsy-bestseller quality: clean confident linework, rich purposeful detail, balanced focal composition, a deliberate limited color palette, crisp and polished — a design someone would actually buy. Render the design in the concept's stated art style. ABSOLUTE RULE: NEVER cartoonish, clip-art, kawaii, chibi, or childish/exaggerated cartoon styling — under any circumstances. Return ONLY a JSON object with keys: variation_a, variation_b, variation_c.`;
         const userMsg = `Design concept:
 Name: ${concept.conceptName}
 Format: ${concept.format}
@@ -828,7 +828,7 @@ Font: ${concept.fontSuggestion ?? "not specified"}`;
         const concept = await getConceptById(input.conceptId);
         if (!concept) return { success: false, message: "Concept not found." };
 
-        const promptSystem = `You are a senior art director. Write THREE image generation prompts for a print-ready t-shirt graphic. Each: 200+ words, transparent/white background, DTF-ready. RENDER THE DESIGN ENTIRELY IN THIS ART STYLE: "${input.style}" — commit fully; every prompt must read unmistakably as that style. ABSOLUTE RULE: NEVER cartoonish, clip-art, kawaii, chibi, or childish/exaggerated cartoon styling — under any circumstances. Return ONLY a JSON object with keys: variation_a, variation_b, variation_c.`;
+        const promptSystem = `You are a senior art director. Write THREE image generation prompts for a print-ready t-shirt graphic. Each: 200+ words, transparent/white background, DTF-ready. Aim for professional, commercial-grade, Etsy-bestseller quality: clean confident linework, rich purposeful detail, balanced focal composition, a deliberate limited color palette, crisp and polished — a design someone would actually buy. RENDER THE DESIGN ENTIRELY IN THIS ART STYLE: "${input.style}" — commit fully; every prompt must read unmistakably as that style. ABSOLUTE RULE: NEVER cartoonish, clip-art, kawaii, chibi, or childish/exaggerated cartoon styling — under any circumstances. Return ONLY a JSON object with keys: variation_a, variation_b, variation_c.`;
         const userMsg = `Design concept:
 Name: ${concept.conceptName}
 Format: ${concept.format}
