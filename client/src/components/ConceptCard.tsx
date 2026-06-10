@@ -427,6 +427,11 @@ export function ConceptCard({
                 "Streetwear/Y2K",
                 "Watercolor",
                 "Tactical/Militarycore",
+                "Vintage 90's",
+                "Vintage Hand-Drawn Illustration",
+                "Western/Cowboy",
+                "Outdoors/Cabincore",
+                "Retro Groovy",
               ].map((s) => (
                 <option key={s} value={s}>{s}</option>
               ))}

@@ -111,6 +111,7 @@ export default function WorkspaceSettings() {
     "Vintage/Distressed", "Retro 70s-80s", "Halftone Screen-Print", "Bold Typographic",
     "Minimalist Line-Art", "Gritty Realism", "Photorealistic", "Dark Academia",
     "Collegiate/Varsity", "Cottagecore", "Streetwear/Y2K", "Watercolor", "Tactical/Militarycore",
+    "Vintage 90's", "Vintage Hand-Drawn Illustration", "Western/Cowboy", "Outdoors/Cabincore", "Retro Groovy",
   ];
   const [allowedStyles, setAllowedStyles] = useState<string[]>(ALL_STYLES);
   const [stylesDirty, setStylesDirty] = useState(false);
