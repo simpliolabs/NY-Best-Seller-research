@@ -21,7 +21,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Crosshair, CheckCircle2, XCircle, Loader2, Zap, RefreshCw,
   ExternalLink, AlertTriangle, ThumbsUp, ThumbsDown, Sparkles, ChevronDown, ChevronUp,
-  Wand2, Bot, RotateCcw,
+  Wand2, Bot, RotateCcw, ArrowUpDown,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -83,6 +83,7 @@ type Pattern = {
   rejectionReason: string | null;
   dtfImageUrl: string | null;
   approvedAt: string | number | null;
+  createdAt: Date | string | number;
   conceptOptions: Array<{ title: string; summary: string }> | null;
   chosenConcept: string | null;
 };
@@ -744,6 +745,7 @@ export default function NicheHunter() {
   const [activeScanId, setActiveScanId] = useState<string | null>(null);
   const [actingPatternId, setActingPatternId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"discovered" | "approved" | "dismissed" | undefined>(undefined);
+  const [sortBy, setSortBy] = useState<"score" | "newest" | "default">("default");
   const [showSearchLog, setShowSearchLog] = useState(false);
   const [retryRemaining, setRetryRemaining] = useState(0);
   const [isRetrying, setIsRetrying] = useState(false);
@@ -1135,9 +1137,9 @@ export default function NicheHunter() {
         </div>
       )}
 
-      {/* Filter bar */}
+      {/* Filter bar + Sort */}
       {patterns.length > 0 && (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs text-muted-foreground">Filter:</span>
           {(["discovered", "approved", "dismissed"] as const).map((f) => (
             <Button
@@ -1161,6 +1163,21 @@ export default function NicheHunter() {
               Clear
             </Button>
           )}
+          <div className="ml-auto flex items-center gap-1.5">
+            <ArrowUpDown className="h-3 w-3 text-muted-foreground" />
+            <span className="text-xs text-muted-foreground">Sort:</span>
+            {(["default", "score", "newest"] as const).map((s) => (
+              <Button
+                key={s}
+                size="sm"
+                variant={sortBy === s ? "default" : "outline"}
+                className="text-xs h-7 px-3"
+                onClick={() => setSortBy(s)}
+              >
+                {s === "score" ? "Score ↓" : s === "newest" ? "Newest" : "Default"}
+              </Button>
+            ))}
+          </div>
         </div>
       )}
 
@@ -1181,7 +1198,11 @@ export default function NicheHunter() {
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {[...patterns]
             .filter((p) => statusFilter === "dismissed" ? p.status === "dismissed" : p.status !== "dismissed")
-            .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+            .sort((a, b) => {
+              if (sortBy === "score") return (b.score ?? 0) - (a.score ?? 0);
+              if (sortBy === "newest") return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+              return 0; // default = API order (already createdAt desc)
+            })
             .map((p) => (
               <PatternCard
                 key={p.id}
