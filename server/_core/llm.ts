@@ -315,22 +315,45 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     payload.response_format = normalizedResponseFormat;
   }
 
-  const response = await fetch(resolveApiUrl(), {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${ENV.forgeApiKey}`,
-    },
-    body: JSON.stringify(payload),
-    signal: params.signal,
-  });
+  // Retry transient upstream failures (429 / 5xx / network blips). A single transient
+  // "received bad response from upstream" (gRPC 13 / HTTP 500) was killing entire ~13-min
+  // niche-hunter scans on one hiccup. Retry with exponential backoff; never retry an
+  // intentional abort or a non-retryable 4xx. (PO-caught 2026-06-10.)
+  const MAX_ATTEMPTS = 3;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    let response: Response;
+    try {
+      response = await fetch(resolveApiUrl(), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${ENV.forgeApiKey}`,
+        },
+        body: JSON.stringify(payload),
+        signal: params.signal,
+      });
+    } catch (netErr) {
+      if (params.signal?.aborted || attempt >= MAX_ATTEMPTS) throw netErr;
+      console.warn(`[invokeLLM] attempt ${attempt}/${MAX_ATTEMPTS} network error — retrying:`, netErr instanceof Error ? netErr.message : netErr);
+      await new Promise((r) => setTimeout(r, 600 * 2 ** (attempt - 1)));
+      continue;
+    }
 
-  if (!response.ok) {
+    if (response.ok) {
+      return (await response.json()) as InvokeResult;
+    }
+
     const errorText = await response.text();
+    const retryable = response.status === 429 || response.status >= 500;
+    if (retryable && attempt < MAX_ATTEMPTS && !params.signal?.aborted) {
+      console.warn(`[invokeLLM] attempt ${attempt}/${MAX_ATTEMPTS} got ${response.status} ${response.statusText} (retryable) — backing off`);
+      await new Promise((r) => setTimeout(r, 600 * 2 ** (attempt - 1)));
+      continue;
+    }
     throw new Error(
       `LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`
     );
   }
-
-  return (await response.json()) as InvokeResult;
+  // Unreachable: every iteration returns or throws. Satisfies the return type.
+  throw new Error("LLM invoke failed: exhausted retries");
 }
