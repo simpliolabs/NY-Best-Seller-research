@@ -22,4 +22,25 @@ export interface StyleProfile {
   marketReference: string;
   /** How this profile was produced */
   source: "computed" | "override" | "hybrid";
+  /** Art-style allowlist the concept council may choose each concept's style from (curated in
+   *  Workspace Settings, seeded on creation). Cartoonish is intentionally excluded. */
+  allowedStyles?: string[];
 }
+
+/** Default art-style menu seeded onto new workspaces (PO 2026-06-09). Cartoonish excluded; also
+ *  the options shown in the per-concept Regenerate dropdown. */
+export const DEFAULT_ALLOWED_STYLES: string[] = [
+  "Vintage/Distressed",
+  "Retro 70s-80s",
+  "Halftone Screen-Print",
+  "Bold Typographic",
+  "Minimalist Line-Art",
+  "Gritty Realism",
+  "Photorealistic",
+  "Dark Academia",
+  "Collegiate/Varsity",
+  "Cottagecore",
+  "Streetwear/Y2K",
+  "Watercolor",
+  "Tactical/Militarycore",
+];

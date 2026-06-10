@@ -598,7 +598,8 @@ async function stageGenerate(
     fanCulture: string | null;
   }[],
   nicheResearchMap: Map<number, { fanConversations: any; designStyles: any; whiteSpace: any }>,
-  forumSignalsMap?: Map<number, ForumSignals>
+  forumSignalsMap?: Map<number, ForumSignals>,
+  allowedStyles?: string[]
 ): Promise<void> {
   // Parallel concept generation — all books at once instead of sequential
   await Promise.allSettled(
@@ -626,7 +627,9 @@ ${signalBlock}
 NICHE RESEARCH:
 Fan Conversations: ${niche ? JSON.stringify(niche.fanConversations) : "No research available"}
 Design Styles: ${niche ? JSON.stringify(niche.designStyles) : "No research available"}
-White Space Opportunities: ${niche ? JSON.stringify(niche.whiteSpace) : "No research available"}`;
+White Space Opportunities: ${niche ? JSON.stringify(niche.whiteSpace) : "No research available"}
+
+STYLE RULE (MANDATORY): Never set a concept's "style" to anything cartoonish, clip-art, kawaii, chibi, or childish/exaggerated.${(allowedStyles && allowedStyles.length) ? ` Set each concept's "style" to the single best-matching option from this approved allowlist: ${allowedStyles.join(", ")}.` : ""}`;
 
     try {
       const result = await withTimeout(
@@ -1740,6 +1743,24 @@ export async function runPipeline(opts: {
         });
       }
 
+      // Phase B (PO 2026-06-09): the concept council picks each concept's style from a curated
+      // allowlist (never cartoonish). Default to DEFAULT_ALLOWED_STYLES so it applies to ALL runs
+      // (incl. existing workspaces); a workspace's own styleProfile.allowedStyles overrides.
+      // Non-fatal on failure (stageGenerate still enforces never-cartoonish unconditionally).
+      let allowedStyles: string[] | undefined;
+      try {
+        const { DEFAULT_ALLOWED_STYLES } = await import("../shared/styleProfile");
+        allowedStyles = DEFAULT_ALLOWED_STYLES;
+        if (workspaceId) {
+          const { getWorkspaceById } = await import("./workspaceDb");
+          const ws = await getWorkspaceById(workspaceId);
+          const a = ws?.styleProfile?.allowedStyles;
+          if (Array.isArray(a) && a.length > 0) allowedStyles = a;
+        }
+      } catch (e) {
+        console.warn("[Pipeline/Stage4] allowedStyles load failed (non-fatal):", e);
+      }
+
       // Stage 4: Generate 5 Concepts per Book (self-healing: retry LLM)
       await updateRunStage(runId, 4, "Generating niche-informed design concepts...");
       await withSelfHeal({
@@ -1759,7 +1780,8 @@ export async function runPipeline(opts: {
             fanCulture: b.fanCulture,
           })),
           nicheMap,
-          forumSignalsMap
+          forumSignalsMap,
+          allowedStyles
         ),
         maxRetries: 2,
         baseDelayMs: 3000,

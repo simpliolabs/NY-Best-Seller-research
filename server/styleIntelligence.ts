@@ -8,6 +8,7 @@
 
 import { invokeLLM } from "./_core/llm";
 import type { StyleProfile } from "../shared/styleProfile";
+import { DEFAULT_ALLOWED_STYLES } from "../shared/styleProfile";
 import type { TrendPattern } from "../drizzle/schema";
 import type { NicheResearch } from "../drizzle/schema";
 
@@ -61,7 +62,7 @@ Topics to avoid: ${Array.isArray(nicheProfile.avoidTopics) ? (nicheProfile.avoid
     : "{}";
 
   const parsed = JSON.parse(content) as StyleProfile;
-  return { ...parsed, source: "computed" };
+  return { ...parsed, source: "computed", allowedStyles: parsed.allowedStyles ?? DEFAULT_ALLOWED_STYLES };
 }
 
 // ─── Pipeline-time: both workspace types ─────────────────────────────────────
