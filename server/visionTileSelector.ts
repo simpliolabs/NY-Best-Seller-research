@@ -1,30 +1,31 @@
 /**
  * visionTileSelector.ts
  *
- * Selects graphic t-shirt tiles via a 3-member COUNCIL that debates each candidate,
- * then a Judge rules. Replaces the old single lenient pass that kept selecting bad
- * fits (PO: "images that are not the right fit are selected, then it wastes tokens").
+ * Selects graphic t-shirt tiles via a single constructive SCOUT that evaluates each
+ * candidate against the PO's 5 questions — can it work / which concept / what kind of
+ * edit / does it need text / Etsy virality — and selects every genuinely usable tile.
+ * Replaces the old 3-seat reject-by-default council (Skeptic/Visionary/Judge) that turned
+ * ~100 scraped tiles into ~2 selections (PO 2026-06-10: "out of 100+ I'd have used 40 by
+ * asking the simple questions the council needs to ask").
  *
- * Pipeline per batch (token-bounded ~4 calls):
- *   Stage 1 — Shortlist (cheap, LOW detail): drop obvious non-candidates so the
- *             expensive debate only judges plausible tiles (~36 tiles → ≤10).
- *   Stage 2 — Council (HIGH detail, on the shortlist):
- *               • The Skeptic   (adversarial) — names why each tile is a BAD fit.
- *               • The Visionary (optimist)    — finds the cleverest CLEAN one-step swap, or "none".
- *               • The Judge     (pragmatic)   — final call per tile; defaults to the Skeptic when unsure.
- * Each seat is a separate LLM call with its own role prompt ("trained separately").
+ * Pipeline per batch:
+ *   Stage 1 — Shortlist (cheap, LOW detail): drop obvious non-candidates (~36 -> <=10).
+ *   Stage 2 — Scout (HIGH detail): per tile answer the 5 questions; CODE selects on
+ *             canWork && a real KB concept && virality >= med. Quality lives in the honest
+ *             Q1 (can it work) + Q5 (virality) answers — NOT in default-rejecting anything
+ *             that isn't trivially obvious. Downstream nicheExpertPlan.canConvert + the
+ *             post-generation validator are the backstops.
  *
  * Exported surface (unchanged for callers):
- *   selectGraphicTeeTiles(category, candidates, nicheContext?) → { selectedIds, rejectionNotes }
+ *   selectGraphicTeeTiles(category, candidates, nicheContext?) -> { selectedIds, rejectionNotes }
  */
 
 import { invokeLLM, type MessageContent } from "./_core/llm";
 import type { EtsyTile } from "./etsyScraper";
 
 /**
- * Optional niche context — when provided, every council seat PREFERS tiles whose
- * subject/typography fits the niche and REJECTS off-niche failure modes (costume
- * gimmicks, historical-figure designs, decorative-motif overlays).
+ * Optional niche context — when provided, the Scout PREFERS tiles whose subject/typography
+ * fits the niche and marks the genuinely non-transferable failure modes as canWork=false.
  */
 export type NicheContext = {
   niche?: string;
@@ -32,15 +33,19 @@ export type NicheContext = {
   catchphrases?: string[];
 };
 
-// Shortlist cap — how many tiles enter the (expensive, high-detail) council debate.
+// Shortlist cap — how many tiles enter the (expensive, high-detail) Scout pass.
 const SHORTLIST_CAP = 10;
-// Final cap — max selections returned per batch (no quota; zero is fine).
+// Final cap — max selections returned per batch (no quota; zero is fine). The per-scan
+// (20) and per-category (10) caps in nicheHunter.ts govern total cost downstream.
 const FINAL_CAP = 6;
 
-// ─── Shared niche-context block (used by every seat) ─────────────────────────────
+// ─── Shared niche-context block ──────────────────────────────────────────────────
 /**
- * Build a niche-aware block with PREFER + REJECT guidance + the CONVERTIBILITY GATE,
- * calibrated to the workspace's mascots/catchphrases. Empty when no useful context.
+ * Build a niche-aware block: the workspace mascots/catchphrases + PREFER guidance + the
+ * genuinely-non-transferable cases (the ONLY canWork=false reasons). Empty when no useful
+ * context. NOTE: the old hard "CONVERTIBILITY GATE / decorative-motif default-reject" was
+ * removed (PO 2026-06-10) — convertibility is now decided CONSTRUCTIVELY by the Scout's
+ * Q1/Q5, not by rejecting anything that isn't a trivially-clean one-step swap.
  */
 function buildNicheBlock(ctx: NicheContext | undefined): string {
   if (!ctx) return "";
@@ -55,46 +60,12 @@ function buildNicheBlock(ctx: NicheContext | undefined): string {
   if (catchphrases.length) lines.push(`Niche catchphrases/phrases: ${catchphrases.join(", ")}.`);
   lines.push(
     "",
-    "PREFER (within qualifying tiles, weight these higher):",
-    "- Subjects from the mascot list above, OR animals/characters visually adjacent",
-    "  to them (same 'energy' — e.g. raccoons + cats + opossums + foxes all read as",
-    "  quirky-animal mascots).",
-    "- Typography that matches the niche voice (irreverent quips, vintage lockup",
-    "  treatments that would adapt to the niche's catchphrases).",
-    "- Designs with strong TRANSFERABLE STRUCTURE — pose, count, arrangement that",
-    "  another subject could be dropped into (e.g. '3 figures running in a row' is a",
-    "  reusable composition).",
-    "",
-    "ALSO REJECT:",
-    "- Costume gimmicks where the joke IS the costume: 3D-printed full-shirt body",
-    "  illusions (fake hairy chest, fake muscle suit, fake torso, full-shirt photo",
-    "  overlays). The punchline is 'the wearer becomes the costume' and does not",
-    "  transfer to any other subject.",
-    "- Designs locked to a specific historical/political moment or named figure",
-    "  (e.g., Washington crossing the Delaware, presidential portraits, military",
-    "  insignia). The cultural weight is non-transferable to most niches.",
-    "",
-    "★ CONVERTIBILITY GATE (the decisive test — only tiles with an EASY, CLEAN conversion qualify):",
-    "Read the text and inspect the subject. A tile qualifies ONLY if it has an OBVIOUS, CLEAN,",
-    "one-step conversion to the niche, of one of these kinds:",
-    "  - TEXT / NUMBER / PUN swap (for TEXT-DRIVEN designs): a single number/word swap or a",
-    "    structure-preserving pun makes it niche text — e.g. a score '567.9' → '0-0-2', or",
-    "    'VELOCIREADER' → 'VELOCIDINKER'. If you cannot read a clean swap, it does NOT qualify on text.",
-    "  - MASCOT swap (for ANIMAL/CHARACTER designs): the main subject is an animal/character that can",
-    "    become an on-brand mascot in the SAME pose/outfit/props/text (e.g. a cowboy frog → a cowboy",
-    "    llama). Qualifies EVEN IF no niche equipment is added — the mascot swap is the conversion.",
-    "  - PROP RELABEL: the subject holds/wears/displays a writable surface (can, cup, bottle, sign,",
-    "    jersey, ball, book) — write the niche word/logo ON that surface, changing nothing else.",
-    "  - OBJECT swap: a prominent object becomes a niche object (e.g. a moon → a pickleball).",
-    "REJECT (no clean conversion — common and correct) if making it niche would need inventing a new",
-    "scene, overlaying a generic niche theme on an unrelated design, or any forced/awkward stretch.",
-    "★ SPECIFICALLY REJECT — DECORATIVE-MOTIF + LIFESTYLE-TEXT designs: an inspirational/lifestyle",
-    "  phrase set over an unrelated decorative illustration (dandelion, florals, feathers, butterflies,",
-    "  mountains, sunsets, waves, trees). Swapping the phrase to a niche pun leaves NICHE WORDS ON",
-    "  UNRELATED ART = incoherent. Example failure: a dandelion 'just breathe' tee → 'Find Your Dink",
-    "  Center' is NOT a clean fit — the dandelion has nothing to do with the niche, so the result reads",
-    "  as a yoga design with odd text. A TEXT/word swap is clean ONLY when the design is TEXT-DRIVEN",
-    "  (typography is the hero on a plain/neutral background) OR the imagery itself is niche-convertible.",
+    "PREFER (weight these higher when judging virality):",
+    "- Subjects from the mascot list above, OR animals/characters visually adjacent to them",
+    "  (same 'energy' — raccoons + cats + opossums + foxes all read as quirky-animal mascots).",
+    "- Strong TRANSFERABLE STRUCTURE — a pose/count/arrangement another subject can drop into.",
+    "- Typography that would carry a niche catchphrase or pun.",
+    "(The genuinely-non-transferable cases that force canWork=false are defined in the Scout's Q1.)",
     "=== END NICHE CONTEXT ===",
   );
   return lines.join("\n");
@@ -143,11 +114,11 @@ async function invokeJSON<T>(
   try {
     return await attempt();
   } catch (firstErr) {
-    console.warn(`[Council:${label}] first attempt failed:`, firstErr);
+    console.warn(`[Scout:${label}] first attempt failed:`, firstErr);
     try {
       return await attempt();
     } catch (secondErr) {
-      console.error(`[Council:${label}] both attempts failed:`, secondErr);
+      console.error(`[Scout:${label}] both attempts failed:`, secondErr);
       return null;
     }
   }
@@ -162,13 +133,13 @@ async function shortlistTiles(
   niche: string
 ): Promise<EtsyTile[]> {
   const system =
-    `You are the FAST FIRST-PASS FILTER for a print-on-demand pipeline that converts Etsy bestsellers into ${niche} designs. A 3-member council judges true fit AFTER you — your ONLY job is to cheaply drop the obvious non-candidates so the council isn't wasted on junk.
+    `You are the FAST FIRST-PASS FILTER for a print-on-demand pipeline that converts Etsy bestsellers into ${niche} designs. A Scout judges true fit AFTER you — your ONLY job is to cheaply drop the obvious non-candidates so the Scout isn't wasted on junk.
 
 KEEP a tile only if BOTH hold:
 - It shows a REAL graphic garment (t-shirt/hoodie/sweatshirt/tank) with a visible printed design — NOT a digital download / PNG / SVG mockup, NOT non-apparel (mug/sticker/tumbler/case), NOT blurry or obscured.
 - It has at least a PLAUSIBLE hook to become ${niche}: an animal/character that could be swapped to a mascot, readable text that could be swapped, or a prop that could be relabeled.
 
-Be GENEROUS here (the council rigorously judges fit next) but DROP: digital downloads, non-apparel, unclear images, plain undesigned system-font text, and tiles with NO plausible ${niche} hook at all.
+Be GENEROUS here (the Scout rigorously judges fit next) but DROP: digital downloads, non-apparel, unclear images, plain undesigned system-font text, and tiles with NO plausible ${niche} hook at all.
 Return at most ${SHORTLIST_CAP} listing IDs.` + nicheBlock;
 
   const userText = `Here are ${candidates.length} Etsy tiles from the "${category}" category. Each: listing ID + title + thumbnail. Return the shortlist of plausible candidates (max ${SHORTLIST_CAP}).\n\nTiles:\n${tileLines(candidates)}`;
@@ -197,49 +168,62 @@ Return at most ${SHORTLIST_CAP} listing IDs.` + nicheBlock;
   return candidates.filter((c) => ids.has(c.listingId)).slice(0, SHORTLIST_CAP);
 }
 
-// ─── Stage 2: the council ────────────────────────────────────────────────────────
+// ─── Stage 2: the constructive Scout (replaces Skeptic/Visionary/Judge) ──────────
 
-type SkepticVerdict = { listingId: string; objection: string; recommendation: "reject" | "borderline" | "none" };
-type VisionaryProposal = { listingId: string; conversion: string; cleanliness: "obvious" | "plausible" | "none" };
+type ScoutEval = {
+  listingId: string;
+  canWork: boolean;
+  concept: string;
+  editType: "image-swap" | "text-swap" | "both" | "scene" | "none";
+  needsText: boolean;
+  viral: "high" | "med" | "low";
+  conversion: string;
+};
 
-async function runSkeptic(
+async function runScout(
   category: string,
   shortlist: EtsyTile[],
   nicheBlock: string,
   niche: string
-): Promise<SkepticVerdict[]> {
+): Promise<ScoutEval[]> {
   const system =
-    `You are THE SKEPTIC — the adversarial seat on a 3-member design council selecting Etsy tiles to convert into ${niche} designs. Assume every tile is a BAD fit until proven otherwise. Your job is to KILL bad fits so the pipeline doesn't waste a vision-brain call + an image generation producing junk.
+    `You are THE SCOUT for a print-on-demand pipeline that turns Etsy bestsellers into ${niche} designs. You are CONSTRUCTIVE — your job is to FIND every tile a skilled ${niche} designer could convert into a sellable design, NOT to hunt for reasons to reject. A good designer converts a large share of bestsellers; match that eye. Quality is held by your HONEST answers to Q1 and Q5 — not by rejecting anything that is not trivially obvious.
 
-For EACH tile, state the STRONGEST objection — the most likely reason it makes a POOR ${niche} conversion. Common failure modes:
-- FORCED/AWKWARD: there is no clean ONE-STEP swap; making it ${niche} needs a stretch.
-- DECORATIVE-MOTIF + LIFESTYLE-TEXT: a decorative illustration (dandelion, florals, feathers, mountains, sunset, waves, trees) with an inspirational phrase — swapping the phrase leaves ${niche} words on unrelated art (incoherent).
-- OFF-BRAND SUBJECT: a subject/theme that doesn't fit ${niche} and isn't a swappable animal/character.
-- INVENTION REQUIRED: converting needs adding a scene/prop/copy not in the source.
-- OVER-EDIT RISK: the only way to convert is to redraw most of the design (the image model will mangle it).
+For EACH tile, answer 5 questions:
+1. canWork (true/false) — CAN this become a ${niche} design? Say TRUE generously whenever ANY workable path exists: an animal/character to swap to a ${niche} mascot, text/number to swap to a ${niche} word/pun, a prop to relabel, an object to swap, OR a scene/grid whose activities can be re-themed to ${niche}. Say FALSE ONLY for genuinely non-transferable tiles: (a) costume gimmicks where the joke IS the costume (3D body-illusions, fake muscle/torso/hairy-chest, full-shirt photo overlays); (b) a specific historical/political moment or named figure (Washington crossing the Delaware, a presidential portrait, military insignia) whose cultural weight is non-transferable; (c) a niche pun set over UNRELATED decorative art (a dandelion/florals/mountains carrying a lifestyle phrase) where swapping ONLY the text leaves niche words on unrelated art — that is canWork=false (or viral='low'), UNLESS the imagery itself can be re-themed to ${niche}.
+2. concept — WHICH specific ${niche} concept fits THIS tile best? Name a real mascot / catchphrase / inside-joke / pun from the niche context. If canWork is true you MUST name one; use "" ONLY when canWork is false.
+3. editType — how it converts: "image-swap" (swap the subject/mascot), "text-swap" (swap the words/number), "both", "scene" (re-theme the activities/props of a scene or grid), or "none".
+4. needsText — does it need a ${niche} pun/word ADDED to read as ${niche} (true), or is the niche carried by the swapped subject/props alone (false)? (Two hugging animals need an added pun; a mascot mid-game holding a paddle does not.)
+5. viral — would this read as a scroll-stopping, on-trend ${niche} tee a fan would actually BUY? "high" = a strong hook/joke; "med" = solid and sellable; "low" = weak, generic, forced, or incoherent.
 
-recommendation: "reject" (objection is fatal), "borderline" (real objection but maybe surmountable), or "none" (you genuinely cannot find a real objection — this is rare). Be concrete per tile. Do NOT be charitable — that is the Visionary's job.` + nicheBlock;
+Also give conversion: ONE concrete sentence describing the exact ${niche} design to build (the swap + the concept + any added pun text), for the generator.
 
-  const userText = `Council case — "${category}" shortlist. Give your adversarial verdict for EVERY tile below (images follow in order).\n\nTiles:\n${tileLines(shortlist)}`;
+Be honest, not harsh: a tile that needs a clean mascot-swap PLUS an added pun is a GOOD candidate (canWork=true, viral med/high), not a reject. Only a true no-path (canWork=false) or a genuinely weak result (viral=low) should fall out.` + nicheBlock;
+
+  const userText = `Scout these ${shortlist.length} tiles from the "${category}" category. Answer all 5 questions for EVERY tile. The tile images follow in the SAME order.\n\nTiles:\n${tileLines(shortlist)}`;
 
   const schema = {
     type: "object",
     properties: {
-      verdicts: {
+      evaluations: {
         type: "array",
         items: {
           type: "object",
           properties: {
             listingId: { type: "string" },
-            objection: { type: "string", description: "The strongest reason this tile is a bad fit" },
-            recommendation: { type: "string", enum: ["reject", "borderline", "none"] },
+            canWork: { type: "boolean" },
+            concept: { type: "string", description: "The KB concept that fits, or empty string if canWork is false" },
+            editType: { type: "string", enum: ["image-swap", "text-swap", "both", "scene", "none"] },
+            needsText: { type: "boolean" },
+            viral: { type: "string", enum: ["high", "med", "low"] },
+            conversion: { type: "string", description: "One concrete sentence: the exact niche design to build" },
           },
-          required: ["listingId", "objection", "recommendation"],
+          required: ["listingId", "canWork", "concept", "editType", "needsText", "viral", "conversion"],
           additionalProperties: false,
         },
       },
     },
-    required: ["verdicts"],
+    required: ["evaluations"],
     additionalProperties: false,
   };
 
@@ -247,126 +231,11 @@ recommendation: "reject" (objection is fatal), "borderline" (real objection but 
     { type: "text" as const, text: userText },
     ...imageBlocks(shortlist, "high"),
   ];
-  const parsed = await invokeJSON<{ verdicts: SkepticVerdict[] }>(system, userContent, schema, "skeptic_verdicts", "skeptic");
-  return parsed?.verdicts ?? [];
+  const parsed = await invokeJSON<{ evaluations: ScoutEval[] }>(system, userContent, schema, "scout_evaluations", "scout");
+  return parsed?.evaluations ?? [];
 }
 
-async function runVisionary(
-  category: string,
-  shortlist: EtsyTile[],
-  nicheBlock: string,
-  niche: string
-): Promise<VisionaryProposal[]> {
-  const system =
-    `You are THE VISIONARY — the optimist seat on a 3-member design council selecting Etsy tiles to convert into ${niche} designs. Your job is to find the SINGLE cleverest CLEAN one-step conversion for each tile, so genuine gems aren't wrongly rejected.
-
-A CLEAN one-step conversion is EXACTLY one of:
-- TEXT/NUMBER/PUN swap on a TEXT-DRIVEN design (e.g. score '567.9' → '0-0-2'; 'VELOCIREADER' → 'VELOCIDINKER').
-- MASCOT swap: an animal/character → an on-brand mascot in the SAME pose/outfit/props/text (e.g. cowboy frog → cowboy llama). Valid even with no added equipment.
-- PROP RELABEL: the subject holds/wears/displays a writable surface (can, cup, sign, jersey, ball) — write the ${niche} word/logo ON it, nothing else.
-- OBJECT swap: a prominent object → a ${niche} object (moon → pickleball).
-
-For each tile, propose the BEST such conversion in ONE concrete sentence, and rate cleanliness: "obvious" (dead-clean), "plausible" (workable), or "none" (NO genuinely clean one-step conversion exists — be honest, do NOT force one). A vague theme ("make it ${niche}") is "none".` + nicheBlock;
-
-  const userText = `Council case — "${category}" shortlist. For EVERY tile below, give your best clean one-step conversion (or "none"). Images follow in order.\n\nTiles:\n${tileLines(shortlist)}`;
-
-  const schema = {
-    type: "object",
-    properties: {
-      proposals: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            listingId: { type: "string" },
-            conversion: { type: "string", description: "The single cleverest clean one-step swap, or 'none'" },
-            cleanliness: { type: "string", enum: ["obvious", "plausible", "none"] },
-          },
-          required: ["listingId", "conversion", "cleanliness"],
-          additionalProperties: false,
-        },
-      },
-    },
-    required: ["proposals"],
-    additionalProperties: false,
-  };
-
-  const userContent: MessageContent[] = [
-    { type: "text" as const, text: userText },
-    ...imageBlocks(shortlist, "high"),
-  ];
-  const parsed = await invokeJSON<{ proposals: VisionaryProposal[] }>(system, userContent, schema, "visionary_proposals", "visionary");
-  return parsed?.proposals ?? [];
-}
-
-async function runJudge(
-  category: string,
-  shortlist: EtsyTile[],
-  skeptic: SkepticVerdict[],
-  visionary: VisionaryProposal[],
-  nicheBlock: string,
-  niche: string
-): Promise<{ selections: Array<{ listingId: string; conversion: string }>; rejectionNotes: string } | null> {
-  const dossier = shortlist
-    .map((t) => {
-      const sk = skeptic.find((v) => v.listingId === t.listingId);
-      const vi = visionary.find((p) => p.listingId === t.listingId);
-      return (
-        `ID ${t.listingId} — "${t.title}"\n` +
-        `  SKEPTIC (${sk?.recommendation ?? "n/a"}): ${sk?.objection ?? "no input"}\n` +
-        `  VISIONARY (${vi?.cleanliness ?? "n/a"}): ${vi?.conversion ?? "no input"}`
-      );
-    })
-    .join("\n\n");
-
-  const system =
-    `You are THE JUDGE — the pragmatic final arbiter of a 3-member design council selecting Etsy tiles to convert into ${niche} designs. You see each tile image, THE SKEPTIC's objection, and THE VISIONARY's proposed conversion.
-
-SELECT a tile ONLY when BOTH hold:
-- The Visionary found a GENUINELY clean one-step conversion (cleanliness "obvious", or a "plausible" you can confirm against the actual image), AND
-- The Skeptic's objection does NOT hold up against the actual image.
-DEFAULT TO THE SKEPTIC when uncertain. A rejected good tile costs nothing; a selected bad tile wastes a brain call + an image generation AND ships a junk product. There is NO quota — selecting ZERO is correct when nothing is clean.
-
-For each tile you select, output its listingId and the EXACT conversion to use downstream (take the Visionary's if sound, or refine it to be more concrete). In rejectionNotes, briefly note who you sided with and why.` + nicheBlock;
-
-  const userText = `Council dossier — "${category}" shortlist. The two seats have argued; you make the final call. The tile images follow in the SAME order as the dossier.\n\n${dossier}\n\nTiles (in order):\n${tileLines(shortlist)}`;
-
-  const schema = {
-    type: "object",
-    properties: {
-      selections: {
-        type: "array",
-        description: "Final selected tiles. Each REQUIRES a concrete one-step conversion.",
-        items: {
-          type: "object",
-          properties: {
-            listingId: { type: "string" },
-            conversion: { type: "string", description: "The exact one-step swap to use downstream" },
-          },
-          required: ["listingId", "conversion"],
-          additionalProperties: false,
-        },
-      },
-      rejectionNotes: { type: "string", description: "Brief note on the final reasoning" },
-    },
-    required: ["selections", "rejectionNotes"],
-    additionalProperties: false,
-  };
-
-  const userContent: MessageContent[] = [
-    { type: "text" as const, text: userText },
-    ...imageBlocks(shortlist, "high"),
-  ];
-  return invokeJSON<{ selections: Array<{ listingId: string; conversion: string }>; rejectionNotes: string }>(
-    system,
-    userContent,
-    schema,
-    "judge_selections",
-    "judge"
-  );
-}
-
-// ─── Main export — orchestrate the council ───────────────────────────────────────
+// ─── Main export — orchestrate shortlist -> Scout ────────────────────────────────
 
 export async function selectGraphicTeeTiles(
   category: string,
@@ -384,37 +253,45 @@ export async function selectGraphicTeeTiles(
   // Stage 1 — cheap low-detail shortlist (cull obvious non-candidates).
   const shortlist = await shortlistTiles(category, candidates, nicheBlock, niche);
   if (shortlist.length === 0) {
-    console.log(`[Council] "${category}" shortlist empty — no plausible candidates`);
+    console.log(`[Scout] "${category}" shortlist empty — no plausible candidates`);
     return { selectedIds: [], rejectionNotes: "Shortlist empty — no plausible candidates" };
   }
-  console.log(`[Council] "${category}" shortlist: ${shortlist.length}/${candidates.length} → debating`);
+  console.log(`[Scout] "${category}" shortlist: ${shortlist.length}/${candidates.length} -> scouting`);
 
-  // Stage 2 — Skeptic ∥ Visionary (parallel, independent), then the Judge rules.
-  const [skeptic, visionary] = await Promise.all([
-    runSkeptic(category, shortlist, nicheBlock, niche),
-    runVisionary(category, shortlist, nicheBlock, niche),
-  ]);
-  const judged = await runJudge(category, shortlist, skeptic, visionary, nicheBlock, niche);
-  if (!judged) {
-    console.error(`[Council] "${category}" judge failed — selecting nothing (safe default)`);
-    return { selectedIds: [], rejectionNotes: "Council judge failed — no selection" };
+  // Stage 2 — the Scout answers the PO's 5 questions per tile; CODE applies the rule.
+  const evals = await runScout(category, shortlist, nicheBlock, niche);
+  if (evals.length === 0) {
+    console.error(`[Scout] "${category}" scout returned nothing — selecting nothing (safe default)`);
+    return { selectedIds: [], rejectionNotes: "Scout returned no evaluations" };
   }
 
-  // Keep only real IDs with a concrete conversion; cap.
-  const valid = (judged.selections ?? [])
-    .filter((s) => s && candidateIdSet.has(s.listingId) && typeof s.conversion === "string" && s.conversion.trim().length > 0)
-    .slice(0, FINAL_CAP);
+  // SELECT (PO's 5 questions): can work + names a real concept + virality >= med.
+  const seen = new Set<string>();
+  const selected = evals.filter((e) => {
+    if (!e || e.canWork !== true || !candidateIdSet.has(e.listingId)) return false;
+    if (typeof e.concept !== "string" || e.concept.trim().length === 0) return false;
+    if (e.viral !== "high" && e.viral !== "med") return false;
+    if (typeof e.conversion !== "string" || e.conversion.trim().length === 0) return false;
+    if (seen.has(e.listingId)) return false; // de-dup hallucinated repeats
+    seen.add(e.listingId);
+    return true;
+  });
+  // Highest-virality first so the FINAL_CAP keeps the strongest.
+  const viralRank: Record<ScoutEval["viral"], number> = { high: 0, med: 1, low: 2 };
+  selected.sort((a, b) => viralRank[a.viral] - viralRank[b.viral]);
+  const valid = selected.slice(0, FINAL_CAP);
 
-  // Audit trail — log each surviving pick with the council's reasoning chain.
-  for (const s of valid) {
-    const sk = skeptic.find((v) => v.listingId === s.listingId);
-    const vi = visionary.find((p) => p.listingId === s.listingId);
+  for (const e of valid) {
     console.log(
-      `[Council] "${category}" SELECT ${s.listingId} → ${s.conversion} ` +
-        `| skeptic=${sk?.recommendation ?? "n/a"} visionary=${vi?.cleanliness ?? "n/a"}`
+      `[Scout] "${category}" SELECT ${e.listingId} -> ${e.conversion} | viral=${e.viral} edit=${e.editType} needsText=${e.needsText}`
     );
   }
-  console.log(`[Council] "${category}" final: ${valid.length} selected from ${shortlist.length} debated`);
+  const canWorkFalse = evals.filter((e) => !e.canWork).length;
+  const viralLow = evals.filter((e) => e.viral === "low").length;
+  console.log(
+    `[Scout] "${category}" final: ${valid.length} selected from ${shortlist.length} scouted (${canWorkFalse} canWork=false, ${viralLow} viral=low)`
+  );
 
-  return { selectedIds: valid.map((s) => s.listingId), rejectionNotes: judged.rejectionNotes ?? "" };
+  const notes = `Scout: ${valid.length}/${shortlist.length} selected (canWork + concept + viral>=med); ${canWorkFalse} no-path, ${viralLow} low-virality.`;
+  return { selectedIds: valid.map((e) => e.listingId), rejectionNotes: notes };
 }
