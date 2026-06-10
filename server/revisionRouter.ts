@@ -13,7 +13,44 @@ import {
   markRevisionAccepted,
   deleteRevisionsByConceptVariation,
 } from "./revisionDb";
-import { getConceptById, getConceptsByRunId, updateConceptProductionUrl } from "./db";
+import { getConceptById, getConceptsByRunId, updateConceptProductionUrl, updateConceptImages } from "./db";
+import { getTrendPatternsByIds } from "./nicheHunterDb";
+
+/**
+ * Self-healing backfill (PO 2026-06-10). Older niche-pattern concepts were created with
+ * imageUrlA = previewImageUrl — the on-shirt MOCKUP (compositor(productionDesignUrl + template)).
+ * The Design Studio REVISES imageUrlA, so it must be the canonical CLEAN design
+ * (productionDesignUrl), never the shirt photo. On read, flip any concept STILL pointing at the
+ * exact mockup URL to the clean design and persist it. Safety:
+ *   - only flips when imageUrlA === the linked pattern's previewImageUrl, so a user's accepted
+ *     REVISION (a different URL) is never touched;
+ *   - idempotent — once flipped, imageUrlA === productionDesignUrl (!== previewImageUrl), so it
+ *     won't re-fire;
+ *   - new concepts are already correct (createConceptFromPattern, ca928b7) — this only heals the
+ *     ones approved before that fix.
+ */
+async function healNicheConceptDesignUrls<
+  T extends { id: number; nichePatternId: string | null; imageUrlA: string | null }
+>(concepts: T[]): Promise<T[]> {
+  const patternIds = Array.from(
+    new Set(concepts.map((c) => c.nichePatternId).filter((x): x is string => !!x))
+  );
+  if (patternIds.length === 0) return concepts;
+  const byId = new Map((await getTrendPatternsByIds(patternIds)).map((p) => [p.id, p]));
+  for (const c of concepts) {
+    if (!c.nichePatternId) continue;
+    const p = byId.get(c.nichePatternId);
+    if (
+      p?.productionDesignUrl &&
+      c.imageUrlA === p.previewImageUrl &&
+      c.imageUrlA !== p.productionDesignUrl
+    ) {
+      await updateConceptImages(c.id, { imageUrlA: p.productionDesignUrl });
+      c.imageUrlA = p.productionDesignUrl; // patch in-memory for this response
+    }
+  }
+  return concepts;
+}
 
 export const revisionRouter = router({
   /**
@@ -23,7 +60,7 @@ export const revisionRouter = router({
   getReviewQueue: protectedProcedure
     .input(z.object({ runId: z.number() }))
     .query(async ({ input }) => {
-      const concepts = await getConceptsByRunId(input.runId);
+      const concepts = await healNicheConceptDesignUrls(await getConceptsByRunId(input.runId));
       // Only return concepts that have at least one generated image
       return concepts.filter(
         (c) => c.imageUrlA || c.imageUrlB || c.imageUrlC
@@ -40,7 +77,8 @@ export const revisionRouter = router({
       if (!concept) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Concept not found" });
       }
-      return concept;
+      const [healed] = await healNicheConceptDesignUrls([concept]);
+      return healed;
     }),
 
   /**

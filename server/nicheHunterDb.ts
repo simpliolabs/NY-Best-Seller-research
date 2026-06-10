@@ -2,7 +2,7 @@
  * Niche Hunter DB helpers — Phase E
  * Karpathy P2: only what the router and engine need. No speculative helpers.
  */
-import { eq, and, desc, or, isNull, lt } from "drizzle-orm";
+import { eq, and, desc, or, isNull, lt, inArray } from "drizzle-orm";
 import { getDb } from "./db";
 import { nicheScanRuns, trendPatterns } from "../drizzle/schema";
 import type { NicheScanRun, TrendPattern, InsertTrendPattern } from "../drizzle/schema";
@@ -79,6 +79,13 @@ export async function getTrendPatternsByWorkspace(
     .from(trendPatterns)
     .where(conditions)
     .orderBy(desc(trendPatterns.createdAt));
+}
+
+/** Batch-fetch patterns by id (used to resolve a concept's canonical clean design URL). */
+export async function getTrendPatternsByIds(ids: string[]): Promise<TrendPattern[]> {
+  const db = await getDb();
+  if (!db || ids.length === 0) return [];
+  return db.select().from(trendPatterns).where(inArray(trendPatterns.id, ids));
 }
 
 export async function updateTrendPatternStatus(
