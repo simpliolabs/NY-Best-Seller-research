@@ -4,7 +4,7 @@
  * Karpathy: single-purpose functions, no speculative abstractions.
  */
 import sharp from "sharp";
-import { generateImage } from "./_core/imageGeneration";
+import { callImageEdit } from "./patternProductionProcessor";
 import { removeBackground } from "./mockupCompositor";
 import { storagePut } from "./storage";
 import { nanoid } from "nanoid";
@@ -22,32 +22,25 @@ export function buildRevisionPrompt(
   },
   variationKey: string
 ): string {
-  const variationLabel =
-    variationKey === "A"
-      ? "Clean/Commercial"
-      : variationKey === "B"
-        ? "Bold/Artistic"
-        : "Trending/Social";
+  // A revision is a SURGICAL edit, not a redraw. The old prompt fed concept metadata + DTF
+  // "silhouette/redraw" rules, which gave the image model licence to recompose — a simple text
+  // swap (YEE DINK -> YEE HAW) came back with the top text cropped and an invented blue stripe
+  // (PO-flagged 2026-06-10). Concept/variation metadata is intentionally NOT used: a faithful
+  // edit reads the ATTACHED IMAGE, not a description that invites a fresh interpretation. Paired
+  // with gpt-image-1 input_fidelity:"high", this keeps every untouched pixel in place.
+  void concept;
+  void variationKey;
+  return `You are making a SURGICAL edit to the attached design image. Apply ONLY this change, exactly as written, and nothing more:
 
-  return `You are revising a DTF t-shirt design. The original design is attached as reference.
+"${instruction}"
 
-DESIGN CONTEXT:
-- Concept: ${concept.conceptName}
-- Style: ${concept.style}
-- Format: ${concept.format}
-- Variation: ${variationKey} (${variationLabel})
-${concept.headline ? `- Headline: ${concept.headline}` : ""}
-${concept.subtext ? `- Subtext: ${concept.subtext}` : ""}
+Keep EVERYTHING ELSE pixel-for-pixel identical to the attached image:
+- the exact composition, framing, and canvas — do NOT crop, zoom, rescale, or shift the artwork; keep every element (especially text) fully inside the frame and never cut off;
+- every other word and letter at the SAME size, position, font, weight, and colour;
+- the background EXACTLY as it is, including every stripe, colour, and pattern — do NOT add, remove, recolour, or restyle any background element (no new lines, shapes, or fills);
+- every character, graphic, and decoration, unchanged.
 
-USER'S REVISION INSTRUCTION:
-${instruction}
-
-CONSTRAINTS (always maintain):
-- DTF Silhouette Rule: NO solid background fills. White/transparent space visible between all elements.
-- Outer shape must be an organic graphic silhouette (badge, arch, diamond, etc.) — NOT a rectangle.
-- Print Safety: design must work as a physical transfer on fabric.
-- Maintain the overall concept identity while applying the requested changes.
-- Output a single cohesive design image with transparent or white background.`;
+Do NOT redraw, restyle, recolour, resize, reposition, or add/remove ANYTHING the instruction did not explicitly name. Change only what the instruction asks; leave all else exactly as in the attached image.`;
 }
 
 /** Generate a design revision using GPT Image with the original as reference */
@@ -64,38 +57,40 @@ export async function generateRevision(
     subtext?: string | null;
   }
 ): Promise<{ revisionId: string; imageUrl: string }> {
-  // 1. Build prompt
+  // 1. Build the faithful-edit prompt (apply ONLY the instruction; keep everything else identical).
   const prompt = buildRevisionPrompt(instruction, conceptMeta, variationKey);
 
-  // 2. Call GPT Image generation with reference
-  const result = await generateImage({
-    prompt,
-    originalImages: [{ url: referenceImageUrl, mimeType: "image/png" }],
+  // 2. Faithful edit via gpt-image-1 /v1/images/edits with input_fidelity:"high" — the lever that
+  // preserves the parts of the design the instruction did NOT touch. The previous Forge
+  // GenerateImage path had no fidelity control, so a simple text swap recomposed the design
+  // (cropped the top text, invented a blue stripe — PO-flagged 2026-06-10). size:"auto" lets the
+  // model keep the original framing instead of forcing a square crop.
+  const refRes = await fetch(referenceImageUrl);
+  if (!refRes.ok) throw new Error(`Failed to download reference image: ${referenceImageUrl} (${refRes.status})`);
+  const refPng = await sharp(Buffer.from(await refRes.arrayBuffer())).png().toBuffer();
+  const edited = await callImageEdit(refPng, "design.png", prompt, {
+    transparent: false,
+    inputFidelity: "high", // the faithfulness lever (preserve untouched pixels) — independent of quality
+    quality: "medium", // submitRevision is a sync mutation with NO retry net; "high" (~90-180s) risks a
+                       // Cloudflare 524. "medium" (~30-60s) stays under the edge timeout; input_fidelity
+                       // (not quality) is what preserves the design, so faithfulness is unaffected.
+    size: "auto",
   });
-  const rawUrl = result.url;
-  if (!rawUrl) throw new Error("Image generation returned no URL");
 
-  // 2b. Strip the background BEFORE storing. The image model bakes in a white/opaque background
-  // (it can't emit true transparency), so without this the Design Studio shows the revised design
-  // sitting on a white box instead of transparency — the reported "it adds a background" bug.
-  // removeBackground = edge-connected white flood-fill (preserves interior whites) with an
-  // AI-extraction fallback for colored backgrounds; same cleanup every other design path uses.
-  // On any failure we keep the raw image rather than blocking the revision.
-  let imageUrl = rawUrl;
+  // 2b. Strip the outer background to transparency before storing (gpt-image-1 returns an opaque
+  // canvas). removeBackground = edge-connected white flood-fill (preserves interior whites/stripes)
+  // with an AI-extraction fallback. On failure, keep the raw edit rather than block the revision.
+  let finalBuf = edited;
   try {
-    const res = await fetch(rawUrl);
-    if (res.ok) {
-      const transparent = await removeBackground(Buffer.from(await res.arrayBuffer()));
-      const { url } = await storagePut(
-        `revisions/${conceptId}-${variationKey}-${Date.now()}.png`,
-        transparent,
-        "image/png",
-      );
-      imageUrl = url;
-    }
+    finalBuf = await removeBackground(edited);
   } catch (err) {
-    console.warn(`[Revision] background removal failed for concept ${conceptId} ${variationKey}; using raw image:`, err);
+    console.warn(`[Revision] background removal failed for concept ${conceptId} ${variationKey}; using raw edit:`, err);
   }
+  const { url: imageUrl } = await storagePut(
+    `revisions/${conceptId}-${variationKey}-${Date.now()}.png`,
+    finalBuf,
+    "image/png",
+  );
 
   // 3. Get next iteration number
   const iterationNumber = await getNextIterationNumber(conceptId, variationKey);

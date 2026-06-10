@@ -36,73 +36,29 @@ function createPublicContext(): TrpcContext {
 
 // ─── Unit: buildRevisionPrompt ─────────────────────────────────────────────
 describe("buildRevisionPrompt", () => {
-  it("includes concept metadata and instruction in the prompt", () => {
-    const prompt = buildRevisionPrompt(
-      "Make the text bolder",
-      {
-        conceptName: "Dragon Fire",
-        format: "badge",
-        style: "vintage",
-        headline: "BURN BRIGHT",
-        subtext: "Never fade",
-      },
-      "A"
-    );
+  const meta = { conceptName: "Dragon Fire", format: "badge", style: "vintage", headline: "BURN BRIGHT", subtext: "Never fade" };
 
-    expect(prompt).toContain("Dragon Fire");
-    expect(prompt).toContain("badge");
-    expect(prompt).toContain("vintage");
-    expect(prompt).toContain("BURN BRIGHT");
-    expect(prompt).toContain("Never fade");
-    expect(prompt).toContain("Make the text bolder");
-    expect(prompt).toContain("Variation: A");
-    expect(prompt).toContain("Clean/Commercial");
+  it("embeds the user instruction verbatim", () => {
+    const prompt = buildRevisionPrompt("change YEE to HAW", meta, "A");
+    expect(prompt).toContain("change YEE to HAW");
   });
 
-  it("handles variation B label correctly", () => {
-    const prompt = buildRevisionPrompt(
-      "Add texture",
-      { conceptName: "Test", format: "arch", style: "modern" },
-      "B"
-    );
-    expect(prompt).toContain("Bold/Artistic");
-    expect(prompt).toContain("Variation: B");
+  it("locks the design as a surgical edit — keep everything else pixel-for-pixel identical", () => {
+    const prompt = buildRevisionPrompt("Make the text bolder", meta, "A");
+    expect(prompt).toContain("SURGICAL");
+    expect(prompt).toContain("pixel-for-pixel identical");
+    expect(prompt).toMatch(/do NOT crop/i);
+    expect(prompt).toMatch(/do NOT add, remove, recolour/i);
+    expect(prompt).toMatch(/Change only what the instruction asks/i);
   });
 
-  it("handles variation C label correctly", () => {
-    const prompt = buildRevisionPrompt(
-      "Add texture",
-      { conceptName: "Test", format: "arch", style: "modern" },
-      "C"
-    );
-    expect(prompt).toContain("Trending/Social");
-    expect(prompt).toContain("Variation: C");
-  });
-
-  it("omits headline/subtext when null", () => {
-    const prompt = buildRevisionPrompt(
-      "Change colors",
-      {
-        conceptName: "Minimal",
-        format: "diamond",
-        style: "clean",
-        headline: null,
-        subtext: null,
-      },
-      "A"
-    );
-    expect(prompt).not.toContain("Headline:");
-    expect(prompt).not.toContain("Subtext:");
-  });
-
-  it("includes DTF silhouette constraint", () => {
-    const prompt = buildRevisionPrompt(
-      "Any instruction",
-      { conceptName: "Test", format: "badge", style: "retro" },
-      "A"
-    );
-    expect(prompt).toContain("DTF Silhouette Rule");
-    expect(prompt).toContain("NO solid background fills");
+  it("does NOT inject concept metadata or DTF redraw rules that invite recomposition", () => {
+    // PO 2026-06-10: the old prompt fed concept metadata + DTF 'silhouette/redraw' rules, which let
+    // a text swap recompose (cropped text + invented stripe). A faithful edit reads the IMAGE only.
+    const prompt = buildRevisionPrompt("Add texture", meta, "A");
+    expect(prompt).not.toContain("Dragon Fire");
+    expect(prompt).not.toContain("DTF Silhouette Rule");
+    expect(prompt).not.toContain("Variation:");
   });
 });
 

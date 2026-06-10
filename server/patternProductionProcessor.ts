@@ -74,11 +74,11 @@ import { getWorkspaceById } from "./workspaceDb";
  * If `transparent` is true, requests a transparent background (Step 2 extract).
  * Otherwise the model returns an opaque output (Step 1 replace).
  */
-async function callImageEdit(
+export async function callImageEdit(
   sourceImg: Buffer,
   filename: string,
   prompt: string,
-  options: { transparent: boolean; inputFidelity?: "high" | "low"; quality?: "high" | "medium" | "low" }
+  options: { transparent: boolean; inputFidelity?: "high" | "low"; quality?: "high" | "medium" | "low"; size?: "1024x1024" | "1536x1024" | "1024x1536" | "auto" }
 ): Promise<Buffer> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
@@ -86,7 +86,7 @@ async function callImageEdit(
   const formData = new FormData();
   formData.append("model", "gpt-image-1");
   formData.append("prompt", prompt);
-  formData.append("size", "1024x1024");
+  formData.append("size", options.size ?? "1024x1024");
   // quality: "high" is the slowest tier (~90–180s per call) and is the dominant cost
   // per pattern. Callers can downgrade an intermediate stage to "medium" (~30–60s)
   // when its output isn't the final asset — Step 1 (replaceDesignOnShirt) does this
