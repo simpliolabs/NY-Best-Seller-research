@@ -319,7 +319,7 @@ function PatternCard({
         )}
 
         {/* Loading indicator when production image is still generating */}
-        {pattern.sourceImageUrl && !pattern.productionDesignUrl && !pattern.previewImageUrl && pattern.adaptationMode === "edit_source" && (
+        {pattern.status === "discovered" && !pattern.chosenConcept && pattern.sourceImageUrl && !pattern.productionDesignUrl && !pattern.previewImageUrl && pattern.adaptationMode === "edit_source" && (
           <div className="rounded-md border border-dashed border-border bg-muted/50 p-4 flex flex-col items-center justify-center gap-2 min-h-[120px]">
             <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
             <p className="text-xs text-muted-foreground text-center">Generating niche variation...</p>
