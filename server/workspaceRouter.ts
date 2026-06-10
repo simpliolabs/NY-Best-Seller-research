@@ -17,6 +17,7 @@ import {
   setCredential,
   getCredential,
 } from "./workspaceDb";
+import { DEFAULT_ALLOWED_STYLES } from "../shared/styleProfile";
 
 export const workspaceRouter = router({
   /** List all workspaces visible to the current user (user-owned + system defaults). */
@@ -117,6 +118,13 @@ export const workspaceRouter = router({
     .mutation(async ({ input }) => {
       return setWorkspaceAllowedStyles(input.id, input.allowedStyles);
     }),
+
+  /** The canonical art-style menu — single source of truth for the Settings "Design Styles" pills
+   *  AND the per-concept Regenerate dropdown. Frontend renders from this, so adding/removing a
+   *  style is a BACKEND-ONLY change (edit DEFAULT_ALLOWED_STYLES; both pickers update). */
+  styleOptions: protectedProcedure.query(() => {
+    return DEFAULT_ALLOWED_STYLES;
+  }),
 
   /** Store a credential for a workspace (Shopify token, Etsy key, etc.) */
   setCredential: protectedProcedure
