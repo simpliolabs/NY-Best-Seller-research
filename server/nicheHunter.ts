@@ -1344,25 +1344,30 @@ export async function runNicheHunterScan(
     await updateScanRun(scanId, { progress: 96 });
     await rankPatterns(workspace.id, profile);
 
-    // Step 5b: Score gate — auto-dismiss low-fit patterns from THIS scan.
-    // rankPatterns just scored every discovered pattern in the workspace; anything
-    // below LOW_FIT_THRESHOLD is off-brand (rank LLM's own judgement) and should
-    // not burn gpt-image-1 cycles via retryStuckPatterns. retryStuckPatterns already
-    // filters status='dismissed' (5d8648f), so dismissing here also halts the serial
-    // polling drain on losers. The wasted in-flight fire-and-forget compute is small
-    // (those jobs mostly die on Cloud Run anyway). PO threshold: 50.
+    // Step 5b: Score gate — applies ONLY in CURATED mode (pre-production). PO directive:
+    // "nothing is auto-dismissed if produced." In AUTO mode the fire-and-forget image gen has
+    // already run, so these designs are PRODUCED — and the rank score here graded the throwaway
+    // SCAN-TIME draft concept, NOT what the image brain actually made (a literal 'pickleball
+    // patch' draft routinely becomes a great 'llama playing pickleball'). Dismissing on that
+    // stale score killed good output (PO-caught 2026-06-10: a llama-pickleball design auto-
+    // dismissed at "rank 35"). So AUTO mode does NOT score-gate — the post-production validator
+    // flags weak designs, the human curates, and the score is RE-GROUNDED on the real design in
+    // processPatternProduction. CURATED mode IS pre-production (concept options only, no image
+    // yet), so there the gate is a legitimate "catch before doing" and still applies.
     const LOW_FIT_THRESHOLD = 50;
     const allDiscovered = await getTrendPatternsByWorkspace(workspace.id, "discovered");
     const thisScanDiscovered = allDiscovered.filter(p => p.scanId === scanId);
     const lowFit = thisScanDiscovered.filter(p => (p.score ?? 100) < LOW_FIT_THRESHOLD);
-    for (const p of lowFit) {
-      const reason = `Low fit (rank score ${p.score ?? 0}): ${p.rankReasoning ?? "no rationale recorded"}`;
-      console.log(`[NicheHunter] Score gate: auto-dismissing "${(p.patternName ?? "").slice(0, 40)}" — ${reason.slice(0, 80)}`);
-      await updateTrendPatternStatus(p.id, "dismissed");
-      await recordRejectionSignal(p.id, reason, ["off_brand"]);
-    }
-    if (lowFit.length > 0) {
-      console.log(`[NicheHunter] Score gate: dismissed ${lowFit.length}/${thisScanDiscovered.length} patterns from scan ${scanId} (threshold ${LOW_FIT_THRESHOLD})`);
+    if (conceptMode === "curated") {
+      for (const p of lowFit) {
+        const reason = `Low fit (rank score ${p.score ?? 0}): ${p.rankReasoning ?? "no rationale recorded"}`;
+        console.log(`[NicheHunter] Score gate (curated): auto-dismissing "${(p.patternName ?? "").slice(0, 40)}" — ${reason.slice(0, 80)}`);
+        await updateTrendPatternStatus(p.id, "dismissed");
+        await recordRejectionSignal(p.id, reason, ["off_brand"]);
+      }
+      if (lowFit.length > 0) {
+        console.log(`[NicheHunter] Score gate: dismissed ${lowFit.length}/${thisScanDiscovered.length} patterns from scan ${scanId} (threshold ${LOW_FIT_THRESHOLD})`);
+      }
     }
 
     // Step 5c: CURATED MODE — propose 2-3 concept OPTIONS per surviving pattern, in

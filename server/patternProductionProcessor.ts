@@ -57,6 +57,7 @@ import {
   updateTrendPatternProductionUrl,
   updateTrendPatternStatus,
   updateTrendPatternValidationReport,
+  updateTrendPatternScore,
   recordRejectionSignal,
   getTrendPatternsByWorkspace,
 } from "./nicheHunterDb";
@@ -1203,6 +1204,16 @@ export async function processPatternProduction(
       `[PatternProd] Validation pattern=${patternId}: relevance=${validation.nicheRelevance} matchesPlan=${validation.matchesPlan} hasTypo=${validation.hasTypo} shouldShip=${validation.shouldShip} text="${validation.textInImage.slice(0, 60)}"`
     );
     await updateTrendPatternValidationReport(patternId, validation);
+    // Re-ground the displayed fit score on the ACTUAL generated design. The scan-time rank
+    // graded the throwaway draft concept (e.g. a literal 'pickleball patch'), NOT what the
+    // image brain actually produced (e.g. a llama playing pickleball) — which mislabeled good
+    // designs 'Low fit'. The validator just judged the REAL image, so its niche-relevance +
+    // reasoning are the honest grounded fit signal. Non-fatal: a display update never blocks.
+    try {
+      await updateTrendPatternScore(patternId, validation.nicheRelevance, validation.reasoning);
+    } catch (e) {
+      console.warn(`[PatternProd] updateTrendPatternScore failed (non-fatal) for ${patternId}:`, e);
+    }
     if (!validation.shouldShip) {
       // FLAG, do not dismiss. The report is stored; the UI shows the warning; the
       // human curates. Production continues normally below.
