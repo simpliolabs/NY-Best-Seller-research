@@ -13,7 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { Save, X, Plus, Loader2, RefreshCw, Trash2, ShoppingBag, CheckCircle2, Unplug } from "lucide-react";
+import { Save, X, Plus, Loader2, RefreshCw, Trash2, ShoppingBag, CheckCircle2, Unplug, Palette } from "lucide-react";
 import { useLocation } from "wouter";
 import {
   AlertDialog,
@@ -105,6 +105,49 @@ export default function WorkspaceSettings() {
     },
     onError: (err) => toast.error(err.message),
   });
+
+  // ─── Design Styles allowlist ──────────────────────────────────────────────
+  const ALL_STYLES = [
+    "Vintage/Distressed", "Retro 70s-80s", "Halftone Screen-Print", "Bold Typographic",
+    "Minimalist Line-Art", "Gritty Realism", "Photorealistic", "Dark Academia",
+    "Collegiate/Varsity", "Cottagecore", "Streetwear/Y2K", "Watercolor", "Tactical/Militarycore",
+  ];
+  const [allowedStyles, setAllowedStyles] = useState<string[]>(ALL_STYLES);
+  const [stylesDirty, setStylesDirty] = useState(false);
+
+  useEffect(() => {
+    if (workspace) {
+      const saved = (workspace as any).styleProfile?.allowedStyles as string[] | undefined;
+      setAllowedStyles(saved && saved.length > 0 ? saved : ALL_STYLES);
+      setStylesDirty(false);
+    }
+  }, [workspace]);
+
+  const setStylesMutation = trpc.workspace.setAllowedStyles.useMutation({
+    onSuccess: () => {
+      toast.success("Design styles saved");
+      utils.workspace.get.invalidate({ id: activeWorkspace?.id ?? "" });
+      setStylesDirty(false);
+    },
+    onError: (err: { message: string }) => toast.error(err.message),
+  });
+
+  function toggleStyle(style: string) {
+    setAllowedStyles((prev) => {
+      const next = prev.includes(style) ? prev.filter((s) => s !== style) : [...prev, style];
+      return next;
+    });
+    setStylesDirty(true);
+  }
+
+  function handleSaveStyles() {
+    if (!activeWorkspace) return;
+    if (allowedStyles.length === 0) {
+      toast.error("Select at least 1 style");
+      return;
+    }
+    setStylesMutation.mutate({ id: activeWorkspace.id, allowedStyles });
+  }
 
   function handleSave() {
     if (!activeWorkspace) return;
@@ -324,6 +367,55 @@ export default function WorkspaceSettings() {
               </Button>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      {/* Design Styles */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base flex items-center gap-2" style={{ fontFamily: "Syne, sans-serif" }}>
+              <Palette className="h-4 w-4" />
+              Design Styles
+            </CardTitle>
+            <Button
+              size="sm"
+              onClick={handleSaveStyles}
+              disabled={!stylesDirty || setStylesMutation.isPending || allowedStyles.length === 0}
+              style={{ backgroundColor: stylesDirty ? "#22C55E" : undefined }}
+              className={stylesDirty ? "text-white hover:opacity-90" : ""}
+            >
+              {setStylesMutation.isPending ? (
+                <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Save className="mr-2 h-3.5 w-3.5" />
+              )}
+              Save Styles
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            The concept generator picks each design's style from these. Cartoonish is always excluded.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {ALL_STYLES.map((style) => (
+              <button
+                key={style}
+                onClick={() => toggleStyle(style)}
+                className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+                  allowedStyles.includes(style)
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-muted text-muted-foreground border-border hover:border-primary/50"
+                }`}
+              >
+                {style}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {allowedStyles.length} of {ALL_STYLES.length} selected
+          </p>
         </CardContent>
       </Card>
 
