@@ -1044,7 +1044,7 @@ async function despeckleForDtf(buf: Buffer, minArea = 24): Promise<Buffer> {
  *
  * Three checks must all pass:
  *   1. Corner pixels: all 4 corners must have alpha < 16 (nearly transparent)
- *   2. Transparent pixel ratio: ≥ 20% of pixels must have alpha < 128
+ *   2. Transparent pixel ratio: ≥ 5% must have alpha < 128 (near-opaque floor; Check 1 is the real bg gate)
  *   3. Non-transparent pixel ratio: ≥ 5% must be opaque (catches blank-canvas outputs)
  *
  * If any check fails, throws an error with the patternId for log tracing.
@@ -1074,16 +1074,23 @@ export async function assertTransparentPng(buf: Buffer, patternId: string): Prom
     }
   }
 
-  // Check 2: transparent pixel ratio must be ≥ 20%
+  // Check 2: minimal transparency floor (near-fully-opaque guard). Check 1 (transparent
+  // corners) is the REAL "background was removed" gate; this only catches a degenerate
+  // near-opaque result. The old ≥20% floor wrongly killed legitimately DENSE designs — a
+  // full badge / dense graphic with clean transparent corners can be only ~10% transparent
+  // (PO-caught 2026-06-10: a 92-scored "Osaka Octopus" badge + an 88-scored design were
+  // dismissed "Transfer failed" at ~10.8%). With transparent corners already proven by
+  // Check 1, ≥5% confirms real transparency exists without punishing density.
+  const MIN_TRANSPARENT_RATIO = 0.05;
   let transparentCount = 0;
   const totalPixels = width * height;
   for (let i = 0; i < totalPixels; i++) {
     if (data[i * channels + 3] < 128) transparentCount++;
   }
   const ratio = transparentCount / totalPixels;
-  if (ratio < 0.20) {
+  if (ratio < MIN_TRANSPARENT_RATIO) {
     throw new Error(
-      `[PatternProd] VALIDATION FAIL pattern=${patternId}: transparent pixel ratio=${(ratio * 100).toFixed(1)}% (expected ≥20%). Extract step did not remove enough background. Aborting storagePut.`
+      `[PatternProd] VALIDATION FAIL pattern=${patternId}: transparent pixel ratio=${(ratio * 100).toFixed(1)}% (expected ≥${(MIN_TRANSPARENT_RATIO * 100).toFixed(0)}%). Near-fully-opaque even though corners are transparent — likely an all-over scene, not a clean graphic. Aborting storagePut.`
     );
   }
 

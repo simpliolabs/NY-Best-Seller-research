@@ -291,16 +291,24 @@ describe("assertTransparentPng", () => {
     );
   });
 
-  it("throws when corners are transparent but ratio < 20% (mostly opaque body)", async () => {
-    // Corners transparent, but 85% of pixels are opaque (large opaque block)
-    // 85x85 opaque center out of 100x100 = 72.25% opaque → 27.75% transparent ≥ 20% — this passes
-    // Make it 95x95 opaque = 90.25% opaque → 9.75% transparent < 20% — this fails
+  it("passes a DENSE design (transparent corners, ~10% transparent) — the Osaka-92 case", async () => {
+    // Corners transparent (Check 1 passes), 95x95 opaque body = 9.75% transparent. The old
+    // >=20% floor wrongly killed this; with Check 1 already proving the bg was removed, the
+    // >=5% floor lets a legitimately dense badge/graphic through (PO 2026-06-10).
     const buf = await makePng(100, 100, (x, y) => {
-      const isCorner = (x === 0 || x === 99) && (y === 0 || y === 99);
       const inLargeBlock = x >= 3 && x < 98 && y >= 3 && y < 98;
-      if (isCorner) return [0, 0, 0, 0];
-      if (inLargeBlock) return [50, 80, 30, 255];
-      return [0, 0, 0, 0];
+      return inLargeBlock ? [50, 80, 30, 255] : [0, 0, 0, 0];
+    });
+    await expect(assertTransparentPng(buf, "test-dense-pass")).resolves.toBeUndefined();
+  });
+
+  it("throws when near-fully-opaque (<5% transparent) even with transparent corners", async () => {
+    // 98x98 opaque body = only a 1px transparent border = 3.96% transparent. Corners are
+    // transparent so Check 1 passes, but this is a near-opaque all-over result, not a clean
+    // graphic, so the >=5% Check-2 floor still rejects it.
+    const buf = await makePng(100, 100, (x, y) => {
+      const inLargeBlock = x >= 1 && x < 99 && y >= 1 && y < 99;
+      return inLargeBlock ? [50, 80, 30, 255] : [0, 0, 0, 0];
     });
     await expect(assertTransparentPng(buf, "test-fail-ratio")).rejects.toThrow(
       /VALIDATION FAIL.*transparent pixel ratio/
