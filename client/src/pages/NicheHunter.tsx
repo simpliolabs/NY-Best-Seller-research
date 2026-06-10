@@ -21,6 +21,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Crosshair, CheckCircle2, XCircle, Loader2, Zap, RefreshCw,
   ExternalLink, AlertTriangle, ThumbsUp, ThumbsDown, Sparkles, ChevronDown, ChevronUp,
+  Wand2, Bot, RotateCcw,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -82,6 +83,8 @@ type Pattern = {
   rejectionReason: string | null;
   dtfImageUrl: string | null;
   approvedAt: string | number | null;
+  conceptOptions: Array<{ title: string; summary: string }> | null;
+  chosenConcept: string | null;
 };
 
 // ─── Adaptation Mode Badge ────────────────────────────────────────────────────
@@ -165,20 +168,24 @@ function PatternCard({
   pattern,
   onApprove,
   onDismiss,
+  onRestore,
   onFlagEditMode,
+  onChooseConcept,
   isActing,
 }: {
   pattern: Pattern;
   onApprove: (id: string) => void;
   onDismiss: (id: string) => void;
+  onRestore: (id: string) => void;
   onFlagEditMode: (id: string) => void;
+  onChooseConcept: (patternId: string, concept: string) => void;
   isActing: boolean;
 }) {
   return (
-    <Card className="border border-border bg-card flex flex-col gap-0">
+    <Card className="border border-border bg-card flex flex-col gap-0 min-w-0" style={{ overflowWrap: 'break-word', wordBreak: 'break-word' }}>
       <CardHeader className="pb-3">
-        <div className="flex items-start justify-between gap-3">
-          <CardTitle className="text-sm font-semibold leading-snug">
+        <div className="flex items-start justify-between gap-3 min-w-0">
+          <CardTitle className="text-sm font-semibold leading-snug break-words">
             {pattern.patternName}
           </CardTitle>
           <Badge
@@ -212,7 +219,7 @@ function PatternCard({
 
         {pattern.sourceTitle && (
           <div className="mt-1">
-            <p className="text-xs text-muted-foreground truncate">
+            <p className="text-xs text-muted-foreground break-words">
               Source: {pattern.sourceTitle}
               {pattern.sourceReviewCount != null
                 ? ` · ${pattern.sourceReviewCount.toLocaleString()} reviews`
@@ -263,7 +270,7 @@ function PatternCard({
           </div>
         )}
         {pattern.rankReasoning && (
-          <p className="text-xs italic text-muted-foreground mt-1">
+          <p className="text-xs italic text-muted-foreground mt-1 break-words">
             {pattern.rankReasoning}
           </p>
         )}
@@ -289,7 +296,7 @@ function PatternCard({
         )}
       </CardHeader>
 
-      <CardContent className="flex flex-col gap-3 pt-0">
+      <CardContent className="flex flex-col gap-3 pt-0 overflow-hidden">
         {/* Real Etsy source product image */}
         {pattern.sourceImageUrl && (
           <div>
@@ -405,6 +412,37 @@ function PatternCard({
             <p className="text-sm font-medium">{pattern.adaptedConcept}</p>
           </div>
         )}
+        {/* Curated mode: concept picker — show when options are ready and human hasn't picked yet */}
+        {Array.isArray(pattern.conceptOptions) && pattern.conceptOptions.length > 0 && !pattern.chosenConcept && (
+          <div className="rounded-md border border-dashed border-amber-500/50 bg-amber-500/5 p-3 flex flex-col gap-2">
+            <p className="text-xs font-semibold text-amber-400 uppercase tracking-wide flex items-center gap-1.5">
+              <Wand2 className="w-3 h-3" />
+              Pick a concept to generate
+            </p>
+            {pattern.conceptOptions.map((opt, i) => (
+              <button
+                key={i}
+                disabled={isActing}
+                onClick={() => onChooseConcept(pattern.id, opt.summary)}
+                className="text-left rounded-md border border-border bg-card hover:bg-accent/10 hover:border-accent/50 transition-colors p-2.5 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <p className="text-xs font-semibold text-foreground mb-0.5">{opt.title}</p>
+                <p className="text-xs text-muted-foreground leading-snug">{opt.summary}</p>
+                <p className="text-[10px] text-accent mt-1 font-medium">Generate this →</p>
+              </button>
+            ))}
+          </div>
+        )}
+        {/* Curated mode: concept chosen, now generating */}
+        {pattern.chosenConcept && !pattern.productionDesignUrl && !pattern.previewImageUrl && (
+          <div className="rounded-md border border-dashed border-border bg-muted/50 p-3 flex items-center gap-2">
+            <Loader2 className="w-4 h-4 animate-spin text-muted-foreground shrink-0" />
+            <div>
+              <p className="text-xs font-medium text-foreground">Generating your concept...</p>
+              <p className="text-[10px] text-muted-foreground mt-0.5 line-clamp-2">{pattern.chosenConcept}</p>
+            </div>
+          </div>
+        )}
 
         {/* DTF ready indicator */}
         {pattern.status === "approved" && pattern.dtfImageUrl && (
@@ -441,6 +479,20 @@ function PatternCard({
             >
               <XCircle className="h-3.5 w-3.5 mr-1.5" />
               Dismiss
+            </Button>
+          </div>
+        )}
+        {pattern.status === "dismissed" && (
+          <div className="flex gap-2 pt-1">
+            <Button
+              size="sm"
+              variant="outline"
+              className="flex-1"
+              onClick={() => onRestore(pattern.id)}
+              disabled={isActing}
+            >
+              <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+              Restore / Approve
             </Button>
           </div>
         )}
@@ -688,6 +740,7 @@ export default function NicheHunter() {
   const { activeWorkspace } = useWorkspace();
   const workspaceId = activeWorkspace?.id ?? "";
 
+  const [scanMode, setScanMode] = useState<"auto" | "curated">("auto");
   const [activeScanId, setActiveScanId] = useState<string | null>(null);
   const [actingPatternId, setActingPatternId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"discovered" | "approved" | "dismissed" | undefined>(undefined);
@@ -705,6 +758,7 @@ export default function NicheHunter() {
     { scanId: activeScanId ?? undefined, workspaceId },
     {
       enabled: !!workspaceId,
+      placeholderData: (previousData) => previousData,
       refetchInterval: (query) => {
         const status = query.state.data?.status;
         return status === "running" ? 2000 : false;
@@ -720,7 +774,7 @@ export default function NicheHunter() {
 
   useEffect(() => {
     if (scanStatus?.status === "completed") {
-      utils.nicheHunter.getPatterns.invalidate({ workspaceId });
+      utils.nicheHunter.getPatterns.invalidate({ workspaceId }, { refetchType: "none" });
     }
   }, [scanStatus?.status, workspaceId, utils]);
 
@@ -729,13 +783,17 @@ export default function NicheHunter() {
       { workspaceId, status: statusFilter },
       {
         enabled: !!workspaceId,
-        // Poll every 10s while any pattern has a sourceImageUrl but no productionDesignUrl
-        // (fire-and-forget image gen still in progress)
+        placeholderData: (previousData) => previousData,
+        // Only re-render when data actually changes (not on every background refetch tick)
+        notifyOnChangeProps: ["data", "isLoading"],
+        // Poll every 10s while any pattern is still generating (edit_source or curated chosenConcept pending)
         refetchInterval: (query) => {
           const data = query.state.data;
           if (!data || data.length === 0) return false;
           const hasIncomplete = data.some(
-            (p: any) => p.sourceImageUrl && !p.productionDesignUrl && p.adaptationMode === "edit_source"
+            (p: any) =>
+              (p.sourceImageUrl && !p.productionDesignUrl && p.adaptationMode === "edit_source") ||
+              (p.chosenConcept && !p.productionDesignUrl)
           );
           return hasIncomplete ? 10000 : false;
         },
@@ -747,7 +805,7 @@ export default function NicheHunter() {
       setRetryRemaining(data.remaining);
       if (data.remaining === 0) {
         setIsRetrying(false);
-        utils.nicheHunter.getPatterns.invalidate({ workspaceId });
+        utils.nicheHunter.getPatterns.invalidate({ workspaceId }, { refetchType: "none" });
       }
     },
     onError: () => {
@@ -785,18 +843,40 @@ export default function NicheHunter() {
         toast.info("A scan is already running.");
       } else {
         setActiveScanId(data.scanId);
-        toast.success("Scan started! Patterns will appear below as they are discovered.");
+        toast.success(
+          data.mode === "curated"
+            ? "Curated scan started! Concept options will appear — pick one to generate each design."
+            : "Scan started! Patterns will appear below as they are discovered."
+        );
       }
     },
     onError: (err) => toast.error(err.message),
   });
-
-  const approvePattern = trpc.nicheHunter.approvePattern.useMutation({
+  const chooseConceptAndGenerate = trpc.nicheHunter.chooseConceptAndGenerate.useMutation({
     onMutate: ({ patternId }) => setActingPatternId(patternId),
     onSuccess: () => {
-      utils.nicheHunter.getPatterns.invalidate({ workspaceId });
-      utils.nicheHunter.getStylePreferences.invalidate({ workspaceId });
-      utils.library.list.invalidate();
+      utils.nicheHunter.getPatterns.invalidate({ workspaceId }, { refetchType: "none" });
+      toast.success("Concept locked — generating your design. This takes 2–4 minutes.");
+    },
+    onError: (err) => toast.error(err.message),
+    onSettled: () => setActingPatternId(null),
+  });
+
+  const approvePattern = trpc.nicheHunter.approvePattern.useMutation({
+    onMutate: async ({ patternId }) => {
+      setActingPatternId(patternId);
+      await utils.nicheHunter.getPatterns.cancel({ workspaceId, status: statusFilter });
+      const prev = utils.nicheHunter.getPatterns.getData({ workspaceId, status: statusFilter });
+      utils.nicheHunter.getPatterns.setData(
+        { workspaceId, status: statusFilter },
+        (old) => old?.map((p) => p.id === patternId ? { ...p, status: "approved" as const } : p)
+      );
+      return { prev };
+    },
+    onSuccess: () => {
+      utils.nicheHunter.getPatterns.invalidate({ workspaceId }, { refetchType: "none" });
+      utils.nicheHunter.getStylePreferences.invalidate({ workspaceId }, { refetchType: "none" });
+      utils.library.list.invalidate({ }, { refetchType: "none" });
       setApproveDialogPatternId(null);
       toast.success("Pattern approved! Next: Generate images in the Library, then refine in Design Studio.", {
         duration: 6000,
@@ -806,25 +886,40 @@ export default function NicheHunter() {
         },
       });
     },
-    onError: (err) => toast.error(err.message),
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) utils.nicheHunter.getPatterns.setData({ workspaceId, status: statusFilter }, ctx.prev);
+      toast.error(_e.message);
+    },
     onSettled: () => setActingPatternId(null),
   });
 
   const dismissPattern = trpc.nicheHunter.dismissPattern.useMutation({
-    onMutate: ({ patternId }) => setActingPatternId(patternId),
+    onMutate: async ({ patternId }) => {
+      setActingPatternId(patternId);
+      await utils.nicheHunter.getPatterns.cancel({ workspaceId, status: statusFilter });
+      const prev = utils.nicheHunter.getPatterns.getData({ workspaceId, status: statusFilter });
+      utils.nicheHunter.getPatterns.setData(
+        { workspaceId, status: statusFilter },
+        (old) => old?.map((p) => p.id === patternId ? { ...p, status: "dismissed" as const } : p)
+      );
+      return { prev };
+    },
     onSuccess: () => {
-      utils.nicheHunter.getPatterns.invalidate({ workspaceId });
-      utils.nicheHunter.getStylePreferences.invalidate({ workspaceId });
+      utils.nicheHunter.getPatterns.invalidate({ workspaceId }, { refetchType: "none" });
+      utils.nicheHunter.getStylePreferences.invalidate({ workspaceId }, { refetchType: "none" });
       setDismissDialogPatternId(null);
       toast.success("Pattern dismissed.");
     },
-    onError: (err) => toast.error(err.message),
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) utils.nicheHunter.getPatterns.setData({ workspaceId, status: statusFilter }, ctx.prev);
+      toast.error(_e.message);
+    },
     onSettled: () => setActingPatternId(null),
   });
 
   const flagEditMode = trpc.nicheHunter.flagEditModeResult.useMutation({
     onSuccess: () => {
-      utils.nicheHunter.getPatterns.invalidate({ workspaceId });
+      utils.nicheHunter.getPatterns.invalidate({ workspaceId }, { refetchType: "none" });
       toast.info("Flagged for style-reference retry. The system will use this signal in future scans.");
     },
     onError: (err) => toast.error(err.message),
@@ -864,23 +959,52 @@ export default function NicheHunter() {
             <span className="text-foreground font-medium">{activeWorkspace.name}</span>.
           </p>
         </div>
-        <Button
-          onClick={() => triggerScan.mutate({ workspaceId })}
-          disabled={isScanning || triggerScan.isPending}
-          className="bg-accent text-accent-foreground hover:bg-accent/90"
-        >
-          {isScanning || triggerScan.isPending ? (
-            <>
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              Scanning...
-            </>
-          ) : (
-            <>
-              <Zap className="h-4 w-4 mr-2" />
-              Run Scan
-            </>
-          )}
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* Auto / Curated mode toggle */}
+          <div className="flex items-center rounded-md border border-border bg-muted p-0.5 text-xs">
+            <button
+              onClick={() => setScanMode("auto")}
+              disabled={isScanning || triggerScan.isPending}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded transition-colors ${
+                scanMode === "auto"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Bot className="w-3 h-3" />
+              Auto
+            </button>
+            <button
+              onClick={() => setScanMode("curated")}
+              disabled={isScanning || triggerScan.isPending}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded transition-colors ${
+                scanMode === "curated"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Wand2 className="w-3 h-3" />
+              Curated
+            </button>
+          </div>
+          <Button
+            onClick={() => triggerScan.mutate({ workspaceId, mode: scanMode })}
+            disabled={isScanning || triggerScan.isPending}
+            className="bg-accent text-accent-foreground hover:bg-accent/90"
+          >
+            {isScanning || triggerScan.isPending ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Scanning...
+              </>
+            ) : (
+              <>
+                <Zap className="h-4 w-4 mr-2" />
+                Run Scan
+              </>
+            )}
+          </Button>
+        </div>
       </div>
 
       {/* Style Preferences card — shown once enough signals exist */}
@@ -1064,7 +1188,11 @@ export default function NicheHunter() {
                 pattern={p as Pattern}
                 onApprove={(id) => setApproveDialogPatternId(id)}
                 onDismiss={(id) => setDismissDialogPatternId(id)}
+                onRestore={(id) => setApproveDialogPatternId(id)}
                 onFlagEditMode={(id) => flagEditMode.mutate({ patternId: id, workspaceId })}
+                onChooseConcept={(patternId, concept) =>
+                  chooseConceptAndGenerate.mutate({ patternId, workspaceId, chosenConcept: concept })
+                }
                 isActing={actingPatternId === p.id}
               />
             ))}
