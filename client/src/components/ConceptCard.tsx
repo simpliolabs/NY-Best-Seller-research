@@ -118,6 +118,8 @@ export function ConceptCard({
       utils.library.list.invalidate();
       utils.books.getById.invalidate();
       utils.reports.getLatest.invalidate();
+      utils.reports.getByRunId.invalidate();
+      utils.concepts.getById.invalidate();
     },
     onError: (err: { message: string }) => toast.error(err.message),
   });
