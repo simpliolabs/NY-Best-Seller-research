@@ -81,6 +81,7 @@ export const productGroupRouter = router({
         description: z.string().optional(),
         productType: z.string().max(100).optional(),
         compareAtPrice: z.number().positive().optional(),
+        costPerItem: z.number().nonnegative().optional(),
         pricingTiers: z.array(pricingTierSchema).optional(),
         /** FULL group-level fallback box (+ optional inches) — the explicit "set group default"
          * path. The per-template editor does NOT use this; it sends printZoneInches instead. */
@@ -112,6 +113,7 @@ export const productGroupRouter = router({
         ...(data.description !== undefined && { description: data.description }),
         ...(data.productType !== undefined && { productType: data.productType }),
         ...(data.compareAtPrice !== undefined && { compareAtPrice: String(data.compareAtPrice) }),
+        ...(data.costPerItem !== undefined && { costPerItem: String(data.costPerItem) }),
         ...(data.pricingTiers !== undefined && { pricingTiers: data.pricingTiers }),
         ...(printZoneToStore !== undefined && { printZone: printZoneToStore }),
       });
