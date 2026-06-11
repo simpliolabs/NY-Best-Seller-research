@@ -139,6 +139,24 @@ export async function addProductImageByUrl(
 }
 
 /**
+ * Set (create) a metafield on a product. Used for Shopify's SEO fields:
+ *   namespace "global", key "title_tag"        → SEO meta title
+ *   namespace "global", key "description_tag"  → SEO meta description
+ */
+export async function setProductMetafield(
+  creds: ShopifyCredentials,
+  productId: number,
+  namespace: string,
+  key: string,
+  value: string,
+  type: string = "single_line_text_field"
+): Promise<void> {
+  await shopifyFetch(creds, "POST", `products/${productId}/metafields.json`, {
+    metafield: { namespace, key, value, type },
+  });
+}
+
+/**
  * Update an existing product (e.g. change status to active).
  */
 export async function updateProduct(

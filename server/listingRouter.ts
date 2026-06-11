@@ -18,8 +18,54 @@ import { getConceptById } from "./db";
 import { getProductGroupById } from "./productGroupDb";
 import { invokeLLM } from "./_core/llm";
 import { getCredential } from "./workspaceDb";
-import { createProduct, addProductImageByUrl } from "./shopifyClient";
+import { createProduct, addProductImageByUrl, setProductMetafield } from "./shopifyClient";
 import { getMockupsByConceptVariation } from "./mockupDb";
+
+/**
+ * LLM-generated Shopify SEO meta (global.title_tag / global.description_tag). PO 2026-06-11.
+ * Hard-trimmed to SEO lengths in case the model overshoots. Throws on LLM/parse failure — the
+ * caller treats meta as best-effort and must never let a failure block the publish.
+ */
+async function generateSeoMeta(
+  title: string,
+  description: string
+): Promise<{ metaTitle: string; metaDescription: string }> {
+  const result = await invokeLLM({
+    messages: [
+      {
+        role: "system",
+        content: `You write SEO meta tags for Shopify print-on-demand apparel. Return JSON with "metaTitle" (<=60 characters, compelling, key search terms front-loaded, no surrounding quotes) and "metaDescription" (<=155 characters, ONE line of plain text, no newlines, an enticing click-through summary).`,
+      },
+      {
+        role: "user",
+        content: `Product title: ${title}\n\nProduct description:\n${(description || "").slice(0, 800)}`,
+      },
+    ],
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "seo_meta",
+        strict: true,
+        schema: {
+          type: "object",
+          properties: {
+            metaTitle: { type: "string", description: "<=60 chars SEO meta title" },
+            metaDescription: { type: "string", description: "<=155 chars single-line SEO meta description" },
+          },
+          required: ["metaTitle", "metaDescription"],
+          additionalProperties: false,
+        },
+      },
+    },
+  });
+  const rawContent = result.choices?.[0]?.message?.content ?? "{}";
+  const content = typeof rawContent === "string" ? rawContent : JSON.stringify(rawContent);
+  const parsed = JSON.parse(content);
+  return {
+    metaTitle: String(parsed.metaTitle ?? "").slice(0, 70),
+    metaDescription: String(parsed.metaDescription ?? "").replace(/\s+/g, " ").trim().slice(0, 160),
+  };
+}
 
 export const listingRouter = router({
   /**
@@ -169,9 +215,11 @@ export const listingRouter = router({
 
       // Build Shopify product payload
       const tagsStr = Array.isArray(listing.tags) ? listing.tags.join(", ") : "";
+      const vendor = await getCredential(input.workspaceId, "shopify", "vendor");
       const product = await createProduct(creds, {
         title: listing.title,
         body_html: listing.description ?? "",
+        ...(vendor ? { vendor } : {}),
         product_type: (group as any)?.productType ?? "T-Shirt",
         tags: tagsStr,
         status: "draft",
@@ -211,6 +259,21 @@ export const listingRouter = router({
         } catch (imgErr) {
           console.warn(`[publishToShopify] Image upload failed for render ${render.id}:`, imgErr);
         }
+      }
+
+      // SEO metafields — LLM-generated dedicated meta title/description (PO 2026-06-11).
+      // global.title_tag / global.description_tag are Shopify's SEO fields. Best-effort: the
+      // product + images already exist, so a meta failure must never block the publish.
+      try {
+        const meta = await generateSeoMeta(listing.title, listing.description ?? "");
+        if (meta.metaTitle) {
+          await setProductMetafield(creds, product.id, "global", "title_tag", meta.metaTitle);
+        }
+        if (meta.metaDescription) {
+          await setProductMetafield(creds, product.id, "global", "description_tag", meta.metaDescription);
+        }
+      } catch (metaErr) {
+        console.warn(`[publishToShopify] SEO meta generation/set failed (non-fatal):`, metaErr);
       }
 
       // Mark listing as exported and store Shopify product ID
