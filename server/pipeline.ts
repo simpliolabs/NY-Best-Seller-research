@@ -1023,7 +1023,7 @@ VARIATION C — Alternative Composition:
 1. ZERO trademarked character names anywhere in any prompt.
 2. ZERO references to copyrighted artwork or specific IP illustrations.
 3. Each prompt must be between 400-600 words — if under 300, it is too vague; rebuild it.
-4. The source fan phrase must appear as readable text in the design.
+4. The concept's HEADLINE and SUBTEXT must BOTH appear as clearly readable text in the design, spelled exactly as given (the source fan phrase lives inside them) — the headline is the typographic centerpiece. Render every provided text field that is not 'none'.
 5. All designs must be isolated on pure white background — the shirt IS the background.
 6. ZERO language describing a filled background environment. Describe elements AS objects floating in white space.
 7. Every prompt must name the outer silhouette shape. If you cannot name the shape, the design is a rectangle — rebuild it.
@@ -1127,7 +1127,7 @@ VARIATION C — Alternative Composition:
 1. ZERO trademarked character names anywhere in any prompt.
 2. ZERO references to copyrighted book cover art or specific IP illustrations.
 3. Each prompt must be between 400-600 words — if under 300, it is too vague; rebuild it.
-4. The source fan phrase must appear as readable text in the design.
+4. The concept's HEADLINE and SUBTEXT must BOTH appear as clearly readable text in the design, spelled exactly as given (the source fan phrase lives inside them) — the headline is the typographic centerpiece. Render every provided text field that is not 'none'.
 5. All designs must be isolated on pure white background — the shirt IS the background.
 6. ZERO language describing a filled background environment (dungeon walls, dark sky, stone floor as backdrop). Describe elements AS objects floating in white space, not as a scene.
 7. Every prompt must name the outer silhouette shape. If you cannot name the shape, the design is a rectangle — rebuild it.
