@@ -63,11 +63,34 @@ export async function generateRevision(
   // 2. Faithful edit via gpt-image-1 /v1/images/edits with input_fidelity:"high" — the lever that
   // preserves the parts of the design the instruction did NOT touch. The previous Forge
   // GenerateImage path had no fidelity control, so a simple text swap recomposed the design
-  // (cropped the top text, invented a blue stripe — PO-flagged 2026-06-10). size:"auto" lets the
-  // model keep the original framing instead of forcing a square crop.
+  // (cropped the top text, invented a blue stripe — PO-flagged 2026-06-10).
+  //
+  // PAD-TO-SQUARE (PO-approved fix 2026-06-11, bake-off verified): gpt-image-1 only renders
+  // square/landscape/portrait canvases, so a non-square reference forced a re-frame —
+  // size:"auto" OUTPAINTED the design onto a 1024x1536 canvas (the "extended" failure) and a
+  // bare fixed square CLIPPED the top text. Padding the reference to a square with TRANSPARENT
+  // margins first means the canvas already matches, so the model edits in place (bake-off:
+  // text intact, corners alpha 0, zero invented dark bars); the margins are trimmed back off
+  // after the edit.
   const refRes = await fetch(referenceImageUrl);
   if (!refRes.ok) throw new Error(`Failed to download reference image: ${referenceImageUrl} (${refRes.status})`);
-  const refPng = await sharp(Buffer.from(await refRes.arrayBuffer())).png().toBuffer();
+  const refRaw = Buffer.from(await refRes.arrayBuffer());
+  const refMeta = await sharp(refRaw).metadata();
+  const side = Math.max(refMeta.width ?? 0, refMeta.height ?? 0);
+  if (!side) throw new Error("reference image has no dimensions");
+  const padX = side - (refMeta.width ?? 0);
+  const padY = side - (refMeta.height ?? 0);
+  const refPng = await sharp(refRaw)
+    .ensureAlpha()
+    .extend({
+      top: Math.floor(padY / 2),
+      bottom: Math.ceil(padY / 2),
+      left: Math.floor(padX / 2),
+      right: Math.ceil(padX / 2),
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    })
+    .png()
+    .toBuffer();
   const edited = await callImageEdit(refPng, "design.png", prompt, {
     transparent: true, // The reference design is a TRANSPARENT png. Ask gpt-image-1 for a transparent
                        // result so it KEEPS that. transparent:false made it fill the transparent corners
@@ -77,9 +100,9 @@ export async function generateRevision(
                        // niche Step-2 extract); input_fidelity:high keeps the striped backdrop intact.
     inputFidelity: "high", // the faithfulness lever (preserve untouched pixels) — independent of quality
     quality: "medium", // submitRevision is a sync mutation with NO retry net; "high" (~90-180s) risks a
-                       // Cloudflare 524. "medium" (~30-60s) stays under the edge timeout; input_fidelity
-                       // (not quality) is what preserves the design, so faithfulness is unaffected.
-    size: "auto",
+                       // Cloudflare 524. "medium" (~30-60s) stays under the edge timeout; the PO
+                       // visually approved the medium-quality padded output (2026-06-11).
+    size: "1024x1024", // FIXED square matching the padded reference — never "auto" (it outpaints).
   });
 
   // 2b. Safety net only: gpt-image-1 already returns native transparency above. If a run instead
@@ -90,6 +113,13 @@ export async function generateRevision(
     finalBuf = await removeBackground(edited);
   } catch (err) {
     console.warn(`[Revision] background cleanup failed for concept ${conceptId} ${variationKey}; using raw edit:`, err);
+  }
+  // 2c. Trim the transparent padding margins back off (inverse of the pad-to-square above).
+  // threshold 10 = only near-fully-transparent edges; non-fatal if trim finds nothing to cut.
+  try {
+    finalBuf = await sharp(finalBuf).trim({ threshold: 10 }).png().toBuffer();
+  } catch (err) {
+    console.warn(`[Revision] padding trim failed for concept ${conceptId} ${variationKey}; using untrimmed:`, err);
   }
   const { url: imageUrl } = await storagePut(
     `revisions/${conceptId}-${variationKey}-${Date.now()}.png`,
