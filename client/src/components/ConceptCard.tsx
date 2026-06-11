@@ -1,14 +1,14 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Heart, Trophy, Crown, ChevronDown, Camera, ChevronRight, ExternalLink, Trash2, Wand2, Loader2, Paintbrush, Shirt, RefreshCw } from "lucide-react";
+import { Heart, Trophy, Crown, ChevronDown, Camera, ChevronRight, ExternalLink, Trash2, Wand2, Loader2, Paintbrush, Shirt } from "lucide-react";
 import { Link } from "wouter";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { ColorSwatch } from "./ColorSwatch";
 import { TrendBar } from "./TrendBar";
 import { HumorFrameworkTag } from "./HumorFrameworkTag";
 import { EtsyValidationBadge } from "./EtsyValidationBadge";
-import { DesignImagePair } from "./DesignImagePair";
+import { ConceptDesignPanel } from "./ConceptDesignPanel";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { useState } from "react";
@@ -110,20 +110,7 @@ export function ConceptCard({
   const [expanded, setExpanded] = useState(false);
   const [whyExpanded, setWhyExpanded] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
-  const { data: styleOptions = ["Vintage/Distressed"] } = trpc.workspace.styleOptions.useQuery();
-  const [regenStyle, setRegenStyle] = useState("Vintage/Distressed");
   const utils = trpc.useUtils();
-  const regenerateMutation = trpc.concepts.regenerateImage.useMutation({
-    onSuccess: (data: { message?: string }) => {
-      toast.success(data.message || "Images regenerated!");
-      utils.library.list.invalidate();
-      utils.books.getById.invalidate();
-      utils.reports.getLatest.invalidate();
-      utils.reports.getByRunId.invalidate();
-      utils.concepts.getById.invalidate();
-    },
-    onError: (err: { message: string }) => toast.error(err.message),
-  });
   const toggleMutation = trpc.favorites.toggle.useMutation({
     onSuccess: () => {
       utils.favorites.list.invalidate();
@@ -392,49 +379,17 @@ export function ConceptCard({
           </>
         )}
 
-        {/* AI-generated design images — 3 variations for winners */}
-        {(showImages || (compact && expanded)) && (displayUrlA || displayUrlB || displayUrlC) && (
-          <DesignImagePair
-            imageUrlA={displayUrlA ?? null}
-            imageUrlB={displayUrlB ?? null}
-            imageUrlC={displayUrlC}
-            imagePromptA={imagePromptA ?? null}
-            imagePromptB={imagePromptB ?? null}
-            imagePromptC={imagePromptC}
+        {/* Live design panel — single slot A + history strip */}
+        {(showImages || (compact && expanded)) && displayUrlA && (
+          <ConceptDesignPanel
+            conceptId={id}
             conceptName={conceptName}
+            headline={headline}
+            subtext={subtext}
+            imageUrlA={imageUrlA ?? null}
+            productionUrlA={productionUrlA ?? null}
+            currentStyle={style}
           />
-        )}
-
-        {/* Regenerate control — style dropdown + button */}
-        {(showImages || (compact && expanded)) && (displayUrlA || displayUrlB || displayUrlC) && (
-          <div className="flex items-center gap-2 pt-1">
-            <select
-              value={regenStyle}
-              onChange={(e) => setRegenStyle(e.target.value)}
-              className="flex-1 h-8 px-2 rounded-md border border-input bg-background text-xs"
-              disabled={regenerateMutation.isPending}
-            >
-              {styleOptions.map((s) => (
-                <option key={s} value={s}>{s}</option>
-              ))}
-            </select>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 text-xs gap-1 shrink-0"
-              disabled={regenerateMutation.isPending}
-              onClick={() => {
-                regenerateMutation.mutate({ conceptId: id, style: regenStyle });
-              }}
-            >
-              {regenerateMutation.isPending ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <RefreshCw className="h-3.5 w-3.5" />
-              )}
-              Regenerate
-            </Button>
-          </div>
         )}
 
         {/* Expand/Collapse button for compact cards */}
