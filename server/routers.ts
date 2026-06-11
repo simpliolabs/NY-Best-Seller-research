@@ -62,6 +62,32 @@ import { healingLog } from "../drizzle/schema";
 import { desc, eq } from "drizzle-orm";
 import { designConcepts } from "../drizzle/schema";
 import { getDb } from "./db";
+import { insertRevision, getNextIterationNumber, getRevisionsByConceptVariation } from "./revisionDb";
+import { nanoid } from "nanoid";
+
+// Generation history is stored in the design_revisions table under a sentinel variationKey.
+// "H" never collides with the real A/B/C variations the Design Studio edits (its getHistory /
+// edit-base queries are keyed to A/B/C), and varchar(1) only fits a single char — so no new
+// table, no migration, no interference with the revision edit-base logic.
+const HISTORY_KEY = "H";
+
+/** Snapshot a design URL into a concept's generation history (sentinel "H" key), deduped by URL so
+ *  the same design never stacks up. Call BEFORE overwriting imageUrlA so nothing is ever lost. */
+async function snapshotGenerationToHistory(conceptId: number, url: string | null, style: string | null): Promise<void> {
+  if (!url) return;
+  const hist = await getRevisionsByConceptVariation(conceptId, HISTORY_KEY);
+  if (hist.some((r) => r.resultImageUrl === url)) return;
+  await insertRevision({
+    id: nanoid(),
+    conceptId,
+    variationKey: HISTORY_KEY,
+    iterationNumber: await getNextIterationNumber(conceptId, HISTORY_KEY),
+    instruction: `Generation — ${style ?? "previous"}`,
+    referenceImageUrl: url,
+    resultImageUrl: url,
+    accepted: false,
+  });
+}
 
 // Track running pipeline to prevent concurrent runs
 let pipelineRunning = false;
@@ -828,18 +854,31 @@ Font: ${concept.fontSuggestion ?? "not specified"}`;
         const concept = await getConceptById(input.conceptId);
         if (!concept) return { success: false, message: "Concept not found." };
 
-        const promptSystem = `You are a senior art director. Write THREE image generation prompts for a print-ready t-shirt graphic. Each: 200+ words, transparent/white background, DTF-ready. Aim for professional, commercial-grade, Etsy-bestseller quality: clean confident linework, rich purposeful detail, balanced focal composition, a deliberate limited color palette, crisp and polished — a design someone would actually buy. RENDER THE DESIGN ENTIRELY IN THIS ART STYLE: "${input.style}" — commit fully; every prompt must read unmistakably as that style. ABSOLUTE RULE: NEVER cartoonish, clip-art, kawaii, chibi, or childish/exaggerated cartoon styling — under any circumstances. Return ONLY a JSON object with keys: variation_a, variation_b, variation_c.`;
-        const userMsg = `Design concept:
-Name: ${concept.conceptName}
+        // ONE faithful prompt (was THREE — 3x the API spend). HARD-require the headline + subtext be
+        // rendered as readable text: the old 3-prompt writer wrote art-only essays that silently
+        // dropped the headline, so the rendered design never matched the concept card's promised copy.
+        const promptSystem = `You are a senior t-shirt art director. Write ONE image-generation prompt for a print-ready DTF t-shirt graphic, rendered ENTIRELY in this art style: "${input.style}".
+
+HARD REQUIREMENTS — the generated design MUST:
+- Render the HEADLINE as the prominent typographic centerpiece, spelled EXACTLY, letter-for-letter, including punctuation.
+- Render the SUBTEXT as clearly readable secondary text, spelled EXACTLY.
+- Describe the lettering itself — font character, weight, placement, hierarchy — AND the supporting graphic, so the image model draws BOTH the words and the art.
+(If a text field is "none", omit only that line — never invent copy.)
+
+Keep it focused and concrete (~120-160 words), not a long essay. Transparent or pure-white background, DTF-ready. A deliberate, limited color palette. ABSOLUTE RULE: NEVER cartoonish, clip-art, kawaii, chibi, or childish/exaggerated styling. Return ONLY a JSON object: {"prompt": "..."}.`;
+        const userMsg = `Concept name: ${concept.conceptName}
 Format: ${concept.format}
-Art style (USE THIS EXACTLY): ${input.style}
-Headline: ${concept.headline ?? "none"}
-Subtext: ${concept.subtext ?? "none"}
-Color Palette: ${(concept.colorPalette as string[] ?? []).join(", ") || "not specified"}
-Layout: ${concept.layoutDescription ?? "not specified"}
-Font: ${concept.fontSuggestion ?? "not specified"}`;
+HEADLINE (render verbatim): ${concept.headline ?? "none"}
+SUBTEXT (render verbatim): ${concept.subtext ?? "none"}
+Art style (use exactly): ${input.style}
+Color palette: ${(concept.colorPalette as string[] ?? []).join(", ") || "not specified"}
+Layout intent: ${concept.layoutDescription ?? "not specified"}
+Font feel: ${concept.fontSuggestion ?? "not specified"}`;
 
         try {
+          // Snapshot the design we're about to replace, so every past version stays restorable.
+          await snapshotGenerationToHistory(input.conceptId, concept.imageUrlA, concept.style);
+
           const promptResult = await invokeLLM({
             messages: [
               { role: "system", content: promptSystem },
@@ -849,46 +888,52 @@ Font: ${concept.fontSuggestion ?? "not specified"}`;
           });
           const promptContent = typeof promptResult.choices[0]?.message?.content === "string"
             ? promptResult.choices[0].message.content : "";
-          const parsed = JSON.parse(promptContent);
-          const prompts = {
-            A: parsed.variation_a ?? parsed.prompt ?? "",
-            B: parsed.variation_b ?? "",
-            C: parsed.variation_c ?? "",
-          };
+          const prompt: string = JSON.parse(promptContent).prompt ?? "";
+          if (!prompt) return { success: false, message: "Prompt generation returned empty." };
 
-          const results = await Promise.allSettled(
-            (["A", "B", "C"] as const).filter((v) => prompts[v]).map(async (variation) => {
-              const img = await generateImage({ prompt: prompts[variation] });
-              return { variation, url: img.url ?? null, prompt: prompts[variation] };
-            })
-          );
+          const img = await generateImage({ prompt });
+          if (!img.url) return { success: false, message: "Image generation returned no image." };
 
-          const update: Parameters<typeof updateConceptImages>[1] = {};
-          const regenerated: Array<"A" | "B" | "C"> = [];
-          for (const r of results) {
-            if (r.status !== "fulfilled" || !r.value.url) continue;
-            const { variation, url, prompt } = r.value;
-            regenerated.push(variation);
-            if (variation === "A") { update.imageUrlA = url; update.imagePromptA = prompt; }
-            if (variation === "B") { update.imageUrlB = url; update.imagePromptB = prompt; }
-            if (variation === "C") { update.imageUrlC = url; update.imagePromptC = prompt; }
-          }
-          if (regenerated.length === 0) {
-            return { success: false, message: "Image generation returned no images." };
-          }
-
-          // Overwrite the images (non-null overwrite is allowed by the immutability guard), update
-          // the style label, and CLEAR the cached production renders for the regenerated variations
-          // so mockups re-process the NEW image instead of serving the old one.
-          await updateConceptImages(input.conceptId, update);
+          // ONE best design -> slot A (mockups + listings already default to A). Clear the cached
+          // production render so mockups re-process the NEW image instead of the old one.
+          await updateConceptImages(input.conceptId, { imageUrlA: img.url, imagePromptA: prompt });
           await updateConceptStyle(input.conceptId, input.style);
-          await Promise.all(regenerated.map((v) => updateConceptProductionUrl(input.conceptId, v, null)));
+          await updateConceptProductionUrl(input.conceptId, "A", null);
 
-          return { success: true, message: `Regenerated ${regenerated.length} image(s) in "${input.style}" style.` };
+          return { success: true, message: `Regenerated 1 design in "${input.style}" style.` };
         } catch (err: any) {
           console.error(`[RegenerateImage] Failed for concept ${input.conceptId}:`, err);
           return { success: false, message: err?.message ?? "Regeneration failed." };
         }
+      }),
+
+    /** Restore a past generation (from history) as the live design (slot A). Snapshots the current
+     *  design into history first so it's never lost, then points A at the chosen past URL and clears
+     *  the cached production render so mockups re-process it. */
+    restoreGeneration: protectedProcedure
+      .input(z.object({
+        conceptId: z.number(),
+        imageUrl: z.string().url(),
+      }))
+      .mutation(async ({ input }) => {
+        const concept = await getConceptById(input.conceptId);
+        if (!concept) return { success: false, message: "Concept not found." };
+        if (concept.imageUrlA === input.imageUrl) {
+          return { success: true, message: "That design is already live." };
+        }
+        // Snapshot the current live design before swapping, so it stays restorable too.
+        await snapshotGenerationToHistory(input.conceptId, concept.imageUrlA, concept.style);
+        await updateConceptImages(input.conceptId, { imageUrlA: input.imageUrl });
+        await updateConceptProductionUrl(input.conceptId, "A", null);
+        return { success: true, message: "Restored design to slot A." };
+      }),
+
+    /** Generation history for a concept — every past design, newest first (the "Previous versions"
+     *  strip). Stored under the sentinel "H" key, separate from the A/B/C edit revisions. */
+    getGenerationHistory: protectedProcedure
+      .input(z.object({ conceptId: z.number() }))
+      .query(async ({ input }) => {
+        return getRevisionsByConceptVariation(input.conceptId, HISTORY_KEY);
       }),
 
     exportProduction: protectedProcedure
