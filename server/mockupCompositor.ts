@@ -510,6 +510,81 @@ async function trimToContent(imageBuf: Buffer): Promise<Buffer> {
   }
 }
 
+// ─── Fabric warp + shade (PO-approved 2026-06-11) ────────────────────────────
+/** Strength of the fabric warp+shade pass. 0 = flat paste; ~0.15 subtle; 0.35 = the PO-chosen
+ *  default; higher = more sink-into-fabric. Scales BOTH the displacement (the print bends along
+ *  folds) and the shading (fold light/shadow modulates the print). The VISIBLE effect scales with
+ *  each shirt's wrinkle intensity — subtle on a smooth flat-lay, strong on a wrinkled one. */
+const FABRIC_WARP_STRENGTH = 0.35;
+const WARP_GAIN = 3.0; // shading amplification (fold shadow/highlight onto the print)
+const WARP_AMP = 45;   // max displacement (px) at strength 1.0
+
+/**
+ * Composite a TRANSPARENT design onto a garment photo so it CONTOURS to the fabric folds instead
+ * of pasting flat. Two effects, both scaled by `strength`:
+ *   1. Displacement — each design pixel samples along the garment's local fold gradient (from a
+ *      lightly-denoised grayscale "fold map" — NOT heavily blurred, which would erase the
+ *      wrinkles), so the print bends with the folds.
+ *   2. Shading — the garment's fold luminance relative to the print region's mean multiplies onto
+ *      the design (darkens in valleys, lifts on ridges).
+ * Pure sharp + raw-pixel math — no perspective/displacement system dependency, so it ships in the
+ * existing container. At strength 0 this is a plain flat composite. Exported for unit testing.
+ */
+export async function warpDesignOntoFabric(
+  mockupBuf: Buffer,
+  designBuf: Buffer,
+  offsetX: number,
+  offsetY: number,
+  strength: number
+): Promise<Buffer> {
+  const { data: shirt, info } = await sharp(mockupBuf).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const W = info.width, H = info.height, CH = info.channels;
+  const fold = await sharp(mockupBuf).grayscale().blur(1.1).raw().toBuffer(); // light denoise only — keep wrinkles
+  const Lf = (x: number, y: number) =>
+    fold[Math.max(0, Math.min(H - 1, y)) * W + Math.max(0, Math.min(W - 1, x))];
+  const dMeta = await sharp(designBuf).metadata();
+  const dw = dMeta.width!, dh = dMeta.height!;
+  const design = await sharp(designBuf).ensureAlpha().raw().toBuffer();
+  const out = Buffer.from(shirt);
+
+  if (strength > 0) {
+    let sum = 0;
+    for (let j = 0; j < dh; j++) for (let i = 0; i < dw; i++) sum += Lf(offsetX + i, offsetY + j);
+    const M = sum / (dw * dh) || 1;
+    const amp = strength * WARP_AMP;
+    for (let j = 0; j < dh; j++) {
+      for (let i = 0; i < dw; i++) {
+        const sx = offsetX + i, sy = offsetY + j;
+        if (sx < 0 || sy < 0 || sx >= W || sy >= H) continue;
+        const gx = (Lf(sx + 2, sy) - Lf(sx - 2, sy)) / 255;
+        const gy = (Lf(sx, sy + 2) - Lf(sx, sy - 2)) / 255;
+        const di = Math.max(0, Math.min(dw - 1, Math.round(i - amp * gx)));
+        const dj = Math.max(0, Math.min(dh - 1, Math.round(j - amp * gy)));
+        const k = (dj * dw + di) * 4;
+        const a = design[k + 3] / 255;
+        if (a <= 0.01) continue;
+        let shade = 1 + strength * WARP_GAIN * ((Lf(sx, sy) - M) / M);
+        shade = Math.max(0.2, Math.min(1.85, shade));
+        const o = (sy * W + sx) * CH;
+        for (let c = 0; c < 3; c++) {
+          const v = Math.max(0, Math.min(255, design[k + c] * shade));
+          out[o + c] = Math.round(v * a + out[o + c] * (1 - a));
+        }
+      }
+    }
+  } else {
+    for (let j = 0; j < dh; j++) for (let i = 0; i < dw; i++) {
+      const sx = offsetX + i, sy = offsetY + j;
+      if (sx < 0 || sy < 0 || sx >= W || sy >= H) continue;
+      const k = (j * dw + i) * 4, a = design[k + 3] / 255;
+      if (a <= 0.01) continue;
+      const o = (sy * W + sx) * CH;
+      for (let c = 0; c < 3; c++) out[o + c] = Math.round(design[k + c] * a + out[o + c] * (1 - a));
+    }
+  }
+  return sharp(out, { raw: { width: W, height: H, channels: CH } }).png().toBuffer();
+}
+
 /**
  * Composite a transparent design onto a mockup blank within the specified print zone.
  * Returns a PNG buffer of the final composite.
@@ -612,14 +687,10 @@ export async function compositeDesignOnMockup(config: CompositeConfig): Promise<
   const offsetY = zoneY + boxOffsetY;  // box top + anchorY offset
 
 
-  // 7. Composite design onto mockup at full resolution FIRST, then resize.
-  // CRITICAL: Sharp's lazy pipeline reorders .composite().resize() — it resizes the
-  // base image BEFORE compositing the overlay, causing the design to appear too large.
-  // Fix: composite to buffer in one step, then resize in a SEPARATE Sharp instance.
-  const composited = await sharp(mockupBuf)
-    .composite([{ input: resizedDesign, left: offsetX, top: offsetY }])
-    .png()
-    .toBuffer();
+  // 7. Warp + shade the design onto the garment so it CONTOURS to the fabric folds (PO 2026-06-11)
+  // instead of pasting flat — strength FABRIC_WARP_STRENGTH. Returns a full-res PNG buffer; the
+  // resize below runs in a SEPARATE Sharp instance (no lazy-pipeline reorder).
+  const composited = await warpDesignOntoFabric(mockupBuf, resizedDesign, offsetX, offsetY, FABRIC_WARP_STRENGTH);
 
   // Resize to max 1000x1000 if larger (separate pipeline to avoid reorder)
   let outputBuf: Buffer;
