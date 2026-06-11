@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Concept page redesign — one live design + history</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.5.0/dist/tabler-icons.min.css" />
+<style>
+  :root{
+    --bg:#f1f5f9; --card:#ffffff; --canvas:#f1f5f9; --ink:#0f172a; --muted:#64748b; --hint:#94a3b8;
+    --line:#e2e8f0; --info-bg:#dbeafe; --info-ink:#1e40af; --ok-bg:#dcfce7; --ok-ink:#166534;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);padding:28px}
+  .wrap{max-width:760px;margin:0 auto}
+  .panel{background:var(--bg);border-radius:14px;padding:20px;border:1px solid var(--line)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px}
+  .row{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+  .label{font-size:15px;font-weight:500;display:flex;align-items:center;gap:8px}
+  .pill{font-size:12px;background:var(--info-bg);color:var(--info-ink);padding:3px 10px;border-radius:8px}
+  .design{display:flex;gap:16px;flex-wrap:wrap}
+  .canvas{position:relative;width:200px;flex:none;background:var(--canvas);border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:18px;text-align:center;min-height:176px}
+  .badge{position:absolute;top:8px;left:8px;font-size:11px;background:var(--ok-bg);color:var(--ok-ink);padding:2px 9px;border-radius:8px;display:inline-flex;align-items:center;gap:5px}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--ok-ink)}
+  .meta{flex:1;min-width:240px;display:flex;flex-direction:column}
+  .muted{color:var(--muted)} .hint{color:var(--hint)}
+  select,button{font:inherit;border:1px solid var(--line);background:#fff;border-radius:8px;padding:8px 12px;color:var(--ink);cursor:pointer}
+  button:hover{background:#f8fafc}
+  .actions{display:flex;gap:8px;margin-top:auto;padding-top:14px;flex-wrap:wrap}
+  .divider{border-top:1px solid var(--line);margin:18px 0 14px}
+  .strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+  .v{border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .vthumb{background:var(--canvas);min-height:96px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px;text-align:center}
+  .vbody{padding:7px 8px}
+  .vacts{display:flex;gap:4px}
+  .vacts button{flex:1;padding:5px 0;min-width:0}
+  h1{font-size:18px;font-weight:500;margin:0 0 4px}
+  .sub{font-size:13px;color:var(--muted);margin:0 0 20px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Concept design panel — redesign</h1>
+  <p class="sub">One live design (slot A) + a Previous versions strip. Reference mockup for the spec in <code>concept-page-redesign.md</code>.</p>
+
+  <div class="panel">
+    <div class="card">
+      <div class="row">
+        <span class="label"><i class="ti ti-photo" style="font-size:18px;color:var(--muted)"></i>Design</span>
+        <span class="pill">1 best &middot; faithful to the concept</span>
+      </div>
+
+      <div class="design">
+        <div class="canvas">
+          <span class="badge"><span class="dot"></span>Live</span>
+          <span style="font-size:18px;font-weight:500;line-height:1.15">My love language?</span>
+          <i class="ti ti-ball-tennis" style="font-size:24px;margin:8px 0;color:var(--muted)"></i>
+          <span style="font-size:13px" class="muted">The third shot drop.</span>
+        </div>
+
+        <div class="meta">
+          <span class="muted" style="font-size:13px">Current design</span>
+          <span style="font-size:14px;margin-top:2px">Style: <span style="font-weight:500">Vintage engraving</span></span>
+
+          <div style="display:flex;gap:8px;margin-top:12px">
+            <select style="flex:1;min-width:0">
+              <option>Vintage / distressed</option><option>Bold / artistic</option><option>Trending / social</option>
+            </select>
+            <button style="white-space:nowrap"><i class="ti ti-refresh" style="font-size:15px;vertical-align:-2px;margin-right:5px"></i>Regenerate</button>
+          </div>
+          <span class="hint" style="font-size:12px;margin-top:6px"><i class="ti ti-bolt" style="font-size:13px;vertical-align:-1px"></i> One image, headline rendered &middot; replaces live, old one drops into history</span>
+
+          <div class="actions">
+            <button><i class="ti ti-edit" style="font-size:15px;vertical-align:-2px;margin-right:5px"></i>Edit in studio</button>
+            <button><i class="ti ti-shirt" style="font-size:15px;vertical-align:-2px;margin-right:5px"></i>Make mockup</button>
+            <button><i class="ti ti-brand-shopify" style="font-size:15px;vertical-align:-2px;margin-right:5px"></i>Push to Shopify</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="row" style="margin-bottom:10px">
+        <span style="font-size:14px;font-weight:500"><i class="ti ti-history" style="font-size:16px;vertical-align:-3px;margin-right:6px;color:var(--muted)"></i>Previous versions <span class="hint" style="font-weight:400">&middot; 4</span></span>
+        <span class="hint" style="font-size:12px">newest first</span>
+      </div>
+
+      <div class="strip" id="strip"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const versions = [
+    { title:"My love language?", subtitle:"The third shot drop.", label:"Bold / artistic &middot; 1h", graphicOnly:false },
+    { title:"", subtitle:"Third shot drop", label:"Vintage &middot; 3h", graphicOnly:true },
+    { title:"My love language?", subtitle:"The third shot drop.", label:"Trending &middot; 1d", graphicOnly:false },
+    { title:"My love language?", subtitle:"The third shot drop.", label:"Vintage &middot; 1d", graphicOnly:false },
+  ];
+  const acts = `<div class="vacts">
+    <button title="Restore as live" aria-label="Restore"><i class="ti ti-arrow-back-up" style="font-size:15px"></i></button>
+    <button title="Edit in studio" aria-label="Edit"><i class="ti ti-edit" style="font-size:15px"></i></button>
+    <button title="Make mockup" aria-label="Make mockup"><i class="ti ti-shirt" style="font-size:15px"></i></button>
+  </div>`;
+  document.getElementById('strip').innerHTML = versions.map(v => `
+    <div class="v">
+      <div class="vthumb">
+        ${v.graphicOnly
+          ? `<i class="ti ti-ball-tennis" style="font-size:20px;color:var(--hint)"></i><span style="font-size:10px;margin-top:4px" class="muted">${v.subtitle}</span><span style="font-size:9px;margin-top:2px" class="hint">(no headline)</span>`
+          : `<span style="font-size:12px;font-weight:500;line-height:1.1">${v.title}</span><span style="font-size:10px;margin-top:3px" class="muted">${v.subtitle}</span>`}
+      </div>
+      <div class="vbody">
+        <div style="font-size:11px;margin-bottom:6px" class="muted">${v.label}</div>
+        ${acts}
+      </div>
+    </div>`).join('');
+</script>
+</body>
+</html>
