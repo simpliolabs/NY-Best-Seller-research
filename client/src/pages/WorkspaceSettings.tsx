@@ -309,10 +309,24 @@ export default function WorkspaceSettings() {
               </Button>
             </div>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-4">
               <p className="text-sm text-muted-foreground">
-                Connect a Shopify Private App to publish listings directly to your store. You need a <strong>Private App</strong> access token with <em>Products</em> read/write permissions.
+                Connect a Shopify Custom App to publish listings directly to your store.
               </p>
+
+              {/* Setup Guide */}
+              <div className="rounded-md border border-blue-200 bg-blue-50/50 p-3 space-y-2">
+                <p className="text-xs font-semibold text-blue-800">Setup Instructions</p>
+                <ol className="text-xs text-blue-700 list-decimal list-inside space-y-1">
+                  <li>In Shopify Admin → <strong>Settings → Apps and sales channels → Develop apps</strong></li>
+                  <li>Click <strong>Create an app</strong> → name it (e.g. "Manus-NYT")</li>
+                  <li>Go to <strong>Configuration → Admin API integration</strong></li>
+                  <li>Under <strong>Admin API access scopes</strong>, enable: <code className="bg-blue-100 px-1 rounded">write_products</code>, <code className="bg-blue-100 px-1 rounded">read_products</code></li>
+                  <li>Click <strong>Install app</strong> → confirm</li>
+                  <li>Copy the <strong>Admin API access token</strong> (starts with <code className="bg-blue-100 px-1 rounded">shpat_</code>) and paste below</li>
+                </ol>
+                <p className="text-xs text-blue-600 mt-1">Required scopes: <code className="bg-blue-100 px-1 rounded">write_products</code>, <code className="bg-blue-100 px-1 rounded">read_products</code></p>
+              </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium">Store Domain</label>
                 <Input
