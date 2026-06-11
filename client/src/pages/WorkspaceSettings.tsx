@@ -326,6 +326,11 @@ export default function WorkspaceSettings() {
                   <li>Copy the <strong>Admin API access token</strong> (starts with <code className="bg-blue-100 px-1 rounded">shpat_</code>) and paste below</li>
                 </ol>
                 <p className="text-xs text-blue-600 mt-1">Required scopes: <code className="bg-blue-100 px-1 rounded">write_products</code>, <code className="bg-blue-100 px-1 rounded">read_products</code></p>
+                <div className="mt-2 pt-2 border-t border-blue-200">
+                  <p className="text-xs font-semibold text-blue-800">Allowed redirection URL(s)</p>
+                  <p className="text-xs text-blue-700 mt-0.5">If prompted, add this callback URL to your app's <strong>Allowed redirection URL(s)</strong> list:</p>
+                  <code className="block mt-1 text-xs bg-blue-100 px-2 py-1 rounded font-mono select-all break-all">https://nytdesignbot-2uiwq4um.manus.space/api/shopify/callback</code>
+                </div>
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium">Store Domain</label>
