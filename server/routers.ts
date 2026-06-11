@@ -54,6 +54,7 @@ import { nicheHunterRouter } from "./nicheHunterRouter";
 import { mockupRouter } from "./mockupRouter";
 import { revisionRouter } from "./revisionRouter";
 import { listingRouter } from "./listingRouter";
+import { bakeoffRouter } from "./bakeoffRouter";
 import { generateImage } from "./_core/imageGeneration";
 import { invokeLLM } from "./_core/llm";
 import { storagePut } from "./storage";
@@ -80,6 +81,8 @@ export const appRouter = router({
   mockup: mockupRouter,
   revision: revisionRouter,
   listing: listingRouter,
+  bakeoff: bakeoffRouter, // TEMPORARY model bake-off harness — remove after routing decided
+
   auth: router({
     me: publicProcedure.query((opts) => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {
