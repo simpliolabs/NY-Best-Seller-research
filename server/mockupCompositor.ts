@@ -511,24 +511,30 @@ async function trimToContent(imageBuf: Buffer): Promise<Buffer> {
 }
 
 // ─── Fabric warp + shade (PO-approved 2026-06-11) ────────────────────────────
-/** Strength of the fabric warp+shade pass. 0 = flat paste; ~0.15 subtle; 0.35 = the PO-chosen
- *  default; higher = more sink-into-fabric. Scales BOTH the displacement (the print bends along
- *  folds) and the shading (fold light/shadow modulates the print). The VISIBLE effect scales with
- *  each shirt's wrinkle intensity — subtle on a smooth flat-lay, strong on a wrinkled one. */
+/** Strength of the fabric warp+shade pass. 0 = flat paste; 0.35 = the PO-chosen default; higher =
+ *  more sink-into-fabric. Scales BOTH the displacement (the print bends along broad folds) and the
+ *  shading (fold detail modulates the print). LOCAL-CONTRAST NORMALIZED (PO 2026-06-11) so the
+ *  effect is consistent across shirts — a smooth flat-lay's faint folds get boosted to a visible
+ *  range and a heavily-wrinkled shirt's strong folds get compressed, instead of the effect riding
+ *  the raw fabric (which made it invisible on smooth product mockups). */
 const FABRIC_WARP_STRENGTH = 0.35;
-const WARP_GAIN = 3.0; // shading amplification (fold shadow/highlight onto the print)
-const WARP_AMP = 45;   // max displacement (px) at strength 1.0
+const WARP_GAIN = 6.0;    // shading gain on the NORMALIZED fold detail
+const WARP_AMP = 45;      // max displacement (px) at strength 1.0 (follows broad folds)
+const WARP_TARGET = 18;   // local-contrast normalization target (RMS of fold detail, 0-255)
+const WARP_FLOOR = 4;     // min RMS before normalizing — caps amplification of near-flat noise
 
 /**
  * Composite a TRANSPARENT design onto a garment photo so it CONTOURS to the fabric folds instead
  * of pasting flat. Two effects, both scaled by `strength`:
- *   1. Displacement — each design pixel samples along the garment's local fold gradient (from a
- *      lightly-denoised grayscale "fold map" — NOT heavily blurred, which would erase the
- *      wrinkles), so the print bends with the folds.
- *   2. Shading — the garment's fold luminance relative to the print region's mean multiplies onto
- *      the design (darkens in valleys, lifts on ridges).
- * Pure sharp + raw-pixel math — no perspective/displacement system dependency, so it ships in the
- * existing container. At strength 0 this is a plain flat composite. Exported for unit testing.
+ *   1. Displacement — each design pixel samples along the garment's BROAD-fold gradient (a heavily
+ *      blurred luminance), so the print bends with the folds (and barely moves on a smooth shirt).
+ *   2. Shading — the garment's fold DETAIL (luminance minus its local mean = a high-pass that drops
+ *      the shirt's base colour/brightness), LOCAL-CONTRAST NORMALIZED to a target RMS over the print
+ *      region, multiplies onto the design. The normalization is the key: it boosts a smooth chest's
+ *      faint folds to a visible range and compresses a wrinkled shirt's strong folds, so the look is
+ *      consistent everywhere instead of invisible on smooth product mockups.
+ * Pure sharp + raw-pixel math — no system dependency, ships in the existing container. At strength 0
+ * this is a plain flat composite. Exported for unit testing.
  */
 export async function warpDesignOntoFabric(
   mockupBuf: Buffer,
@@ -539,31 +545,38 @@ export async function warpDesignOntoFabric(
 ): Promise<Buffer> {
   const { data: shirt, info } = await sharp(mockupBuf).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   const W = info.width, H = info.height, CH = info.channels;
-  const fold = await sharp(mockupBuf).grayscale().blur(1.1).raw().toBuffer(); // light denoise only — keep wrinkles
-  const Lf = (x: number, y: number) =>
-    fold[Math.max(0, Math.min(H - 1, y)) * W + Math.max(0, Math.min(W - 1, x))];
+  const gray = await sharp(mockupBuf).grayscale().blur(1.5).raw().toBuffer(); // fabric detail (light denoise)
+  const low = await sharp(mockupBuf).grayscale().blur(30).raw().toBuffer();   // local mean brightness
+  const at = (buf: Buffer, x: number, y: number) =>
+    buf[Math.max(0, Math.min(H - 1, y)) * W + Math.max(0, Math.min(W - 1, x))];
   const dMeta = await sharp(designBuf).metadata();
   const dw = dMeta.width!, dh = dMeta.height!;
   const design = await sharp(designBuf).ensureAlpha().raw().toBuffer();
   const out = Buffer.from(shirt);
 
   if (strength > 0) {
-    let sum = 0;
-    for (let j = 0; j < dh; j++) for (let i = 0; i < dw; i++) sum += Lf(offsetX + i, offsetY + j);
-    const M = sum / (dw * dh) || 1;
+    // local-contrast normalization: RMS of the high-pass fold detail over the print box
+    let s2 = 0;
+    for (let j = 0; j < dh; j++) for (let i = 0; i < dw; i++) {
+      const d = at(gray, offsetX + i, offsetY + j) - at(low, offsetX + i, offsetY + j);
+      s2 += d * d;
+    }
+    const rms = Math.sqrt(s2 / (dw * dh)) || 1;
+    const norm = WARP_TARGET / Math.max(rms, WARP_FLOOR);
     const amp = strength * WARP_AMP;
     for (let j = 0; j < dh; j++) {
       for (let i = 0; i < dw; i++) {
         const sx = offsetX + i, sy = offsetY + j;
         if (sx < 0 || sy < 0 || sx >= W || sy >= H) continue;
-        const gx = (Lf(sx + 2, sy) - Lf(sx - 2, sy)) / 255;
-        const gy = (Lf(sx, sy + 2) - Lf(sx, sy - 2)) / 255;
-        const di = Math.max(0, Math.min(dw - 1, Math.round(i - amp * gx)));
-        const dj = Math.max(0, Math.min(dh - 1, Math.round(j - amp * gy)));
+        const glx = (at(low, sx + 2, sy) - at(low, sx - 2, sy)) / 255;
+        const gly = (at(low, sx, sy + 2) - at(low, sx, sy - 2)) / 255;
+        const di = Math.max(0, Math.min(dw - 1, Math.round(i - amp * glx)));
+        const dj = Math.max(0, Math.min(dh - 1, Math.round(j - amp * gly)));
         const k = (dj * dw + di) * 4;
         const a = design[k + 3] / 255;
         if (a <= 0.01) continue;
-        let shade = 1 + strength * WARP_GAIN * ((Lf(sx, sy) - M) / M);
+        const detail = (at(gray, sx, sy) - at(low, sx, sy)) * norm;
+        let shade = 1 + strength * WARP_GAIN * (detail / 255);
         shade = Math.max(0.2, Math.min(1.85, shade));
         const o = (sy * W + sx) * CH;
         for (let c = 0; c < 3; c++) {
