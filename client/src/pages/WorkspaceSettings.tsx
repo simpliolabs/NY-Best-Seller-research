@@ -13,7 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { Save, X, Plus, Loader2, RefreshCw, Trash2, ShoppingBag, CheckCircle2, Unplug, Palette } from "lucide-react";
+import { Save, X, Plus, Loader2, RefreshCw, Trash2, ShoppingBag, CheckCircle2, Unplug, Palette, ExternalLink, Copy } from "lucide-react";
 import { useLocation } from "wouter";
 import {
   AlertDialog,
@@ -70,22 +70,21 @@ export default function WorkspaceSettings() {
 
   // ─── Shopify state ─────────────────────────────────────────────────────────
   const [shopifyDomain, setShopifyDomain] = useState("");
-  const [shopifyToken, setShopifyToken] = useState("");
-  const [showToken, setShowToken] = useState(false);
+  const [shopifyClientId, setShopifyClientId] = useState("");
+  const [shopifyClientSecret, setShopifyClientSecret] = useState("");
+  const [showSecret, setShowSecret] = useState(false);
 
   const shopifyStatus = trpc.workspace.shopifyStatus.useQuery(
     { workspaceId: activeWorkspace?.id ?? "" },
     { enabled: !!activeWorkspace?.id }
   );
 
-  const shopifyConnect = trpc.workspace.shopifyConnect.useMutation({
-    onSuccess: (data) => {
-      toast.success(`Connected to "${data.shopName}"`);
-      setShopifyDomain("");
-      setShopifyToken("");
+  const saveShopifyCreds = trpc.workspace.shopifySaveCredentials.useMutation({
+    onSuccess: () => {
+      toast.success("Shopify credentials saved — now click Connect to authorize");
       shopifyStatus.refetch();
     },
-    onError: (err) => toast.error(err.message),
+    onError: (err: { message: string }) => toast.error(err.message),
   });
 
   const shopifyDisconnect = trpc.workspace.shopifyDisconnect.useMutation({
@@ -95,6 +94,39 @@ export default function WorkspaceSettings() {
     },
     onError: (err) => toast.error(err.message),
   });
+
+  // Check if we just returned from OAuth success
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("shopify") === "connected") {
+      toast.success("Shopify store connected successfully!");
+      shopifyStatus.refetch();
+      // Clean URL
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
+
+  function handleShopifyOAuth() {
+    if (!activeWorkspace?.id || !shopifyDomain) return;
+    // Save credentials first, then redirect
+    saveShopifyCreds.mutate(
+      {
+        workspaceId: activeWorkspace.id,
+        clientId: shopifyClientId,
+        clientSecret: shopifyClientSecret,
+        storeDomain: shopifyDomain,
+      },
+      {
+        onSuccess: () => {
+          // Redirect to our OAuth initiation endpoint
+          const authUrl = `/api/shopify/auth?workspaceId=${encodeURIComponent(activeWorkspace.id)}&storeDomain=${encodeURIComponent(shopifyDomain)}`;
+          window.location.href = authUrl;
+        },
+      }
+    );
+  }
+
+  const CALLBACK_URL = "https://nytdesignbot-2uiwq4um.manus.space/api/shopify/callback";
 
   const deleteMutation = trpc.workspace.delete.useMutation({
     onSuccess: () => {
@@ -311,7 +343,7 @@ export default function WorkspaceSettings() {
           ) : (
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">
-                Connect a Shopify Custom App to publish listings directly to your store.
+                Connect a Shopify Custom App via OAuth to publish listings directly to your store.
               </p>
 
               {/* Setup Guide */}
@@ -319,19 +351,34 @@ export default function WorkspaceSettings() {
                 <p className="text-xs font-semibold text-blue-800">Setup Instructions</p>
                 <ol className="text-xs text-blue-700 list-decimal list-inside space-y-1">
                   <li>In Shopify Admin → <strong>Settings → Apps and sales channels → Develop apps</strong></li>
-                  <li>Click <strong>Create an app</strong> → name it (e.g. "Manus-NYT")</li>
+                  <li>Click <strong>Create an app</strong> → name it (e.g. "NYT-Design")</li>
                   <li>Go to <strong>Configuration → Admin API integration</strong></li>
                   <li>Under <strong>Admin API access scopes</strong>, enable: <code className="bg-blue-100 px-1 rounded">write_products</code>, <code className="bg-blue-100 px-1 rounded">read_products</code></li>
-                  <li>Click <strong>Install app</strong> → confirm</li>
-                  <li>Copy the <strong>Admin API access token</strong> (starts with <code className="bg-blue-100 px-1 rounded">shpat_</code>) and paste below</li>
+                  <li>Under <strong>URLs → Allowed redirection URL(s)</strong>, add the callback URL below</li>
+                  <li>Copy your <strong>Client ID</strong> and <strong>Client Secret</strong> from the app's Settings → Credentials page</li>
                 </ol>
                 <p className="text-xs text-blue-600 mt-1">Required scopes: <code className="bg-blue-100 px-1 rounded">write_products</code>, <code className="bg-blue-100 px-1 rounded">read_products</code></p>
-                <div className="mt-2 pt-2 border-t border-blue-200">
-                  <p className="text-xs font-semibold text-blue-800">Allowed redirection URL(s)</p>
-                  <p className="text-xs text-blue-700 mt-0.5">If prompted, add this callback URL to your app's <strong>Allowed redirection URL(s)</strong> list:</p>
-                  <code className="block mt-1 text-xs bg-blue-100 px-2 py-1 rounded font-mono select-all break-all">https://nytdesignbot-2uiwq4um.manus.space/api/shopify/callback</code>
-                </div>
               </div>
+
+              {/* Callback URL */}
+              <div className="space-y-1">
+                <label className="text-sm font-medium">Callback URL</label>
+                <div className="flex gap-2 items-center">
+                  <code className="flex-1 text-xs bg-muted px-3 py-2 rounded font-mono select-all break-all border">{CALLBACK_URL}</code>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    type="button"
+                    onClick={() => { navigator.clipboard.writeText(CALLBACK_URL); toast.success("Copied!"); }}
+                    className="shrink-0"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">Add this to your app's Allowed redirection URL(s)</p>
+              </div>
+
+              {/* Store Domain */}
               <div className="space-y-2">
                 <label className="text-sm font-medium">Store Domain</label>
                 <Input
@@ -341,43 +388,52 @@ export default function WorkspaceSettings() {
                 />
                 <p className="text-xs text-muted-foreground">Your Shopify myshopify.com subdomain</p>
               </div>
+
+              {/* Client ID */}
               <div className="space-y-2">
-                <label className="text-sm font-medium">Access Token</label>
+                <label className="text-sm font-medium">Client ID</label>
+                <Input
+                  placeholder="4e22018f3df05efa3cc48010af75e9a9"
+                  value={shopifyClientId}
+                  onChange={(e) => setShopifyClientId(e.target.value)}
+                  className="font-mono text-sm"
+                />
+                <p className="text-xs text-muted-foreground">From your app's Settings → Credentials</p>
+              </div>
+
+              {/* Client Secret */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Client Secret</label>
                 <div className="flex gap-2">
                   <Input
-                    type={showToken ? "text" : "password"}
-                    placeholder="shpat_xxxxxxxxxxxxxxxxxxxx"
-                    value={shopifyToken}
-                    onChange={(e) => setShopifyToken(e.target.value)}
+                    type={showSecret ? "text" : "password"}
+                    placeholder="shpss_xxxxxxxxxxxxxxxxxxxx"
+                    value={shopifyClientSecret}
+                    onChange={(e) => setShopifyClientSecret(e.target.value)}
                     className="font-mono text-sm"
                   />
                   <Button
                     variant="outline"
                     size="sm"
                     type="button"
-                    onClick={() => setShowToken((v) => !v)}
+                    onClick={() => setShowSecret((v) => !v)}
                     className="shrink-0"
                   >
-                    {showToken ? "Hide" : "Show"}
+                    {showSecret ? "Hide" : "Show"}
                   </Button>
                 </div>
-                <p className="text-xs text-muted-foreground">Private App Admin API access token (shpat_*)</p>
+                <p className="text-xs text-muted-foreground">Client secret (shpss_*) from your app's Settings → Credentials</p>
               </div>
+
               <Button
-                onClick={() =>
-                  shopifyConnect.mutate({
-                    workspaceId: activeWorkspace?.id ?? "",
-                    storeDomain: shopifyDomain,
-                    accessToken: shopifyToken,
-                  })
-                }
-                disabled={!shopifyDomain || !shopifyToken || shopifyConnect.isPending}
+                onClick={handleShopifyOAuth}
+                disabled={!shopifyDomain || !shopifyClientId || !shopifyClientSecret || saveShopifyCreds.isPending}
                 className="disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                {shopifyConnect.isPending ? (
-                  <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Testing connection…</>
+                {saveShopifyCreds.isPending ? (
+                  <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Saving…</>
                 ) : (
-                  <><ShoppingBag className="h-4 w-4 mr-2" /> Connect Store</>
+                  <><ExternalLink className="h-4 w-4 mr-2" /> Connect to Shopify</>
                 )}
               </Button>
             </div>

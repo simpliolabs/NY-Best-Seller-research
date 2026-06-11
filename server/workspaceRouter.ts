@@ -5,7 +5,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "./_core/trpc";
-import { getShop } from "./shopifyClient";
 import {
   getWorkspaceById,
   getWorkspacesByOwner,
@@ -156,51 +155,40 @@ export const workspaceRouter = router({
     }),
 
   /**
-   * Test Shopify Private App credentials for a workspace.
-   * Stores storeDomain + accessToken in workspace_credentials, then calls getShop.
-   * Returns the shop name on success; throws a descriptive error on failure.
+   * Save Shopify OAuth app credentials (Client ID + Secret) for a workspace.
+   * These are used by the /api/shopify/auth + /api/shopify/callback OAuth flow.
    */
-  shopifyConnect: protectedProcedure
+  shopifySaveCredentials: protectedProcedure
     .input(
       z.object({
         workspaceId: z.string(),
+        clientId: z.string().min(5),
+        clientSecret: z.string().min(5),
         storeDomain: z.string().min(3).max(200),
-        accessToken: z.string().min(10),
       })
     )
     .mutation(async ({ input }) => {
-      // Normalise domain — strip protocol and trailing slash
       const domain = input.storeDomain
         .replace(/^https?:\/\//, "")
         .replace(/\/$/, "");
 
-      // Validate by calling the Shopify API before persisting
-      let shop;
-      try {
-        shop = await getShop({ storeDomain: domain, accessToken: input.accessToken });
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `Could not connect to Shopify: ${msg}`,
-        });
-      }
+      await setCredential(input.workspaceId, "shopify", "clientId", input.clientId);
+      await setCredential(input.workspaceId, "shopify", "clientSecret", input.clientSecret);
+      await setCredential(input.workspaceId, "shopify", "pendingDomain", domain);
 
-      // Persist credentials only after successful validation
-      await setCredential(input.workspaceId, "shopify", "storeDomain", domain);
-      await setCredential(input.workspaceId, "shopify", "accessToken", input.accessToken);
-
-      return { shopName: shop.name, domain: shop.myshopify_domain };
+      return { ok: true };
     }),
 
   /** Remove stored Shopify credentials for a workspace. */
   shopifyDisconnect: protectedProcedure
     .input(z.object({ workspaceId: z.string() }))
     .mutation(async ({ input }) => {
-      // setCredential with empty string effectively clears — use a sentinel
-      // The cleanest approach is to overwrite with empty strings (no delete helper exists)
       await setCredential(input.workspaceId, "shopify", "storeDomain", "");
       await setCredential(input.workspaceId, "shopify", "accessToken", "");
+      await setCredential(input.workspaceId, "shopify", "clientId", "");
+      await setCredential(input.workspaceId, "shopify", "clientSecret", "");
+      await setCredential(input.workspaceId, "shopify", "oauthNonce", "");
+      await setCredential(input.workspaceId, "shopify", "pendingDomain", "");
       return { ok: true };
     }),
 
