@@ -1311,16 +1311,17 @@ Subgenre: ${book?.subgenre ?? "not specified"}`;
     .map((r) => (r.status === "fulfilled" ? r.value : null))
     .filter((r): r is PromptSet => r !== null && (r.promptA.length > 0 || r.promptB.length > 0 || r.promptC.length > 0));
 
-  console.log(`[Pipeline] Got ${validPromptSets.length} valid prompt sets, generating ${validPromptSets.length * 3} images in parallel...`);
+  console.log(`[Pipeline] Got ${validPromptSets.length} valid prompt sets, generating ${validPromptSets.length} images (1 hero per concept) in parallel...`);
 
   // ── Step 4: Generate all images in parallel (up to 15) ───────────────
   type ImageTask = { concept: typeof winners[0]; variation: "A" | "B" | "C"; prompt: string };
   const allImageTasks: ImageTask[] = [];
 
   for (const ps of validPromptSets) {
-    if (ps.promptA) allImageTasks.push({ concept: ps.concept, variation: "A", prompt: ps.promptA });
-    if (ps.promptB) allImageTasks.push({ concept: ps.concept, variation: "B", prompt: ps.promptB });
-    if (ps.promptC) allImageTasks.push({ concept: ps.concept, variation: "C", prompt: ps.promptC });
+    // scans-to-1 (PO 2026-06-11): render ONE hero image per concept (was 3) — cuts scan image-gen
+    // cost 3x. Prefer variation A (Clean/Bold hero); fall back to B/C only if A came back empty.
+    const heroPrompt = ps.promptA || ps.promptB || ps.promptC;
+    if (heroPrompt) allImageTasks.push({ concept: ps.concept, variation: "A", prompt: heroPrompt });
   }
 
   const imageResults = await Promise.allSettled(
