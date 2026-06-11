@@ -177,6 +177,28 @@ export const productGroupRouter = router({
       return { ok: true };
     }),
 
+  /** Manual Placement (PO 2026-06-11): write ONE calibrated print box to EVERY color template in
+   *  the group — the human places the design on a single photo and it copies to all. Each template's
+   *  garmentBbox is the per-color box that `generate` already prefers (resolvePrintZone), so the
+   *  next render uses this placement on every color. */
+  setManualPlacementAllColors: protectedProcedure
+    .input(
+      z.object({
+        groupId: z.string(),
+        printArea: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const templates = await getMockupsByGroup(input.groupId);
+      if (templates.length === 0) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Product group has no mockup templates." });
+      }
+      for (const t of templates) {
+        await updateMockupTemplate(t.id, { garmentBbox: input.printArea });
+      }
+      return { ok: true, updatedCount: templates.length };
+    }),
+
   /** Delete a mockup template (does not delete the S3 file) */
   deleteMockup: protectedProcedure
     .input(z.object({ mockupId: z.string() }))
