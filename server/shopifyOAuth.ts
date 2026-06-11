@@ -50,10 +50,9 @@ export function registerShopifyOAuthRoutes(app: Express) {
       await setCredential(workspaceId, "shopify", "oauthNonce", nonce);
       await setCredential(workspaceId, "shopify", "pendingDomain", domain);
 
-      // Determine redirect URI — use the production domain
-      const host = req.get("host") || "nytdesignbot-2uiwq4um.manus.space";
-      const protocol = req.get("x-forwarded-proto") || req.protocol || "https";
-      const redirectUri = `${protocol}://${host}/api/shopify/callback`;
+      // Always use the production domain for the redirect URI
+      // (dev proxy domains like *.run.app won't be whitelisted in Shopify)
+      const redirectUri = "https://nytdesignbot-2uiwq4um.manus.space/api/shopify/callback";
 
       const authorizeUrl =
         `https://${domain}/admin/oauth/authorize` +
