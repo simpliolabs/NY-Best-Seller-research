@@ -15,11 +15,25 @@ import {
   deleteListing,
 } from "./listingDb";
 import { getConceptById } from "./db";
-import { getProductGroupById } from "./productGroupDb";
+import { getProductGroupById, getMockupsByGroup } from "./productGroupDb";
 import { invokeLLM } from "./_core/llm";
 import { getCredential } from "./workspaceDb";
-import { createProduct, addProductImageByUrl, setProductMetafield } from "./shopifyClient";
+import { createProduct, addProductImageByUrl, setProductMetafield, getPrimaryLocationId, setInventoryLevel, setInventoryItemCost } from "./shopifyClient";
 import { getMockupsByConceptVariation } from "./mockupDb";
+
+/** 3-char uppercase abbreviation for SKUs: keep the first letter, then the next consonants
+ *  (Espresso → ESP, Dink → DNK). Falls back to the first 3 letters for vowel-heavy names. */
+export function abbrev3(name: string): string {
+  const clean = (name || "").toUpperCase().replace(/[^A-Z]/g, "");
+  if (clean.length <= 3) return clean || "XXX";
+  const rest = clean.slice(1).replace(/[AEIOU]/g, "");
+  return (clean[0] + (rest.length >= 2 ? rest : clean.slice(1)).slice(0, 2)).slice(0, 3);
+}
+
+/** SKU base from the product-group name: alphanumeric, uppercase (e.g. "1717" → "1717"). */
+export function skuBase(name: string): string {
+  return (name || "PRD").toUpperCase().replace(/[^A-Z0-9]/g, "") || "PRD";
+}
 
 /**
  * LLM-generated Shopify SEO meta (global.title_tag / global.description_tag). PO 2026-06-11.
@@ -226,9 +240,53 @@ export const listingRouter = router({
         ? await getProductGroupById(listing.productGroupId)
         : null;
 
-      // Build Shopify product payload
+      // ── Build the size x color variant matrix (PO 2026-06-11) ───────────────────────────────
       const tagsStr = Array.isArray(listing.tags) ? listing.tags.join(", ") : "";
       const vendor = await getCredential(input.workspaceId, "shopify", "vendor");
+      const concept = await getConceptById(listing.conceptId);
+
+      // Colours = the colours of the mockups the user selected (render.templateId -> template.colorName).
+      const mockupIds: string[] = Array.isArray(listing.mockupRenderIds) ? (listing.mockupRenderIds as string[]) : [];
+      const allRenders = concept
+        ? [
+            ...(await getMockupsByConceptVariation(listing.conceptId, "A")),
+            ...(await getMockupsByConceptVariation(listing.conceptId, "B")),
+            ...(await getMockupsByConceptVariation(listing.conceptId, "C")),
+          ]
+        : [];
+      const selectedRenders = allRenders.filter((r) => mockupIds.includes(r.id));
+      const templates = await getMockupsByGroup(listing.productGroupId);
+      const colorByTemplate = new Map(templates.map((t) => [t.id, t.colorName]));
+      const colorNames = Array.from(new Set(selectedRenders.map((r) => colorByTemplate.get(r.templateId)).filter((c): c is string => !!c)));
+
+      // Sizes + per-size price from the group's pricing tiers (#2).
+      const tiers = (group?.pricingTiers ?? []) as Array<{ sizes: string[]; price: number }>;
+      const sizePrice = new Map<string, string>();
+      for (const tier of tiers) for (const sz of tier.sizes) sizePrice.set(sz, String(tier.price));
+      const sizes = Array.from(sizePrice.keys());
+
+      // SKU pieces (#4): BASE(group)-SIZE-COLOR(abbr)-DESIGN(abbr), e.g. 1717-M-ESP-DNK.
+      const base = skuBase(group?.name ?? "PRD");
+      const designAbbr = abbrev3(concept?.conceptName ?? listing.title);
+
+      // Cross sizes x colours into variants (Shopify REST caps a product at 100 variants).
+      const matrix: NonNullable<Parameters<typeof createProduct>[1]["variants"]> = [];
+      for (const size of sizes) {
+        for (const color of colorNames) {
+          if (matrix.length >= 100) break;
+          matrix.push({
+            option1: size,
+            option2: color,
+            price: sizePrice.get(size) ?? listing.price ?? "29.99",
+            ...(listing.compareAtPrice ? { compare_at_price: listing.compareAtPrice } : {}),
+            sku: `${base}-${size.toUpperCase()}-${abbrev3(color)}-${designAbbr}`,
+            inventory_management: "shopify",
+            inventory_policy: "continue", // #6 keep selling when out of stock
+          });
+        }
+      }
+      const hasMatrix = matrix.length > 0;
+
       const product = await createProduct(creds, {
         title: listing.title,
         body_html: listing.description ?? "",
@@ -236,33 +294,11 @@ export const listingRouter = router({
         product_type: (group as any)?.productType ?? "T-Shirt",
         tags: tagsStr,
         status: "draft",
-        variants: [
-          {
-            price: listing.price ?? "29.99",
-            ...(listing.compareAtPrice ? { compare_at_price: listing.compareAtPrice } : {}),
-          },
-        ],
+        ...(hasMatrix ? { options: [{ name: "Size" }, { name: "Color" }] } : {}),
+        variants: hasMatrix
+          ? matrix
+          : [{ price: listing.price ?? "29.99", inventory_management: "shopify", inventory_policy: "continue", ...(listing.compareAtPrice ? { compare_at_price: listing.compareAtPrice } : {}) }],
       });
-
-      // Upload mockup images — collect URLs from mockup_renders
-      const mockupIds: string[] = Array.isArray(listing.mockupRenderIds)
-        ? (listing.mockupRenderIds as string[])
-        : [];
-
-      // Fetch composite URLs for the stored mockup render IDs
-      // We query all renders for the concept and filter by ID
-      const concept = await getConceptById(listing.conceptId);
-      const allRenders = concept
-        ? await getMockupsByConceptVariation(listing.conceptId, "A")
-        : [];
-      const allRendersB = concept
-        ? await getMockupsByConceptVariation(listing.conceptId, "B")
-        : [];
-      const allRendersC = concept
-        ? await getMockupsByConceptVariation(listing.conceptId, "C")
-        : [];
-      const allRendersCombined = [...allRenders, ...allRendersB, ...allRendersC];
-      const selectedRenders = allRendersCombined.filter((r) => mockupIds.includes(r.id));
 
       // Upload each mockup image to Shopify (best-effort — don't fail publish if image upload fails)
       for (let i = 0; i < selectedRenders.length; i++) {
@@ -272,6 +308,27 @@ export const listingRouter = router({
         } catch (imgErr) {
           console.warn(`[publishToShopify] Image upload failed for render ${render.id}:`, imgErr);
         }
+      }
+
+      // Stock 100/variant (#5) + cost per item (#3). Shopify sets stock via the InventoryLevel
+      // resource and cost via the InventoryItem (neither is settable on variant create). Best-effort
+      // per variant — the product already exists, so an inventory/cost failure must never block publish.
+      try {
+        const locationId = await getPrimaryLocationId(creds);
+        const cost = (group as any)?.costPerItem ? String((group as any).costPerItem) : null;
+        for (const v of product.variants ?? []) {
+          if (!v.inventory_item_id) continue;
+          if (locationId) {
+            try { await setInventoryLevel(creds, locationId, v.inventory_item_id, 100); }
+            catch (e) { console.warn(`[publishToShopify] stock set failed for variant ${v.id}:`, e); }
+          }
+          if (cost) {
+            try { await setInventoryItemCost(creds, v.inventory_item_id, cost); }
+            catch (e) { console.warn(`[publishToShopify] cost set failed for variant ${v.id}:`, e); }
+          }
+        }
+      } catch (invErr) {
+        console.warn(`[publishToShopify] inventory/cost step failed (non-fatal):`, invErr);
       }
 
       // SEO metafields — LLM-generated dedicated meta title/description (PO 2026-06-11).

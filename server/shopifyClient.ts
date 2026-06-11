@@ -31,10 +31,17 @@ export interface ShopifyProductInput {
   product_type?: string;
   tags?: string; // comma-separated
   status?: "active" | "draft" | "archived";
+  /** Product options, e.g. [{name:"Size"},{name:"Color"}] — required for a size x color matrix. */
+  options?: Array<{ name: string }>;
   variants?: Array<{
     price: string;
     compare_at_price?: string;
     sku?: string;
+    option1?: string;
+    option2?: string;
+    option3?: string;
+    inventory_management?: "shopify" | null;
+    inventory_policy?: "deny" | "continue";
   }>;
 }
 
@@ -44,6 +51,13 @@ export interface ShopifyProduct {
   handle: string;
   status: string;
   admin_graphql_api_id: string;
+  variants?: Array<{
+    id: number;
+    sku: string | null;
+    option1: string | null;
+    option2: string | null;
+    inventory_item_id: number;
+  }>;
 }
 
 export interface ShopifyProductImage {
@@ -112,6 +126,39 @@ export async function createProduct(
     product: input,
   });
   return data.product;
+}
+
+/** Primary (first active) inventory location id — needed to set stock levels. */
+export async function getPrimaryLocationId(creds: ShopifyCredentials): Promise<number | null> {
+  const data = await shopifyFetch<{ locations: Array<{ id: number; active: boolean }> }>(creds, "GET", "locations.json");
+  const active = data.locations.find((l) => l.active) ?? data.locations[0];
+  return active?.id ?? null;
+}
+
+/** Set a variant's available stock at a location (Shopify removed inventory_quantity from variant
+ *  create in 2022-07, so stock must be set via the InventoryLevel resource). */
+export async function setInventoryLevel(
+  creds: ShopifyCredentials,
+  locationId: number,
+  inventoryItemId: number,
+  available: number
+): Promise<void> {
+  await shopifyFetch(creds, "POST", "inventory_levels/set.json", {
+    location_id: locationId,
+    inventory_item_id: inventoryItemId,
+    available,
+  });
+}
+
+/** Set the cost (COGS) on a variant's inventory item. */
+export async function setInventoryItemCost(
+  creds: ShopifyCredentials,
+  inventoryItemId: number,
+  cost: string
+): Promise<void> {
+  await shopifyFetch(creds, "PUT", `inventory_items/${inventoryItemId}.json`, {
+    inventory_item: { id: inventoryItemId, cost },
+  });
 }
 
 /**

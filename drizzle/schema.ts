@@ -320,6 +320,8 @@ export const productGroups = mysqlTable("product_groups", {
   /** Product type label used in listing titles, e.g. "T-Shirt", "Crewneck", "Hoodie" */
   productType: varchar("productType", { length: 100 }).default("T-Shirt"),
   compareAtPrice: decimal("compareAtPrice", { precision: 10, scale: 2 }),
+  /** Cost per item (COGS) — sent to Shopify as the variant InventoryItem cost. PO 2026-06-11. */
+  costPerItem: decimal("costPerItem", { precision: 10, scale: 2 }),
   /** JSON: [{sizes: ["S","M","L","XL"], price: 34.95}, {sizes: ["2XL"], price: 37.95}, ...] */
   pricingTiers: json("pricingTiers").$type<Array<{ sizes: string[]; price: number }>>(),
   /** Print zone — photo-relative ratios 0-1. x/y/width/height = the GROUP-level fallback box
