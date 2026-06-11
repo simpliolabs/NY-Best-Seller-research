@@ -107,8 +107,8 @@ export function registerShopifyOAuthRoutes(app: Express) {
         shop?: string;
       };
 
-      if (!code || !state) {
-        res.status(400).send("Missing code or state from Shopify callback");
+      if (!code || !state || !hmac) {
+        res.status(400).send("Missing code, state, or hmac from Shopify callback");
         return;
       }
 
@@ -129,6 +129,28 @@ export function registerShopifyOAuthRoutes(app: Express) {
       // Load credentials
       const clientId = await getCredential(workspaceId, "shopify", "clientId");
       const clientSecret = await getCredential(workspaceId, "shopify", "clientSecret");
+
+      // ─── HMAC verification (Shopify's documented authenticity check) ──────────
+      // Build the message: sorted query params excluding `hmac`, joined as key=value pairs with &
+      if (!clientSecret) {
+        res.status(400).send("Missing Shopify client secret for this workspace");
+        return;
+      }
+      const queryParams = { ...req.query } as Record<string, string>;
+      delete queryParams.hmac;
+      const sortedMessage = Object.keys(queryParams)
+        .sort()
+        .map((k) => `${k}=${queryParams[k]}`)
+        .join("&");
+      const computedHmac = crypto
+        .createHmac("sha256", clientSecret)
+        .update(sortedMessage)
+        .digest("hex");
+      if (!safeEqual(computedHmac, hmac)) {
+        console.error("[shopifyOAuth] HMAC mismatch — callback rejected");
+        res.status(403).send("HMAC verification failed — callback rejected");
+        return;
+      }
       // Validate the shop domain BEFORE it becomes the token-exchange host. Shopify sends `shop`;
       // fall back to the domain stored at /auth. Either way it MUST be a real *.myshopify.com host —
       // this is the guard against POSTing client_secret to an attacker-controlled server.
