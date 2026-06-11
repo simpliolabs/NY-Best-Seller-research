@@ -69,7 +69,12 @@ export async function generateRevision(
   if (!refRes.ok) throw new Error(`Failed to download reference image: ${referenceImageUrl} (${refRes.status})`);
   const refPng = await sharp(Buffer.from(await refRes.arrayBuffer())).png().toBuffer();
   const edited = await callImageEdit(refPng, "design.png", prompt, {
-    transparent: false,
+    transparent: true, // The reference design is a TRANSPARENT png. Ask gpt-image-1 for a transparent
+                       // result so it KEEPS that. transparent:false made it fill the transparent corners
+                       // with opaque BLACK, which the white-only removeBackground couldn't strip — the
+                       // "lost transparency" regression (PO-flagged 2026-06-10). gpt-image-1
+                       // background:transparent is the proven-reliable transparency path (same as the
+                       // niche Step-2 extract); input_fidelity:high keeps the striped backdrop intact.
     inputFidelity: "high", // the faithfulness lever (preserve untouched pixels) — independent of quality
     quality: "medium", // submitRevision is a sync mutation with NO retry net; "high" (~90-180s) risks a
                        // Cloudflare 524. "medium" (~30-60s) stays under the edge timeout; input_fidelity
@@ -77,14 +82,14 @@ export async function generateRevision(
     size: "auto",
   });
 
-  // 2b. Strip the outer background to transparency before storing (gpt-image-1 returns an opaque
-  // canvas). removeBackground = edge-connected white flood-fill (preserves interior whites/stripes)
-  // with an AI-extraction fallback. On failure, keep the raw edit rather than block the revision.
+  // 2b. Safety net only: gpt-image-1 already returns native transparency above. If a run instead
+  // comes back on a white box, strip it (edge-connected white flood-fill; passthrough when already
+  // transparent, so it's a no-op on the normal path). Never blocks the revision.
   let finalBuf = edited;
   try {
     finalBuf = await removeBackground(edited);
   } catch (err) {
-    console.warn(`[Revision] background removal failed for concept ${conceptId} ${variationKey}; using raw edit:`, err);
+    console.warn(`[Revision] background cleanup failed for concept ${conceptId} ${variationKey}; using raw edit:`, err);
   }
   const { url: imageUrl } = await storagePut(
     `revisions/${conceptId}-${variationKey}-${Date.now()}.png`,
