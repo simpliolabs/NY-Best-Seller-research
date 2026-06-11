@@ -14,6 +14,30 @@ import { getCredential, setCredential } from "./workspaceDb";
 
 const SCOPES = "write_products,read_products";
 
+/** A Shopify shop's admin host — the ONLY kind of host we will ever build an OAuth authorize or
+ *  token-exchange URL against. Single-label `<shop>.myshopify.com` only. */
+const SHOP_DOMAIN_RE = /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/;
+
+/**
+ * Normalise a user/Shopify-supplied store domain to a bare host and confirm it is a real
+ * *.myshopify.com domain. Returns null (caller MUST reject) otherwise. This is the guard that
+ * stops an attacker-controlled `shop` param from making the server POST the client_secret to an
+ * arbitrary host — an unauthenticated secret-exfiltration + SSRF (PO-flagged 2026-06-11).
+ * Exported for unit testing.
+ */
+export function normalizeShopDomain(input: string | undefined | null): string | null {
+  if (!input) return null;
+  const d = input.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  return SHOP_DOMAIN_RE.test(d) ? d : null;
+}
+
+/** Length-checked constant-time string compare (crypto.timingSafeEqual throws on length mismatch). */
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
+}
+
 /**
  * Register Shopify OAuth routes on the Express app.
  */
@@ -38,8 +62,13 @@ export function registerShopifyOAuthRoutes(app: Express) {
         return;
       }
 
-      // Normalise domain
-      const domain = storeDomain.replace(/^https?:\/\//, "").replace(/\/$/, "");
+      // Validate + normalise the store domain. MUST be a real *.myshopify.com host — it becomes the
+      // host of the authorize URL below (and, later, the token-exchange URL in /callback).
+      const domain = normalizeShopDomain(storeDomain);
+      if (!domain) {
+        res.status(400).send("Invalid store domain — must be your-store.myshopify.com");
+        return;
+      }
 
       // Build a nonce for CSRF protection
       const nonce = crypto.randomBytes(16).toString("hex");
@@ -90,9 +119,9 @@ export function registerShopifyOAuthRoutes(app: Express) {
         return;
       }
 
-      // Verify nonce
+      // Verify nonce (constant-time)
       const storedNonce = await getCredential(workspaceId, "shopify", "oauthNonce");
-      if (!storedNonce || storedNonce !== nonce) {
+      if (!storedNonce || !safeEqual(storedNonce, nonce)) {
         res.status(403).send("State mismatch — possible CSRF. Please try connecting again.");
         return;
       }
@@ -100,10 +129,15 @@ export function registerShopifyOAuthRoutes(app: Express) {
       // Load credentials
       const clientId = await getCredential(workspaceId, "shopify", "clientId");
       const clientSecret = await getCredential(workspaceId, "shopify", "clientSecret");
-      const storeDomain = shop || (await getCredential(workspaceId, "shopify", "pendingDomain"));
+      // Validate the shop domain BEFORE it becomes the token-exchange host. Shopify sends `shop`;
+      // fall back to the domain stored at /auth. Either way it MUST be a real *.myshopify.com host —
+      // this is the guard against POSTing client_secret to an attacker-controlled server.
+      const storeDomain = normalizeShopDomain(
+        shop || (await getCredential(workspaceId, "shopify", "pendingDomain"))
+      );
 
       if (!clientId || !clientSecret || !storeDomain) {
-        res.status(400).send("Missing Shopify app credentials for this workspace");
+        res.status(400).send("Missing or invalid Shopify app credentials/domain for this workspace");
         return;
       }
 
