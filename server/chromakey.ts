@@ -76,6 +76,30 @@ export async function chromakeyFromCorners(imageBuf: Buffer): Promise<Buffer> {
     }
   }
 
+  // Despill the magenta fringe (PO 2026-06-11). The flood-fill above is BINARY — anti-aliased art
+  // edges that blend toward the magenta render background (fine net grids, thin linework) survive
+  // fully opaque with magenta-contaminated RGB, showing as a bright pink fringe on the final mockup.
+  // Neutralize it: for opaque pixels ON THE ALPHA BOUNDARY (adjacent to a keyed pixel) that read
+  // magenta (R and B both above G, from the #FF00FF render bg), pull R and B down toward G. Gated to
+  // the boundary so a design's intentional INTERIOR magenta/pink (never edge-connected to the keyed
+  // background) is left untouched.
+  const DESPILL_MARGIN = 12;
+  const isKeyed = (p: number) => output[p * channels + 3] === 0;
+  for (let pos = 0; pos < width * height; pos++) {
+    const idx = pos * channels;
+    if (output[idx + 3] === 0) continue; // already keyed transparent
+    const r = output[idx], g = output[idx + 1], b = output[idx + 2];
+    if (!(r > g && b > g)) continue; // not magenta-ish — a true colour, leave it
+    const px = pos % width, py = (pos - px) / width;
+    const onEdge =
+      (px > 0 && isKeyed(pos - 1)) || (px < width - 1 && isKeyed(pos + 1)) ||
+      (py > 0 && isKeyed(pos - width)) || (py < height - 1 && isKeyed(pos + width));
+    if (!onEdge) continue;
+    const cap = g + DESPILL_MARGIN;
+    if (r > cap) output[idx] = cap;
+    if (b > cap) output[idx + 2] = cap;
+  }
+
   return sharp(output, { raw: { width, height, channels: channels as 4 } })
     .png()
     .toBuffer();
