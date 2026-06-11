@@ -127,7 +127,18 @@ export const listingRouter = router({
       })
     )
     .query(async ({ input }) => {
-      return getListingsByWorkspace(input.workspaceId, input.status);
+      const listings = await getListingsByWorkspace(input.workspaceId, input.status);
+      // Build the correct Shopify admin URL per exported listing. The store handle lives in a
+      // workspace credential the client doesn't have on the listing, so attach it here — the old
+      // client built admin.shopify.com/store/<productId> which is a dead page (PO 2026-06-11).
+      const storeDomain = await getCredential(input.workspaceId, "shopify", "storeDomain");
+      const handle = storeDomain ? storeDomain.replace(/\.myshopify\.com$/i, "") : null;
+      return listings.map((l) => ({
+        ...l,
+        shopifyAdminUrl: l.shopifyProductId && handle
+          ? `https://admin.shopify.com/store/${handle}/products/${l.shopifyProductId}`
+          : null,
+      }));
     }),
 
   /**
@@ -191,10 +202,12 @@ export const listingRouter = router({
     .mutation(async ({ input }) => {
       const listing = await getListingById(input.id);
       if (!listing) throw new TRPCError({ code: "NOT_FOUND", message: "Listing not found" });
-      if (listing.status !== "ready") {
+      // Skip-description (PO 2026-06-11): a draft can publish directly without generated copy — the
+      // product is created with an empty body_html. Only block re-exporting an already-exported one.
+      if (listing.status === "exported") {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Listing must be in 'ready' status before publishing to Shopify.",
+          message: "Listing is already exported to Shopify.",
         });
       }
 
