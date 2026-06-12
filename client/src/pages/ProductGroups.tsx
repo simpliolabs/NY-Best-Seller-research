@@ -291,47 +291,6 @@ function MockupUploadCard({ groupId, onUploaded }: { groupId: string; onUploaded
   );
 }
 
-// ─── Cost Per Item Input ──────────────────────────────────────────────────────
-function CostPerItemInput({ groupId, initialCost }: { groupId: string; initialCost: string | null }) {
-  const [cost, setCost] = useState(initialCost ?? "");
-  const utils = trpc.useUtils();
-
-  const updateMutation = trpc.productGroup.update.useMutation({
-    onSuccess: () => { toast.success("Cost per item saved"); utils.productGroup.get.invalidate({ groupId }); },
-    onError: (err) => toast.error(err.message),
-  });
-
-  return (
-    <div className="space-y-2">
-      <p className="text-xs font-medium font-['Syne'] text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
-        Cost Per Item (COGS)
-      </p>
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1 max-w-[200px]">
-          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">$</span>
-          <Input
-            type="number"
-            step="0.01"
-            min="0"
-            className="h-8 text-sm pl-7"
-            placeholder="0.00"
-            value={cost}
-            onChange={e => setCost(e.target.value)}
-          />
-        </div>
-        <Button
-          size="sm"
-          className="bg-green-600 hover:bg-green-700 text-white text-xs h-8"
-          disabled={updateMutation.isPending}
-          onClick={() => updateMutation.mutate({ groupId, costPerItem: cost ? parseFloat(cost) : undefined })}
-        >
-          {updateMutation.isPending ? "Saving…" : "Save"}
-        </Button>
-      </div>
-      <p className="text-xs text-muted-foreground">Sent to Shopify as the variant inventory cost.</p>
-    </div>
-  );
-}
 
 // ─── Coordinate helpers ────────────────────────────────────────────────────────
 /** Convert garment-relative zone to photo-relative for display in the editor.
@@ -518,15 +477,10 @@ function ProductGroupCard({ groupId }: { groupId: string }) {
 
           <Separator />
 
-          {/* Cost per item */}
-          <CostPerItemInput groupId={groupId} initialCost={data.costPerItem ?? null} />
-
-          <Separator />
-
           {/* Pricing tiers */}
           <div>
             <p className="text-xs font-medium font-['Syne'] text-muted-foreground uppercase tracking-wide mb-2">Pricing Tiers</p>
-            <PricingTiersEditor groupId={groupId} initialTiers={data.pricingTiers as Array<{ sizes: string[]; price: number }> | null} />
+            <PricingTiersEditor groupId={groupId} initialTiers={data.pricingTiers as Array<{ sizes: string[]; price: number; cost?: number }> | null} />
           </div>
         </CardContent>
       )}
