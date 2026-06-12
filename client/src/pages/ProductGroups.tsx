@@ -21,7 +21,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
-import { Plus, Upload, Trash2, ChevronDown, ChevronUp, Package, Target } from "lucide-react";
+import { Plus, Upload, Trash2, ChevronDown, ChevronUp, Package, Target, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { PrintZoneEditor, type PrintZoneCoords } from "@/components/PrintZoneEditor";
 
@@ -247,6 +247,123 @@ function SizeWeightsEditor({ groupId, initialWeights }: { groupId: string; initi
         {updateMutation.isPending ? "Saving…" : "Save Weights"}
       </Button>
       <p className="text-[10px] text-muted-foreground">Sent to Shopify as variant weight (converted to grams).</p>
+    </div>
+  );
+}
+
+// ─── Category Attributes Editor ───────────────────────────────────────────────
+interface CategoryAttrs {
+  ageGroup?: string;
+  neckline?: string;
+  sleeveLengthType?: string;
+  targetGender?: string;
+  topLengthType?: string;
+  careInstructions?: string[];
+  fabric?: string;
+  clothingFeatures?: string[];
+}
+
+function CategoryAttributesEditor({ groupId, initial }: { groupId: string; initial: CategoryAttrs | null }) {
+  const [ageGroup, setAgeGroup] = useState(initial?.ageGroup ?? "");
+  const [neckline, setNeckline] = useState(initial?.neckline ?? "");
+  const [sleeveLengthType, setSleeveLengthType] = useState(initial?.sleeveLengthType ?? "");
+  const [targetGender, setTargetGender] = useState(initial?.targetGender ?? "");
+  const [topLengthType, setTopLengthType] = useState(initial?.topLengthType ?? "");
+  const [fabric, setFabric] = useState(initial?.fabric ?? "");
+  const [careInstructions, setCareInstructions] = useState((initial?.careInstructions ?? []).join(", "));
+  const [clothingFeatures, setClothingFeatures] = useState((initial?.clothingFeatures ?? []).join(", "));
+
+  const utils = trpc.useUtils();
+  const updateMutation = trpc.productGroup.update.useMutation({
+    onSuccess: () => { toast.success("Category metafields saved"); utils.productGroup.get.invalidate({ groupId }); },
+    onError: (err) => toast.error(err.message),
+  });
+  const suggestMutation = trpc.productGroup.suggestCategoryAttributes.useMutation({
+    onSuccess: (data) => {
+      setAgeGroup(data.ageGroup ?? "");
+      setNeckline(data.neckline ?? "");
+      setSleeveLengthType(data.sleeveLengthType ?? "");
+      setTargetGender(data.targetGender ?? "");
+      setTopLengthType(data.topLengthType ?? "");
+      setFabric(data.fabric ?? "");
+      setCareInstructions((data.careInstructions ?? []).join(", "));
+      setClothingFeatures((data.clothingFeatures ?? []).join(", "));
+      toast.success("AI suggestions applied — review and save");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const handleSave = () => {
+    const attrs: CategoryAttrs = {
+      ageGroup: ageGroup || undefined,
+      neckline: neckline || undefined,
+      sleeveLengthType: sleeveLengthType || undefined,
+      targetGender: targetGender || undefined,
+      topLengthType: topLengthType || undefined,
+      fabric: fabric || undefined,
+      careInstructions: careInstructions ? careInstructions.split(",").map(s => s.trim()).filter(Boolean) : undefined,
+      clothingFeatures: clothingFeatures ? clothingFeatures.split(",").map(s => s.trim()).filter(Boolean) : undefined,
+    };
+    updateMutation.mutate({ groupId, categoryAttributes: attrs });
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-[10px] text-muted-foreground">Garment facts sent to Shopify on every export — fill once per group.</p>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="gap-1 text-xs text-amber-600 hover:text-amber-700"
+          disabled={suggestMutation.isPending}
+          onClick={() => suggestMutation.mutate({ groupId })}
+        >
+          <Sparkles className="w-3 h-3" />
+          {suggestMutation.isPending ? "Thinking…" : "Auto-fill with AI"}
+        </Button>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <Label className="text-[10px] text-muted-foreground">Age group</Label>
+          <Input className="h-7 text-xs" placeholder="Adults" value={ageGroup} onChange={e => setAgeGroup(e.target.value)} />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[10px] text-muted-foreground">Neckline</Label>
+          <Input className="h-7 text-xs" placeholder="Crew" value={neckline} onChange={e => setNeckline(e.target.value)} />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[10px] text-muted-foreground">Sleeve length type</Label>
+          <Input className="h-7 text-xs" placeholder="Short sleeve" value={sleeveLengthType} onChange={e => setSleeveLengthType(e.target.value)} />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[10px] text-muted-foreground">Target gender</Label>
+          <Input className="h-7 text-xs" placeholder="Unisex" value={targetGender} onChange={e => setTargetGender(e.target.value)} />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[10px] text-muted-foreground">Top length type</Label>
+          <Input className="h-7 text-xs" placeholder="Regular" value={topLengthType} onChange={e => setTopLengthType(e.target.value)} />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[10px] text-muted-foreground">Fabric</Label>
+          <Input className="h-7 text-xs" placeholder="100% ring-spun cotton" value={fabric} onChange={e => setFabric(e.target.value)} />
+        </div>
+      </div>
+      <div className="space-y-1">
+        <Label className="text-[10px] text-muted-foreground">Care instructions (comma-separated)</Label>
+        <Input className="h-7 text-xs" placeholder="Machine wash, Tumble dry" value={careInstructions} onChange={e => setCareInstructions(e.target.value)} />
+      </div>
+      <div className="space-y-1">
+        <Label className="text-[10px] text-muted-foreground">Clothing features (comma-separated)</Label>
+        <Input className="h-7 text-xs" placeholder="Relaxed fit" value={clothingFeatures} onChange={e => setClothingFeatures(e.target.value)} />
+      </div>
+      <Button
+        size="sm"
+        className="bg-green-600 hover:bg-green-700 text-white text-xs"
+        disabled={updateMutation.isPending}
+        onClick={handleSave}
+      >
+        {updateMutation.isPending ? "Saving…" : "Save"}
+      </Button>
     </div>
   );
 }
@@ -556,6 +673,14 @@ function ProductGroupCard({ groupId }: { groupId: string }) {
           <div>
             <p className="text-xs font-medium font-['Syne'] text-muted-foreground uppercase tracking-wide mb-2">Weight (oz) per Size</p>
             <SizeWeightsEditor groupId={groupId} initialWeights={data.sizeWeights as Record<string, number> | null} />
+          </div>
+
+          <Separator />
+
+          {/* Category metafields (Shopify) */}
+          <div>
+            <p className="text-xs font-medium font-['Syne'] text-muted-foreground uppercase tracking-wide mb-2">Category Metafields (Shopify)</p>
+            <CategoryAttributesEditor groupId={groupId} initial={data.categoryAttributes as CategoryAttrs | null} />
           </div>
         </CardContent>
       )}
