@@ -25,7 +25,7 @@ import {
 import { PrintZoneEditor } from "@/components/PrintZoneEditor";
 import type { PrintZoneCoords } from "@/components/PrintZoneEditor";
 import { toast } from "sonner";
-import { Loader2, Image as ImageIcon, Shirt, RefreshCw, Trash2, AlertTriangle, Move } from "lucide-react";
+import { Loader2, Image as ImageIcon, Shirt, RefreshCw, Trash2, AlertTriangle, Move, Check } from "lucide-react";
 
 export default function Mockups() {
   const { activeWorkspace } = useWorkspace();
@@ -93,15 +93,17 @@ export default function Mockups() {
   const [placementDialogOpen, setPlacementDialogOpen] = useState(false);
   const [selectedTemplateIdx, setSelectedTemplateIdx] = useState(0);
 
-  // Fetch group detail for manual placement dialog
+  // Fetch group detail (always when group selected, so button can reflect placement state)
   const groupDetail = trpc.productGroup.get.useQuery(
     { groupId: selectedGroupId! },
-    { enabled: !!selectedGroupId && placementDialogOpen }
+    { enabled: !!selectedGroupId }
   );
+  const hasManualPlacement = !!groupDetail.data?.mockups?.some((m) => m.garmentBbox);
 
   // Manual placement mutations
   const applyAll = trpc.productGroup.setManualPlacementAllColors.useMutation();
   const updateGroup = trpc.productGroup.update.useMutation();
+  const utils = trpc.useUtils();
 
   // Filter concepts that have at least one image
   const conceptsWithImages = useMemo(() => {
@@ -272,8 +274,17 @@ export default function Mockups() {
               }}
               className="w-full sm:w-auto"
             >
-              <Move className="h-4 w-4 mr-2" />
-              Manual Placement
+              {hasManualPlacement ? (
+                <>
+                  <Check className="h-4 w-4 mr-1 text-green-600" />
+                  Manual Placement (active)
+                </>
+              ) : (
+                <>
+                  <Move className="h-4 w-4 mr-1" />
+                  Manual Placement
+                </>
+              )}
             </Button>
           </div>
         </CardContent>
@@ -418,6 +429,7 @@ export default function Mockups() {
                       printZoneInches: { widthIn: zone.widthIn, heightIn: zone.heightIn },
                     });
                   }
+                  utils.productGroup.get.invalidate({ groupId: selectedGroupId! });
                   setPlacementDialogOpen(false);
                   toast.success(
                     `Placement applied to ${result.updatedCount} color${result.updatedCount !== 1 ? "s" : ""}`,
@@ -425,6 +437,24 @@ export default function Mockups() {
                   );
                 }}
               />
+              {/* Remove placement button */}
+              {hasManualPlacement && (
+                <div className="flex pt-2 border-t">
+                  <Button
+                    variant="ghost"
+                    className="text-red-600 hover:text-red-700 mr-auto"
+                    disabled={applyAll.isPending}
+                    onClick={async () => {
+                      const res = await applyAll.mutateAsync({ groupId: selectedGroupId!, printArea: null as any });
+                      toast.success(`Manual placement removed \u2014 ${res.updatedCount} colors reverted to the group default zone`);
+                      utils.productGroup.get.invalidate({ groupId: selectedGroupId! });
+                      setPlacementDialogOpen(false);
+                    }}
+                  >
+                    Remove placement
+                  </Button>
+                </div>
+              )}
             </div>
           ) : groupDetail.isLoading ? (
             <div className="flex items-center justify-center py-12">
