@@ -237,7 +237,7 @@ export const productGroupRouter = router({
         messages: [
           {
             role: "system",
-            content: `You are an apparel catalog specialist. Given a garment blank, return its Shopify category metafield values as JSON. Use Shopify's standard taxonomy value names (e.g. "Adults", "Crew", "Short sleeve", "Unisex", "Regular", "Machine wash", "Tumble dry"). If the blank is identifiable (e.g. a known Comfort Colors / Gildan / Bella+Canvas style number), use its REAL specs; otherwise give the most typical values for the product type. Never invent fabric contents you are unsure of — prefer the common spec for that style.`,
+            content: `You are an apparel catalog specialist. Given a garment blank, return its Shopify category metafield values as JSON. Use Shopify's EXACT product-taxonomy value names — verified on a live store: ageGroup "Adults"; neckline "Crew"; sleeveLengthType "Short" or "Long" (NOT "Short sleeve"); topLengthType "Medium" (NOT "Regular"); targetGender "Unisex"; careInstructions like "Machine washable", "Tumble dry" (NOT "Machine wash"). A name that deviates from the taxonomy fails to attach on export. If the blank is identifiable (e.g. a known Comfort Colors / Gildan / Bella+Canvas style number), use its REAL specs; otherwise give the most typical values for the product type. Never invent fabric contents you are unsure of — prefer the common spec for that style.`,
           },
           {
             role: "user",
