@@ -21,7 +21,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
-import { Plus, Upload, Trash2, ChevronDown, ChevronUp, Package, Target, Sparkles } from "lucide-react";
+import { Plus, Upload, Trash2, ChevronDown, ChevronUp, Package, Target, Sparkles, Star } from "lucide-react";
 import { toast } from "sonner";
 import { PrintZoneEditor, type PrintZoneCoords } from "@/components/PrintZoneEditor";
 
@@ -572,6 +572,10 @@ function ProductGroupCard({ groupId }: { groupId: string }) {
     onSuccess: () => { toast.success("Mockup removed"); utils.productGroup.get.invalidate({ groupId }); },
     onError: (err) => toast.error(err.message),
   });
+  const updateMockupMutation = trpc.productGroup.updateMockup.useMutation({
+    onSuccess: () => { utils.productGroup.get.invalidate({ groupId }); },
+    onError: (err) => toast.error(err.message),
+  });
 
   if (isLoading || !data) return <div className="h-20 bg-muted/30 rounded-lg animate-pulse" />;
 
@@ -638,6 +642,14 @@ function ProductGroupCard({ groupId }: { groupId: string }) {
                         ))}
                       </div>
                     </div>
+                    <button
+                      className="absolute top-1 left-1 p-0.5 rounded bg-black/40 hover:bg-black/60 transition-colors"
+                      title="Best seller — always include this color when the design is readable on it"
+                      aria-label="Toggle best seller"
+                      onClick={() => updateMockupMutation.mutate({ mockupId: m.id, isBestSeller: !m.isBestSeller })}
+                    >
+                      <Star className={m.isBestSeller ? "h-4 w-4 fill-yellow-400 text-yellow-500" : "h-4 w-4 text-gray-300"} />
+                    </button>
                     <button
                       className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity bg-destructive text-destructive-foreground rounded p-0.5"
                       onClick={() => deleteMockupMutation.mutate({ mockupId: m.id })}

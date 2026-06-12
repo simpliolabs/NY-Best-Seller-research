@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Heart, Trophy, Crown, ChevronDown, Camera, ChevronRight, ExternalLink, Trash2, Wand2, Loader2, Paintbrush, Shirt } from "lucide-react";
+import { Heart, Trophy, Crown, ChevronDown, Camera, ChevronRight, ExternalLink, Trash2, Wand2, Loader2, Paintbrush, Shirt, Pencil } from "lucide-react";
 import { Link } from "wouter";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { ColorSwatch } from "./ColorSwatch";
@@ -110,7 +110,13 @@ export function ConceptCard({
   const [expanded, setExpanded] = useState(false);
   const [whyExpanded, setWhyExpanded] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState(conceptName);
   const utils = trpc.useUtils();
+  const renameMutation = trpc.concepts.rename.useMutation({
+    onSuccess: () => { toast.success("Renamed"); utils.books.getById.invalidate(); setIsRenaming(false); },
+    onError: (err: any) => toast.error(err.message),
+  });
   const toggleMutation = trpc.favorites.toggle.useMutation({
     onSuccess: () => {
       utils.favorites.list.invalidate();
@@ -181,7 +187,20 @@ export function ConceptCard({
                 {isNicheWorkspace ? "New — Signal Refresh" : "New — Book Refresh"}
               </Badge>
             )}
-            <CardTitle className="text-base font-semibold text-foreground">{conceptName}</CardTitle>
+            {isRenaming ? (
+              <form className="flex items-center gap-1" onSubmit={(e) => { e.preventDefault(); const v = renameValue.trim(); if (v && v.length <= 120) renameMutation.mutate({ conceptId: id, name: v }); }}>
+                <input autoFocus className="text-sm border rounded px-1.5 py-0.5 bg-background flex-1" value={renameValue} onChange={(e) => setRenameValue(e.target.value)} maxLength={120} />
+                <button type="submit" className="text-xs text-primary font-medium" disabled={renameMutation.isPending}>Save</button>
+                <button type="button" className="text-xs text-muted-foreground" onClick={() => { setIsRenaming(false); setRenameValue(conceptName); }}>Cancel</button>
+              </form>
+            ) : (
+              <div className="flex items-center gap-1">
+                <CardTitle className="text-base font-semibold text-foreground">{conceptName}</CardTitle>
+                <button onClick={() => { setRenameValue(conceptName); setIsRenaming(true); }} className="shrink-0 p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors" title="Rename">
+                  <Pencil className="h-3 w-3" />
+                </button>
+              </div>
+            )}
             {signalTags && signalTags.length > 0 && (
               <div className="flex flex-wrap gap-1 mt-1">
                 {signalTags.slice(0, 4).map((tag) => (

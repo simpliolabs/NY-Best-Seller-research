@@ -21,7 +21,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Crosshair, CheckCircle2, XCircle, Loader2, Zap, RefreshCw,
   ExternalLink, AlertTriangle, ThumbsUp, ThumbsDown, Sparkles, ChevronDown, ChevronUp,
-  Wand2, Bot, RotateCcw, ArrowUpDown,
+  Wand2, Bot, RotateCcw, ArrowUpDown, Pencil,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -172,6 +172,7 @@ function PatternCard({
   onRestore,
   onFlagEditMode,
   onChooseConcept,
+  onRename,
   isActing,
 }: {
   pattern: Pattern;
@@ -180,15 +181,31 @@ function PatternCard({
   onRestore: (id: string) => void;
   onFlagEditMode: (id: string) => void;
   onChooseConcept: (patternId: string, concept: string) => void;
+  onRename: (id: string, name: string) => void;
   isActing: boolean;
 }) {
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState(pattern.patternName);
   return (
     <Card className="border border-border bg-card flex flex-col gap-0 min-w-0" style={{ overflowWrap: 'break-word', wordBreak: 'break-word' }}>
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-3 min-w-0">
-          <CardTitle className="text-sm font-semibold leading-snug break-words">
-            {pattern.patternName}
-          </CardTitle>
+          {isRenaming ? (
+            <form className="flex items-center gap-1 flex-1" onSubmit={(e) => { e.preventDefault(); const v = renameValue.trim(); if (v && v.length <= 120) { onRename(pattern.id, v); setIsRenaming(false); } }}>
+              <input autoFocus className="text-sm border rounded px-1.5 py-0.5 bg-background flex-1" value={renameValue} onChange={(e) => setRenameValue(e.target.value)} maxLength={120} />
+              <button type="submit" className="text-xs text-primary font-medium">Save</button>
+              <button type="button" className="text-xs text-muted-foreground" onClick={() => { setIsRenaming(false); setRenameValue(pattern.patternName); }}>Cancel</button>
+            </form>
+          ) : (
+            <div className="flex items-center gap-1 min-w-0">
+              <CardTitle className="text-sm font-semibold leading-snug break-words">
+                {pattern.patternName}
+              </CardTitle>
+              <button onClick={() => { setRenameValue(pattern.patternName); setIsRenaming(true); }} className="shrink-0 p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors" title="Rename">
+                <Pencil className="h-3 w-3" />
+              </button>
+            </div>
+          )}
           <Badge
             variant="outline"
             className="shrink-0 text-xs uppercase tracking-wide"
@@ -927,6 +944,14 @@ export default function NicheHunter() {
     onError: (err) => toast.error(err.message),
   });
 
+  const renamePatternMut = trpc.nicheHunter.renamePattern.useMutation({
+    onSuccess: () => {
+      toast.success("Renamed");
+      utils.nicheHunter.getPatterns.invalidate({ workspaceId }, { refetchType: "none" });
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
   if (!activeWorkspace) {
     return (
       <div className="flex items-center justify-center h-64 text-muted-foreground">
@@ -1214,6 +1239,7 @@ export default function NicheHunter() {
                 onChooseConcept={(patternId, concept) =>
                   chooseConceptAndGenerate.mutate({ patternId, workspaceId, chosenConcept: concept })
                 }
+                onRename={(id, name) => renamePatternMut.mutate({ patternId: id, name })}
                 isActing={actingPatternId === p.id}
               />
             ))}

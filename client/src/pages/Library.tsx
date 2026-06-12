@@ -5,7 +5,7 @@ import { ImageLightbox } from "@/components/ImageLightbox";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { LayoutGrid, List, ChevronDown, ChevronRight, BookOpen, Zap, ExternalLink, Trash2, Paintbrush, Wand2, Shirt, Loader2, Upload } from "lucide-react";
+import { LayoutGrid, List, ChevronDown, ChevronRight, BookOpen, Zap, ExternalLink, Trash2, Paintbrush, Wand2, Shirt, Loader2, Upload, Pencil } from "lucide-react";
 import { Link } from "wouter";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { toast } from "sonner";
@@ -492,6 +492,12 @@ function ConceptCard({ concept, onOpenLightbox, onDeleted }: { concept: any; onO
   const primaryImage = concept.productionUrlA || concept.imageUrlA || concept.productionUrlB || concept.imageUrlB || concept.productionUrlC || concept.imageUrlC;
   const imageCount = [concept.productionUrlA || concept.imageUrlA, concept.productionUrlB || concept.imageUrlB, concept.productionUrlC || concept.imageUrlC].filter(Boolean).length;
   const utils = trpc.useUtils();
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState(concept.conceptName ?? "");
+  const renameMutation = trpc.concepts.rename.useMutation({
+    onSuccess: () => { toast.success("Renamed"); utils.library.list.invalidate(); setIsRenaming(false); },
+    onError: (err: any) => toast.error(err.message),
+  });
   const deleteMutation = trpc.library.deleteConcept.useMutation({
     onSuccess: () => {
       onDeleted?.(concept.id);
@@ -605,7 +611,20 @@ function ConceptCard({ concept, onOpenLightbox, onDeleted }: { concept: any; onO
       {/* Info area */}
       <div className="p-3 space-y-1.5 flex-1">
         <div className="flex items-center justify-between">
-          <h4 className="text-sm font-semibold text-foreground truncate flex-1">{concept.conceptName}</h4>
+          {isRenaming ? (
+            <form className="flex-1 flex items-center gap-1" onSubmit={(e) => { e.preventDefault(); const v = renameValue.trim(); if (v && v.length <= 120) renameMutation.mutate({ conceptId: concept.id, name: v }); }}>
+              <input autoFocus className="flex-1 text-sm border rounded px-1.5 py-0.5 bg-background" value={renameValue} onChange={(e) => setRenameValue(e.target.value)} maxLength={120} onClick={(e) => e.stopPropagation()} />
+              <button type="submit" className="text-xs text-primary font-medium" onClick={(e) => e.stopPropagation()} disabled={renameMutation.isPending}>Save</button>
+              <button type="button" className="text-xs text-muted-foreground" onClick={(e) => { e.stopPropagation(); setIsRenaming(false); setRenameValue(concept.conceptName); }}>Cancel</button>
+            </form>
+          ) : (
+            <div className="flex items-center gap-1 flex-1 min-w-0">
+              <h4 className="text-sm font-semibold text-foreground truncate">{concept.conceptName}</h4>
+              <button onClick={(e) => { e.stopPropagation(); setRenameValue(concept.conceptName); setIsRenaming(true); }} className="shrink-0 p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors" title="Rename">
+                <Pencil className="h-3 w-3" />
+              </button>
+            </div>
+          )}
           <div className="flex items-center gap-0.5 shrink-0 ml-1">
             {hasImage ? (
               <>
