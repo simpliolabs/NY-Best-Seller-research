@@ -36,8 +36,10 @@ async function enclosedHole(): Promise<Buffer> {
     for (let x = 0; x < w; x++) {
       const inSquare = x >= 12 && x <= 27 && y >= 12 && y <= 27;
       const onRing = inSquare && (x <= 13 || x >= 26 || y <= 13 || y >= 26);
-      if (onRing) set(x, y, 50, 90, 180);   // continuous blue ring
-      else set(x, y, 210, 80, 150);          // magenta: both the enclosed interior and the outer bg
+      const inside = inSquare && !onRing;
+      if (onRing) set(x, y, 50, 90, 180);        // continuous blue ring
+      else if (inside) set(x, y, 244, 92, 212);  // BRIGHTER enclosed magenta — real net-hole colour, ~80 from the corner
+      else set(x, y, 210, 80, 150);              // outer magenta background (the sampled corner)
     }
   return sharp(buf, { raw: { width: w, height: h, channels: 4 } }).png().toBuffer();
 }

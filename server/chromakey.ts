@@ -15,6 +15,9 @@
 import sharp from "sharp";
 
 const FLOOD_FILL_TOLERANCE = 40;
+// Hue test for the magenta key: red AND blue both this far above green. Brightness-independent, so it
+// catches the render's VARIABLE magenta (flat ~210,80,150 corner vs brighter ~244,92,212 mesh holes).
+const MAGENTA_MARGIN = 25;
 
 /**
  * Remove the background from an image using corner-sampled flood-fill chromakey.
@@ -78,12 +81,17 @@ export async function chromakeyFromCorners(imageBuf: Buffer): Promise<Buffer> {
 
   // Global key (PO 2026-06-11): the edge-connected flood-fill leaves magenta that is fully ENCLOSED
   // by the art — a net's mesh holes, each ringed by threads — unreachable from the border, so it
-  // stayed opaque magenta (the live "magenta net"). Key any remaining pixel still within tolerance of
-  // the key colour. Safe for a chroma-key render: the art is drawn to avoid the magenta key, so any
-  // leftover magenta is the background showing through (the net holes are the shirt, not the design).
+  // stays opaque (the live "magenta net"). A distance-to-corner test also misses it: the holes read a
+  // brighter magenta (~244,92,212) than the sampled corner (~210,80,150), ~80 away. So key by HUE —
+  // any opaque pixel whose red AND blue both sit well above green IS the magenta key, at any
+  // brightness. Safe for a chroma-key render: the art avoids magenta, so this is background showing
+  // through (holes = shirt). Verified on the real production net: clears the mesh, leaves text/ball
+  // /frame intact.
   for (let pos = 0; pos < width * height; pos++) {
-    if (output[pos * channels + 3] === 0) continue;
-    if (colorDist(pos * channels) <= FLOOD_FILL_TOLERANCE) output[pos * channels + 3] = 0;
+    const idx = pos * channels;
+    if (output[idx + 3] === 0) continue;
+    const r = output[idx], g = output[idx + 1], b = output[idx + 2];
+    if (r > g + MAGENTA_MARGIN && b > g + MAGENTA_MARGIN) output[idx + 3] = 0;
   }
 
   // Despill the magenta fringe (PO 2026-06-11). The flood-fill above is BINARY — anti-aliased art
