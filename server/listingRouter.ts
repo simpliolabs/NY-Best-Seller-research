@@ -260,9 +260,13 @@ export const listingRouter = router({
       const colorNames = Array.from(new Set(selectedRenders.map((r) => colorByTemplate.get(r.templateId)).filter((c): c is string => !!c)));
 
       // Sizes + per-size price from the group's pricing tiers (#2).
-      const tiers = (group?.pricingTiers ?? []) as Array<{ sizes: string[]; price: number }>;
+      const tiers = (group?.pricingTiers ?? []) as Array<{ sizes: string[]; price: number; cost?: number }>;
       const sizePrice = new Map<string, string>();
-      for (const tier of tiers) for (const sz of tier.sizes) sizePrice.set(sz, String(tier.price));
+      const sizeCost = new Map<string, string>();
+      for (const tier of tiers) for (const sz of tier.sizes) {
+        sizePrice.set(sz, String(tier.price));
+        if (tier.cost != null) sizeCost.set(sz, String(tier.cost));
+      }
       const sizes = Array.from(sizePrice.keys());
 
       // SKU pieces (#4): BASE(group)-SIZE-COLOR(abbr)-DESIGN(abbr), e.g. 1717-M-ESP-DNK.
@@ -310,18 +314,19 @@ export const listingRouter = router({
         }
       }
 
-      // Stock 100/variant (#5) + cost per item (#3). Shopify sets stock via the InventoryLevel
-      // resource and cost via the InventoryItem (neither is settable on variant create). Best-effort
-      // per variant — the product already exists, so an inventory/cost failure must never block publish.
+      // Stock 100/variant (#5) + per-tier cost (#3). Shopify sets stock via the InventoryLevel
+      // resource and cost via the InventoryItem (neither is settable on variant create). Cost is by
+      // PRICING TIER (COGS varies by size) — looked up per variant by its size. Best-effort per
+      // variant — the product already exists, so an inventory/cost failure must never block publish.
       try {
         const locationId = await getPrimaryLocationId(creds);
-        const cost = (group as any)?.costPerItem ? String((group as any).costPerItem) : null;
         for (const v of product.variants ?? []) {
           if (!v.inventory_item_id) continue;
           if (locationId) {
             try { await setInventoryLevel(creds, locationId, v.inventory_item_id, 100); }
             catch (e) { console.warn(`[publishToShopify] stock set failed for variant ${v.id}:`, e); }
           }
+          const cost = v.option1 ? sizeCost.get(v.option1) : undefined; // per-tier COGS, by the variant's size
           if (cost) {
             try { await setInventoryItemCost(creds, v.inventory_item_id, cost); }
             catch (e) { console.warn(`[publishToShopify] cost set failed for variant ${v.id}:`, e); }

@@ -320,10 +320,11 @@ export const productGroups = mysqlTable("product_groups", {
   /** Product type label used in listing titles, e.g. "T-Shirt", "Crewneck", "Hoodie" */
   productType: varchar("productType", { length: 100 }).default("T-Shirt"),
   compareAtPrice: decimal("compareAtPrice", { precision: 10, scale: 2 }),
-  /** Cost per item (COGS) — sent to Shopify as the variant InventoryItem cost. PO 2026-06-11. */
+  /** DEPRECATED 2026-06-11: cost is now PER pricing tier (pricingTiers[].cost) — COGS varies by size.
+   *  Column kept unused (no drop-migration); the per-tier cost in the JSON below is the source of truth. */
   costPerItem: decimal("costPerItem", { precision: 10, scale: 2 }),
-  /** JSON: [{sizes: ["S","M","L","XL"], price: 34.95}, {sizes: ["2XL"], price: 37.95}, ...] */
-  pricingTiers: json("pricingTiers").$type<Array<{ sizes: string[]; price: number }>>(),
+  /** JSON: [{sizes:["S","M","L","XL"], price:34.95, cost:8.50}, ...] — price = sale, cost = COGS, per tier. */
+  pricingTiers: json("pricingTiers").$type<Array<{ sizes: string[]; price: number; cost?: number }>>(),
   /** Print zone — photo-relative ratios 0-1. x/y/width/height = the GROUP-level fallback box
    * (used when a color template has no per-template box). widthIn/heightIn = the real-world MAX
    * print-area size in INCHES (shared per group; the editor aspect-locks each box to this).

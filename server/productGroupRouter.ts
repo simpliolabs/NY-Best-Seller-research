@@ -22,6 +22,7 @@ import { DEFAULT_PRINT_AREA } from "./mockupCompositor";
 const pricingTierSchema = z.object({
   sizes: z.array(z.string()),
   price: z.number().positive(),
+  cost: z.number().nonnegative().optional(), // per-tier COGS — sent to Shopify as the variant inventory cost
 });
 
 export const productGroupRouter = router({
