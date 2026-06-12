@@ -13,8 +13,10 @@ import crypto from "crypto";
 import { getCredential, setCredential } from "./workspaceDb";
 
 // write_inventory + read_locations: set stock levels + per-variant cost. write_publications: publish
-// to the Online Store + Shop sales channels. (Ungate these in the Shopify app config too — PO 2026-06-11.)
-const SCOPES = "write_products,read_products,read_locations,write_inventory,write_publications";
+// to the Online Store + Shop sales channels. read/write_metaobjects: resolve + auto-create colour
+// swatch metaobjects and category-metafield values. (Each scope must ALSO be enabled in the Shopify
+// app version's config — the granted set follows the app config, not just this request list.)
+const SCOPES = "write_products,read_products,read_locations,write_inventory,write_publications,read_metaobjects,write_metaobjects";
 
 /** A Shopify shop's admin host — the ONLY kind of host we will ever build an OAuth authorize or
  *  token-exchange URL against. Single-label `<shop>.myshopify.com` only. */
