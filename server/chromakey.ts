@@ -76,6 +76,16 @@ export async function chromakeyFromCorners(imageBuf: Buffer): Promise<Buffer> {
     }
   }
 
+  // Global key (PO 2026-06-11): the edge-connected flood-fill leaves magenta that is fully ENCLOSED
+  // by the art — a net's mesh holes, each ringed by threads — unreachable from the border, so it
+  // stayed opaque magenta (the live "magenta net"). Key any remaining pixel still within tolerance of
+  // the key colour. Safe for a chroma-key render: the art is drawn to avoid the magenta key, so any
+  // leftover magenta is the background showing through (the net holes are the shirt, not the design).
+  for (let pos = 0; pos < width * height; pos++) {
+    if (output[pos * channels + 3] === 0) continue;
+    if (colorDist(pos * channels) <= FLOOD_FILL_TOLERANCE) output[pos * channels + 3] = 0;
+  }
+
   // Despill the magenta fringe (PO 2026-06-11). The flood-fill above is BINARY — anti-aliased art
   // edges that blend toward the magenta render background (fine net grids, thin linework) survive
   // fully opaque with magenta-contaminated RGB, showing as a bright pink fringe on the final mockup.

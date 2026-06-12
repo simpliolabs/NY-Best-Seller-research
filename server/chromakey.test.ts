@@ -25,6 +25,23 @@ async function antialiasedEdge(): Promise<Buffer> {
   return sharp(buf, { raw: { width: w, height: h, channels: 4 } }).png().toBuffer();
 }
 
+/** 40x40: magenta everywhere, with a SOLID 2px blue ring enclosing an inner magenta region — a "net
+ *  mesh hole" the border-seeded flood-fill cannot reach. The inner magenta must still get keyed. */
+async function enclosedHole(): Promise<Buffer> {
+  const w = 40, h = 40, buf = Buffer.alloc(w * h * 4);
+  const set = (x: number, y: number, r: number, g: number, b: number) => {
+    const i = (y * w + x) * 4; buf[i] = r; buf[i + 1] = g; buf[i + 2] = b; buf[i + 3] = 255;
+  };
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const inSquare = x >= 12 && x <= 27 && y >= 12 && y <= 27;
+      const onRing = inSquare && (x <= 13 || x >= 26 || y <= 13 || y >= 26);
+      if (onRing) set(x, y, 50, 90, 180);   // continuous blue ring
+      else set(x, y, 210, 80, 150);          // magenta: both the enclosed interior and the outer bg
+    }
+  return sharp(buf, { raw: { width: w, height: h, channels: 4 } }).png().toBuffer();
+}
+
 async function px(buf: Buffer, x: number, y: number) {
   const { data, info } = await sharp(buf).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   const i = (y * info.width + x) * info.channels;
@@ -53,5 +70,14 @@ describe("chromakeyFromCorners — magenta despill", () => {
       expect(edge.r).toBeLessThanOrEqual(edge.g + 16);
       expect(edge.b).toBeLessThanOrEqual(edge.g + 16);
     }
+  });
+
+  it("keys magenta ENCLOSED by the art (net mesh holes), not just the border", async () => {
+    const out = await chromakeyFromCorners(await enclosedHole());
+    expect((await px(out, 0, 0)).a).toBe(0);   // outer background keyed
+    expect((await px(out, 20, 20)).a).toBe(0); // enclosed magenta keyed — the fix
+    const ring = await px(out, 12, 20);
+    expect(ring.a).toBe(255);                  // blue ring preserved
+    expect(ring.b).toBeGreaterThan(ring.r);
   });
 });
