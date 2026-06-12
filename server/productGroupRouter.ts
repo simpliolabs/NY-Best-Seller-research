@@ -190,6 +190,7 @@ export const productGroupRouter = router({
         colorHex: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
         availableSizes: z.array(z.string()).min(1).optional(),
         sortOrder: z.number().int().min(0).optional(),
+        isBestSeller: z.boolean().optional(),
         printArea: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional(),
       })
     )

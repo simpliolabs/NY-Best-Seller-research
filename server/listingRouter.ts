@@ -189,7 +189,18 @@ export const listingRouter = router({
       const writes = exported?.shopifyProductId
         ? await diagnoseInventoryWrites(creds, Number(exported.shopifyProductId))
         : { note: "no exported listing to test" };
-      return { grantedScope, locationId, locationError, testedProductId: exported?.shopifyProductId ?? null, writes };
+      // Category-metafields test (PO 2026-06-12: "rest of metafields did not ship"): run the exact
+      // export step against the latest exported product and surface the real warnings. If it works,
+      // it also FILLS that product's metafields in place.
+      let categoryMetafields: unknown = { note: "no exported listing to test" };
+      if (exported?.shopifyProductId && exported.productGroupId) {
+        const grp = await getProductGroupById(exported.productGroupId);
+        const attrs = (grp as any)?.categoryAttributes;
+        categoryMetafields = attrs && Object.keys(attrs).length
+          ? { warnings: await setCategoryAttributeMetafields(creds, Number(exported.shopifyProductId), attrs) }
+          : { note: "group has no saved categoryAttributes" };
+      }
+      return { grantedScope, locationId, locationError, testedProductId: exported?.shopifyProductId ?? null, writes, categoryMetafields };
     }),
 
   /**

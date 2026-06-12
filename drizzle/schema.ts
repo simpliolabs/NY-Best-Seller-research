@@ -377,6 +377,9 @@ export const mockupTemplates = mysqlTable("mockup_templates", {
    * old vision-LLM bbox meaning is dead. One-time NULL-clear of stale vision boxes is a deploy
    * prerequisite so they don't win the fallback. (A later cosmetic rename can align the name.) */
   garmentBbox: json("garmentBbox").$type<{ x: number; y: number; width: number; height: number }>(),
+  /** Best-seller blank (PO 2026-06-12, e.g. Espresso for Comfort Colors): when the design is
+   *  READABLE on it, the colour matcher always includes it in the picked set. */
+  isBestSeller: boolean("isBestSeller").notNull().default(false),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type MockupTemplate = typeof mockupTemplates.$inferSelect;

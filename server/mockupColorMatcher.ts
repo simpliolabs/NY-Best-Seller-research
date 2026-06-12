@@ -108,7 +108,7 @@ export async function pickBestColors(
 
   const scored = templates.map((t) => {
     const blank = hexToRgb(t.colorHex);
-    if (!blank) return { t, score: -1 }; // malformed hex sinks to the bottom
+    if (!blank) return { t, score: -1, worstSig: 0 }; // malformed hex sinks to the bottom
     let score = 0;
     let worstSig = 1; // visibility of the least-visible SIGNIFICANT ink on this blank
     for (const c of palette) {
@@ -118,9 +118,24 @@ export async function pickBestColors(
     }
     // smooth, deterministic penalty: every significant ink must remain readable
     if (worstSig < MIN_SIG_VISIBILITY) score *= worstSig / MIN_SIG_VISIBILITY;
-    return { t, score };
+    return { t, score, worstSig };
   });
 
   scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, count).map((s) => s.t);
+  const pick = scored.slice(0, count);
+
+  // Best-seller guarantee (PO 2026-06-12, e.g. Espresso): a flagged blank on which the design is
+  // READABLE (every significant ink above the floor) always makes the set — it replaces the lowest-
+  // scored non-best-seller pick. An unreadable best-seller is still excluded (readability wins).
+  const mustInclude = scored.filter(
+    (s) => s.t.isBestSeller && s.worstSig >= MIN_SIG_VISIBILITY && !pick.includes(s)
+  );
+  for (const m of mustInclude) {
+    for (let i = pick.length - 1; i >= 0; i--) {
+      if (!pick[i].t.isBestSeller) { pick[i] = m; break; }
+    }
+  }
+
+  pick.sort((a, b) => b.score - a.score);
+  return pick.map((s) => s.t);
 }
