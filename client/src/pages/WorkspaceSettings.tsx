@@ -353,11 +353,11 @@ export default function WorkspaceSettings() {
                   <li>In Shopify Admin → <strong>Settings → Apps and sales channels → Develop apps</strong></li>
                   <li>Click <strong>Create an app</strong> → name it (e.g. "NYT-Design")</li>
                   <li>Go to <strong>Configuration → Admin API integration</strong></li>
-                  <li>Under <strong>Admin API access scopes</strong>, enable: <code className="bg-blue-100 px-1 rounded">write_products</code>, <code className="bg-blue-100 px-1 rounded">read_products</code></li>
+                  <li>Under <strong>Admin API access scopes</strong>, enable: <code className="bg-blue-100 px-1 rounded">write_products</code>, <code className="bg-blue-100 px-1 rounded">read_products</code>, <code className="bg-blue-100 px-1 rounded">read_locations</code>, <code className="bg-blue-100 px-1 rounded">write_inventory</code>, <code className="bg-blue-100 px-1 rounded">write_publications</code></li>
                   <li>Under <strong>URLs → Allowed redirection URL(s)</strong>, add the callback URL below</li>
                   <li>Copy your <strong>Client ID</strong> and <strong>Client Secret</strong> from the app's Settings → Credentials page</li>
                 </ol>
-                <p className="text-xs text-blue-600 mt-1">Required scopes: <code className="bg-blue-100 px-1 rounded">write_products</code>, <code className="bg-blue-100 px-1 rounded">read_products</code></p>
+                <p className="text-xs text-blue-600 mt-1">Required scopes: <code className="bg-blue-100 px-1 rounded">write_products</code>, <code className="bg-blue-100 px-1 rounded">read_products</code>, <code className="bg-blue-100 px-1 rounded">read_locations</code>, <code className="bg-blue-100 px-1 rounded">write_inventory</code>, <code className="bg-blue-100 px-1 rounded">write_publications</code></p>
               </div>
 
               {/* Callback URL */}

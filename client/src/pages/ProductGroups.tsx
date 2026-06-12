@@ -34,12 +34,12 @@ function CreateGroupDialog({ workspaceId, onCreated }: { workspaceId: string; on
   const [slug, setSlug] = useState("");
   const [description, setDescription] = useState("");
   const [productType, setProductType] = useState("T-Shirt");
-  const [compareAtPrice, setCompareAtPrice] = useState("");
+
   const createMutation = trpc.productGroup.create.useMutation({
     onSuccess: () => {
       toast.success("Product group created");
       setOpen(false);
-      setName(""); setSlug(""); setDescription(""); setProductType("T-Shirt"); setCompareAtPrice("");
+      setName(""); setSlug(""); setDescription(""); setProductType("T-Shirt");
       onCreated();
     },
     onError: (err) => toast.error(err.message),
@@ -80,11 +80,7 @@ function CreateGroupDialog({ workspaceId, onCreated }: { workspaceId: string; on
             <Input placeholder="T-Shirt" value={productType} onChange={e => setProductType(e.target.value)} />
             <p className="text-xs text-muted-foreground">Used in listing titles, e.g. "Master the Drop T-Shirt"</p>
           </div>
-          <div className="space-y-1">
-            <Label>Compare-At Price ($)</Label>
-            <Input type="number" step="0.01" placeholder="49.95" value={compareAtPrice} onChange={e => setCompareAtPrice(e.target.value)} />
-            <p className="text-xs text-muted-foreground">The strikethrough price shown to customers</p>
-          </div>
+
           <Button
             className="w-full bg-green-600 hover:bg-green-700 text-white"
             disabled={!name || !slug || createMutation.isPending}
@@ -94,7 +90,6 @@ function CreateGroupDialog({ workspaceId, onCreated }: { workspaceId: string; on
               slug,
               description: description || undefined,
               productType: productType || "T-Shirt",
-              compareAtPrice: compareAtPrice ? parseFloat(compareAtPrice) : undefined,
             })}
           >
             {createMutation.isPending ? "Creating…" : "Create Group"}
@@ -106,8 +101,8 @@ function CreateGroupDialog({ workspaceId, onCreated }: { workspaceId: string; on
 }
 
 // ─── Pricing Tiers Editor ──────────────────────────────────────────────────────
-function PricingTiersEditor({ groupId, initialTiers }: { groupId: string; initialTiers: Array<{ sizes: string[]; price: number; cost?: number }> | null }) {
-  const [tiers, setTiers] = useState<Array<{ sizes: string[]; price: number; cost?: number }>>(
+function PricingTiersEditor({ groupId, initialTiers }: { groupId: string; initialTiers: Array<{ sizes: string[]; price: number; cost?: number; compareAt?: number }> | null }) {
+  const [tiers, setTiers] = useState<Array<{ sizes: string[]; price: number; cost?: number; compareAt?: number }>>(
     initialTiers ?? [{ sizes: ["S", "M", "L", "XL"], price: 34.95 }]
   );
   const utils = trpc.useUtils();
@@ -130,6 +125,9 @@ function PricingTiersEditor({ groupId, initialTiers }: { groupId: string; initia
   };
   const setCost = (tierIdx: number, cost: string) => {
     setTiers(prev => prev.map((t, i) => i === tierIdx ? { ...t, cost: cost ? parseFloat(cost) : undefined } : t));
+  };
+  const setCompareAt = (tierIdx: number, val: string) => {
+    setTiers(prev => prev.map((t, i) => i === tierIdx ? { ...t, compareAt: val ? parseFloat(val) : undefined } : t));
   };
 
   return (
@@ -159,13 +157,22 @@ function PricingTiersEditor({ groupId, initialTiers }: { groupId: string; initia
               </button>
             ))}
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             <div className="flex items-center gap-2">
-              <Label className="text-xs whitespace-nowrap">Sale Price ($)</Label>
+              <Label className="text-xs whitespace-nowrap">Sale ($)</Label>
               <Input
                 type="number" step="0.01" className="h-7 text-sm"
                 value={tier.price || ""}
                 onChange={e => setPrice(i, e.target.value)}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Label className="text-xs whitespace-nowrap">Compare ($)</Label>
+              <Input
+                type="number" step="0.01" className="h-7 text-sm"
+                placeholder="0.00"
+                value={tier.compareAt ?? ""}
+                onChange={e => setCompareAt(i, e.target.value)}
               />
             </div>
             <div className="flex items-center gap-2">
@@ -193,6 +200,53 @@ function PricingTiersEditor({ groupId, initialTiers }: { groupId: string; initia
           {updateMutation.isPending ? "Saving…" : "Save Pricing"}
         </Button>
       </div>
+    </div>
+  );
+}
+
+// ─── Size Weights Editor ──────────────────────────────────────────────────────
+function SizeWeightsEditor({ groupId, initialWeights }: { groupId: string; initialWeights: Record<string, number> | null }) {
+  const [weights, setWeights] = useState<Record<string, number>>(initialWeights ?? {});
+  const utils = trpc.useUtils();
+
+  const updateMutation = trpc.productGroup.update.useMutation({
+    onSuccess: () => { toast.success("Weights saved"); utils.productGroup.get.invalidate({ groupId }); },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const setWeight = (size: string, val: string) => {
+    setWeights(prev => {
+      const next = { ...prev };
+      if (val) next[size] = parseFloat(val);
+      else delete next[size];
+      return next;
+    });
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-4 sm:grid-cols-8 gap-2">
+        {ALL_SIZES.map(size => (
+          <div key={size} className="space-y-1">
+            <Label className="text-[10px] text-center block text-muted-foreground">{size}</Label>
+            <Input
+              type="number" step="0.1" className="h-7 text-xs text-center px-1"
+              placeholder="—"
+              value={weights[size] ?? ""}
+              onChange={e => setWeight(size, e.target.value)}
+            />
+          </div>
+        ))}
+      </div>
+      <Button
+        size="sm"
+        className="bg-green-600 hover:bg-green-700 text-white text-xs"
+        disabled={updateMutation.isPending}
+        onClick={() => updateMutation.mutate({ groupId, sizeWeights: weights })}
+      >
+        {updateMutation.isPending ? "Saving…" : "Save Weights"}
+      </Button>
+      <p className="text-[10px] text-muted-foreground">Sent to Shopify as variant weight (converted to grams).</p>
     </div>
   );
 }
@@ -417,8 +471,7 @@ function ProductGroupCard({ groupId }: { groupId: string }) {
           <div>
             <CardTitle className="font-['Syne'] text-base">{data.name}</CardTitle>
             <CardDescription className="text-xs mt-0.5">
-              {data.mockups.length} mockup{data.mockups.length !== 1 ? "s" : ""} ·{" "}
-              {data.compareAtPrice ? `Compare at $${data.compareAtPrice}` : "No compare-at price set"}
+              {data.mockups.length} mockup{data.mockups.length !== 1 ? "s" : ""}
               {currentZone && (
                 <> · <span className="text-green-600">Print zone set</span></>
               )}
@@ -494,7 +547,15 @@ function ProductGroupCard({ groupId }: { groupId: string }) {
           {/* Pricing tiers */}
           <div>
             <p className="text-xs font-medium font-['Syne'] text-muted-foreground uppercase tracking-wide mb-2">Pricing Tiers</p>
-            <PricingTiersEditor groupId={groupId} initialTiers={data.pricingTiers as Array<{ sizes: string[]; price: number; cost?: number }> | null} />
+            <PricingTiersEditor groupId={groupId} initialTiers={data.pricingTiers as Array<{ sizes: string[]; price: number; cost?: number; compareAt?: number }> | null} />
+          </div>
+
+          <Separator />
+
+          {/* Weight per size */}
+          <div>
+            <p className="text-xs font-medium font-['Syne'] text-muted-foreground uppercase tracking-wide mb-2">Weight (oz) per Size</p>
+            <SizeWeightsEditor groupId={groupId} initialWeights={data.sizeWeights as Record<string, number> | null} />
           </div>
         </CardContent>
       )}
