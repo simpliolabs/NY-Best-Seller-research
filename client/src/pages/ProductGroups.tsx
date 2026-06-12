@@ -106,8 +106,8 @@ function CreateGroupDialog({ workspaceId, onCreated }: { workspaceId: string; on
 }
 
 // ─── Pricing Tiers Editor ──────────────────────────────────────────────────────
-function PricingTiersEditor({ groupId, initialTiers }: { groupId: string; initialTiers: Array<{ sizes: string[]; price: number }> | null }) {
-  const [tiers, setTiers] = useState<Array<{ sizes: string[]; price: number }>>(
+function PricingTiersEditor({ groupId, initialTiers }: { groupId: string; initialTiers: Array<{ sizes: string[]; price: number; cost?: number }> | null }) {
+  const [tiers, setTiers] = useState<Array<{ sizes: string[]; price: number; cost?: number }>>(
     initialTiers ?? [{ sizes: ["S", "M", "L", "XL"], price: 34.95 }]
   );
   const utils = trpc.useUtils();
@@ -127,6 +127,9 @@ function PricingTiersEditor({ groupId, initialTiers }: { groupId: string; initia
   };
   const setPrice = (tierIdx: number, price: string) => {
     setTiers(prev => prev.map((t, i) => i === tierIdx ? { ...t, price: parseFloat(price) || 0 } : t));
+  };
+  const setCost = (tierIdx: number, cost: string) => {
+    setTiers(prev => prev.map((t, i) => i === tierIdx ? { ...t, cost: cost ? parseFloat(cost) : undefined } : t));
   };
 
   return (
@@ -156,13 +159,24 @@ function PricingTiersEditor({ groupId, initialTiers }: { groupId: string; initia
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-2">
-            <Label className="text-xs whitespace-nowrap">Sale Price ($)</Label>
-            <Input
-              type="number" step="0.01" className="h-7 text-sm"
-              value={tier.price || ""}
-              onChange={e => setPrice(i, e.target.value)}
-            />
+          <div className="grid grid-cols-2 gap-2">
+            <div className="flex items-center gap-2">
+              <Label className="text-xs whitespace-nowrap">Sale Price ($)</Label>
+              <Input
+                type="number" step="0.01" className="h-7 text-sm"
+                value={tier.price || ""}
+                onChange={e => setPrice(i, e.target.value)}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Label className="text-xs whitespace-nowrap">Cost ($)</Label>
+              <Input
+                type="number" step="0.01" className="h-7 text-sm"
+                placeholder="0.00"
+                value={tier.cost ?? ""}
+                onChange={e => setCost(i, e.target.value)}
+              />
+            </div>
           </div>
         </div>
       ))}
