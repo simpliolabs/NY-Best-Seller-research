@@ -98,11 +98,16 @@ export default function Mockups() {
     { groupId: selectedGroupId! },
     { enabled: !!selectedGroupId }
   );
-  const hasManualPlacement = !!groupDetail.data?.mockups?.some((m) => m.garmentBbox);
+
+  // Per-design placement (concept + group)
+  const placementQuery = trpc.mockup.getConceptPlacement.useQuery(
+    { conceptId: Number(selectedConceptId!), productGroupId: selectedGroupId! },
+    { enabled: !!selectedConceptId && !!selectedGroupId }
+  );
+  const hasManualPlacement = !!placementQuery.data;
 
   // Manual placement mutations
-  const applyAll = trpc.productGroup.setManualPlacementAllColors.useMutation();
-  const updateGroup = trpc.productGroup.update.useMutation();
+  const setPlacement = trpc.mockup.setConceptPlacement.useMutation();
   const utils = trpc.useUtils();
 
   // Filter concepts that have at least one image
@@ -291,12 +296,12 @@ export default function Mockups() {
                 variant="ghost"
                 size="sm"
                 className="text-red-600 hover:text-red-700"
-                disabled={applyAll.isPending}
+                disabled={setPlacement.isPending}
                 onClick={async () => {
-                  if (!window.confirm("Remove the manual placement for ALL colors? Mockups revert to the group default zone.")) return;
-                  const res = await applyAll.mutateAsync({ groupId: selectedGroupId!, printArea: null as any });
-                  toast.success(`Manual placement removed \u2014 ${res.updatedCount} colors reverted`);
-                  utils.productGroup.get.invalidate({ groupId: selectedGroupId! });
+                  if (!window.confirm("Remove this design's manual placement? Mockups revert to the group calibration.")) return;
+                  await setPlacement.mutateAsync({ conceptId: Number(selectedConceptId!), productGroupId: selectedGroupId!, printArea: null });
+                  toast.success("Manual placement removed \u2014 mockups revert to group calibration");
+                  utils.mockup.getConceptPlacement.invalidate({ conceptId: Number(selectedConceptId!), productGroupId: selectedGroupId! });
                 }}
               >
                 <X className="h-4 w-4 mr-1" /> Remove placement
@@ -425,32 +430,23 @@ export default function Mockups() {
                 ))}
               </div>
               <p className="text-xs text-muted-foreground">
-                Draw the print zone on one color — it copies to all colors on save.
+                Applies to THIS design only \u2014 garment print areas are calibrated on the Product Groups page.
               </p>
               {/* PrintZoneEditor */}
               <PrintZoneEditor
                 imageUrl={groupDetail.data.mockups[selectedTemplateIdx].imageUrl}
-                initialZone={groupDetail.data.mockups[selectedTemplateIdx].garmentBbox ?? null}
-                saving={applyAll.isPending}
+                initialZone={placementQuery.data ?? null}
+                saving={setPlacement.isPending}
                 onCancel={() => setPlacementDialogOpen(false)}
                 onSave={async (zone: PrintZoneCoords) => {
-                  const result = await applyAll.mutateAsync({
-                    groupId: selectedGroupId!,
+                  await setPlacement.mutateAsync({
+                    conceptId: Number(selectedConceptId!),
+                    productGroupId: selectedGroupId!,
                     printArea: { x: zone.x, y: zone.y, width: zone.width, height: zone.height },
                   });
-                  // Persist the real-world print SIZE in inches (group-level)
-                  if (zone.widthIn && zone.heightIn) {
-                    await updateGroup.mutateAsync({
-                      groupId: selectedGroupId!,
-                      printZoneInches: { widthIn: zone.widthIn, heightIn: zone.heightIn },
-                    });
-                  }
-                  utils.productGroup.get.invalidate({ groupId: selectedGroupId! });
+                  utils.mockup.getConceptPlacement.invalidate({ conceptId: Number(selectedConceptId!), productGroupId: selectedGroupId! });
                   setPlacementDialogOpen(false);
-                  toast.success(
-                    `Placement applied to ${result.updatedCount} color${result.updatedCount !== 1 ? "s" : ""}`,
-                    { description: "Regenerate mockups to apply the new placement." }
-                  );
+                  toast.success("Placement saved for this design");
                 }}
               />
 
