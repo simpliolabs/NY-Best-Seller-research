@@ -515,9 +515,9 @@ function ListingCard({
               Publish to Shopify
             </Button>
           )}
-          {listing.status === "exported" && listing.shopifyProductId && (
+          {listing.status === "exported" && listing.shopifyAdminUrl && (
             <a
-              href={`https://admin.shopify.com/store/${listing.shopifyProductId}`}
+              href={listing.shopifyAdminUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
