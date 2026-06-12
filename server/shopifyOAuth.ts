@@ -192,9 +192,11 @@ export function registerShopifyOAuthRoutes(app: Express) {
         return;
       }
 
-      // Persist the access token and store domain
+      // Persist the access token, store domain, and the scopes Shopify actually GRANTED (so we can
+      // verify a reconnect picked up the new inventory/channel permissions). PO 2026-06-12.
       await setCredential(workspaceId, "shopify", "accessToken", accessToken);
       await setCredential(workspaceId, "shopify", "storeDomain", storeDomain);
+      await setCredential(workspaceId, "shopify", "grantedScope", tokenData.scope ?? "");
 
       // Clean up temp nonce
       await setCredential(workspaceId, "shopify", "oauthNonce", "");

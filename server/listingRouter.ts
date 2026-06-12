@@ -168,6 +168,25 @@ export const listingRouter = router({
       }));
     }),
 
+  /** TEMP diagnostic (PO 2026-06-12): does the live Shopify token have inventory/location access?
+   *  Read-only — just lists locations. If this 403s, the reconnect didn't grant the new scopes; if it
+   *  returns a location id, the scopes are fine and the inventory WRITE calls are the bug. */
+  diagnoseShopify: protectedProcedure
+    .input(z.object({ workspaceId: z.string() }))
+    .query(async ({ input }) => {
+      const storeDomain = await getCredential(input.workspaceId, "shopify", "storeDomain");
+      const accessToken = await getCredential(input.workspaceId, "shopify", "accessToken");
+      const grantedScope = await getCredential(input.workspaceId, "shopify", "grantedScope");
+      let locationId: number | null = null;
+      let locationError: string | null = null;
+      try {
+        locationId = await getPrimaryLocationId({ storeDomain: storeDomain ?? "", accessToken: accessToken ?? "" });
+      } catch (e: any) {
+        locationError = String(e?.message ?? e).slice(0, 240);
+      }
+      return { grantedScope, locationId, locationError };
+    }),
+
   /**
    * Get a single listing by ID.
    */
