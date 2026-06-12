@@ -18,7 +18,7 @@ import { getConceptById } from "./db";
 import { getProductGroupById, getMockupsByGroup } from "./productGroupDb";
 import { invokeLLM } from "./_core/llm";
 import { getCredential } from "./workspaceDb";
-import { createProduct, addProductImageByUrl, setProductMetafield, getPrimaryLocationId, setInventoryLevel, setInventoryItemCost, publishProductToChannels, setProductCategory, TSHIRT_CATEGORY_GID } from "./shopifyClient";
+import { createProduct, addProductImageByUrl, setProductMetafield, getPrimaryLocationId, setInventoryLevel, setInventoryItemCost, publishProductToChannels, setProductCategory, TSHIRT_CATEGORY_GID, diagnoseInventoryWrites } from "./shopifyClient";
 import { getMockupsByConceptVariation } from "./mockupDb";
 
 /** 3-char uppercase abbreviation for SKUs: keep the first letter, then the next consonants
@@ -177,14 +177,15 @@ export const listingRouter = router({
       const storeDomain = await getCredential(input.workspaceId, "shopify", "storeDomain");
       const accessToken = await getCredential(input.workspaceId, "shopify", "accessToken");
       const grantedScope = await getCredential(input.workspaceId, "shopify", "grantedScope");
+      const creds = { storeDomain: storeDomain ?? "", accessToken: accessToken ?? "" };
       let locationId: number | null = null;
       let locationError: string | null = null;
-      try {
-        locationId = await getPrimaryLocationId({ storeDomain: storeDomain ?? "", accessToken: accessToken ?? "" });
-      } catch (e: any) {
-        locationError = String(e?.message ?? e).slice(0, 240);
-      }
-      return { grantedScope, locationId, locationError };
+      try { locationId = await getPrimaryLocationId(creds); } catch (e: any) { locationError = String(e?.message ?? e).slice(0, 240); }
+      const exported = (await getListingsByWorkspace(input.workspaceId, "exported"))[0];
+      const writes = exported?.shopifyProductId
+        ? await diagnoseInventoryWrites(creds, Number(exported.shopifyProductId))
+        : { note: "no exported listing to test" };
+      return { grantedScope, locationId, locationError, testedProductId: exported?.shopifyProductId ?? null, writes };
     }),
 
   /**

@@ -216,6 +216,28 @@ export async function setProductCategory(creds: ShopifyCredentials, productId: n
   );
 }
 
+/** TEMP diagnostic (PO 2026-06-12): test the inventory WRITE calls on a product's first variant and
+ *  return the exact error — distinguishes a 403 (scope) from a 422 (item not stocked at location) from
+ *  an untracked variant. Read of the product + two writes on ONE variant. */
+export async function diagnoseInventoryWrites(creds: ShopifyCredentials, productId: number): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  try {
+    const data = await shopifyFetch<{ product: { variants: Array<{ id: number; inventory_item_id: number; inventory_management: string | null }> } }>(creds, "GET", `products/${productId}.json`);
+    const v = data.product.variants[0];
+    out.inventoryItemId = v?.inventory_item_id ?? null;
+    out.inventory_management = v?.inventory_management ?? null;
+    const loc = await getPrimaryLocationId(creds);
+    out.locationId = loc;
+    if (loc && v?.inventory_item_id) {
+      try { await setInventoryLevel(creds, loc, v.inventory_item_id, 100); out.stockSet = "OK"; }
+      catch (e: any) { out.stockError = String(e?.message ?? e).slice(0, 300); }
+      try { await setInventoryItemCost(creds, v.inventory_item_id, "9.99"); out.costSet = "OK"; }
+      catch (e: any) { out.costError = String(e?.message ?? e).slice(0, 300); }
+    }
+  } catch (e: any) { out.fetchError = String(e?.message ?? e).slice(0, 300); }
+  return out;
+}
+
 /**
  * Add an image to an existing product by URL.
  * Shopify will fetch the image from the URL and store it.
