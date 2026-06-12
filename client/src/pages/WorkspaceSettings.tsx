@@ -325,20 +325,32 @@ export default function WorkspaceSettings() {
               <p className="text-sm text-muted-foreground">
                 Your store is connected. Listings marked as <strong>Ready</strong> can be published directly to Shopify as draft products.
               </p>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => shopifyDisconnect.mutate({ workspaceId: activeWorkspace?.id ?? "" })}
-                disabled={shopifyDisconnect.isPending}
-                className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
-              >
-                {shopifyDisconnect.isPending ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
-                ) : (
-                  <Unplug className="h-3.5 w-3.5 mr-2" />
-                )}
-                Disconnect Store
-              </Button>
+              <div className="flex gap-2 flex-wrap">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    window.location.href = `/api/shopify/auth?workspaceId=${encodeURIComponent(activeWorkspace?.id ?? "")}&storeDomain=${encodeURIComponent(shopifyStatus.data?.storeDomain ?? "")}`;
+                  }}
+                >
+                  Update App Permissions
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => shopifyDisconnect.mutate({ workspaceId: activeWorkspace?.id ?? "" })}
+                  disabled={shopifyDisconnect.isPending}
+                  className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
+                >
+                  {shopifyDisconnect.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
+                  ) : (
+                    <Unplug className="h-3.5 w-3.5 mr-2" />
+                  )}
+                  Disconnect Store
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">Update App Permissions: re-approve after adding scopes to the app — keeps your saved credentials.</p>
             </div>
           ) : (
             <div className="space-y-4">
@@ -353,11 +365,12 @@ export default function WorkspaceSettings() {
                   <li>In Shopify Admin → <strong>Settings → Apps and sales channels → Develop apps</strong></li>
                   <li>Click <strong>Create an app</strong> → name it (e.g. "NYT-Design")</li>
                   <li>Go to <strong>Configuration → Admin API integration</strong></li>
-                  <li>Under <strong>Admin API access scopes</strong>, enable: <code className="bg-blue-100 px-1 rounded">write_products</code>, <code className="bg-blue-100 px-1 rounded">read_products</code>, <code className="bg-blue-100 px-1 rounded">read_locations</code>, <code className="bg-blue-100 px-1 rounded">write_inventory</code>, <code className="bg-blue-100 px-1 rounded">write_publications</code></li>
+                  <li>Under <strong>Admin API access scopes</strong>, enable: <code className="bg-blue-100 px-1 rounded">write_products</code>, <code className="bg-blue-100 px-1 rounded">read_products</code>, <code className="bg-blue-100 px-1 rounded">read_locations</code>, <code className="bg-blue-100 px-1 rounded">write_inventory</code>, <code className="bg-blue-100 px-1 rounded">write_publications</code>, <code className="bg-blue-100 px-1 rounded">read_metaobjects</code>, <code className="bg-blue-100 px-1 rounded">write_metaobjects</code></li>
                   <li>Under <strong>URLs → Allowed redirection URL(s)</strong>, add the callback URL below</li>
                   <li>Copy your <strong>Client ID</strong> and <strong>Client Secret</strong> from the app's Settings → Credentials page</li>
                 </ol>
-                <p className="text-xs text-blue-600 mt-1">Required scopes: <code className="bg-blue-100 px-1 rounded">write_products</code>, <code className="bg-blue-100 px-1 rounded">read_products</code>, <code className="bg-blue-100 px-1 rounded">read_locations</code>, <code className="bg-blue-100 px-1 rounded">write_inventory</code>, <code className="bg-blue-100 px-1 rounded">write_publications</code></p>
+                <p className="text-xs text-blue-600 mt-1">If you add scopes later: edit the app's Admin API scopes, save/release, then click <strong>Update App Permissions</strong> below — no need to re-enter credentials.</p>
+                <p className="text-xs text-blue-600 mt-1">Required scopes: <code className="bg-blue-100 px-1 rounded">write_products</code>, <code className="bg-blue-100 px-1 rounded">read_products</code>, <code className="bg-blue-100 px-1 rounded">read_locations</code>, <code className="bg-blue-100 px-1 rounded">write_inventory</code>, <code className="bg-blue-100 px-1 rounded">write_publications</code>, <code className="bg-blue-100 px-1 rounded">read_metaobjects</code>, <code className="bg-blue-100 px-1 rounded">write_metaobjects</code></p>
               </div>
 
               {/* Callback URL */}
