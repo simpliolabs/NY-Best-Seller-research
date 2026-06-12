@@ -188,12 +188,14 @@ export const productGroupRouter = router({
   /** Manual Placement (PO 2026-06-11): write ONE calibrated print box to EVERY color template in
    *  the group — the human places the design on a single photo and it copies to all. Each template's
    *  garmentBbox is the per-color box that `generate` already prefers (resolvePrintZone), so the
-   *  next render uses this placement on every color. */
+   *  next render uses this placement on every color.
+   *  printArea: null CLEARS the manual placement on every template (PO 2026-06-12) — the generator
+   *  falls back to the group default zone (resolvePrintZone priority). */
   setManualPlacementAllColors: protectedProcedure
     .input(
       z.object({
         groupId: z.string(),
-        printArea: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }),
+        printArea: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).nullable(),
       })
     )
     .mutation(async ({ input }) => {
@@ -204,7 +206,7 @@ export const productGroupRouter = router({
       for (const t of templates) {
         await updateMockupTemplate(t.id, { garmentBbox: input.printArea });
       }
-      return { ok: true, updatedCount: templates.length };
+      return { ok: true, updatedCount: templates.length, cleared: input.printArea === null };
     }),
 
   /** Delete a mockup template (does not delete the S3 file) */
