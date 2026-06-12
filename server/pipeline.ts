@@ -919,226 +919,34 @@ async function runEtsyValidation(
 }
 
 // ─── Stage 6: Design Expansion + Image Generation ───────────────────────
-// Global top-5 winners get 3 image variations each:
-//   Variation A: Clean/Bold — fully IP-accurate, light distress, hero version
-//   Variation B: Distressed/Aged — same concept, heavy IP-accurate damage language
-//   Variation C: Alternative Composition — same phrase, different layout angle
+// ONE focused image prompt per winner (PO 2026-06-12). The previous 10-layer, 400-600-word,
+// 3-variation prompt systems produced cluttered "terrible" designs (micro-details, lighting
+// essays, score graphics all fighting) — replaced with the concise formula the PO approved on
+// concepts.regenerateImage. Scans render ONE hero image per concept (scans-to-1).
 
-/**
- * Builds a style-aware image prompt system from computed StyleProfile directives.
- * Replaces the generic World Bible references with market-derived aesthetic constraints.
- * The 10-layer DTF formula structure is preserved; only the style inputs change.
- */
-function buildStyleAwarePromptSystem(s: import("../shared/styleProfile").StyleProfile): string {
-  return `You are a senior art director and DTF print specialist. Your job is to write THREE deeply detailed image generation prompts for a t-shirt graphic design. Each prompt must be built using the exact 10-layer formula below, in order. Minimum 400 words per prompt. Return ONLY a JSON object — no markdown, no explanation.
+const CONCISE_IMAGE_PROMPT_SYSTEM = `You are a senior t-shirt art director. Write ONE image-generation prompt (120-180 words) for a print-ready DTF t-shirt graphic.
 
-You are writing a design that will ACTUALLY SELL on Etsy and print-on-demand platforms. Every design decision must be grounded in what top sellers in this market look like, not generic design theory.
+HARD REQUIREMENTS — the generated design MUST:
+- Render the HEADLINE as the prominent typographic centerpiece, spelled EXACTLY, letter-for-letter, including punctuation.
+- Render the SUBTEXT as clearly readable secondary text, spelled EXACTLY. (If a text field is "none", omit only that line — never invent copy.)
+- Describe the lettering itself (font character, weight, placement, hierarchy) AND ONE supporting focal graphic — nothing else. No micro-details, no badges, no score graphics, no lighting essays, no texture inventories.
+- Sit isolated on a transparent or pure-white background with open negative space — no background fill, no scene, no vignette.
+- Use a deliberate, LIMITED color palette (respect the maximum given).
+- Commit fully to the given art style. NEVER clip-art, kawaii, or childish styling.
 
-MARKET REFERENCE: ${s.marketReference}
-PRIMARY AESTHETIC: ${s.primaryAesthetic}
-AVOID AT ALL COSTS: ${s.avoidDirectives.join(", ")}
+Return ONLY a JSON object: {"prompt": "..."}`;
 
-═══ DTF SILHOUETTE RULE — NON-NEGOTIABLE ═══
-
-These designs are printed via DTF (Direct to Film). Every pixel of the generated image becomes physical ink transferred onto fabric. There is NO masking, NO transparency — whatever the AI generates, the printer transfers.
-
-❌ WHAT KILLS A DTF DESIGN (NEVER DO THESE):
-- A solid dark background fill — transfers as a stiff plastic rectangle on the shirt
-- Atmospheric gradients filling space between elements
-- Scene-style illustrations where a background environment fills the entire canvas
-- Any area filled with color purely to create atmosphere rather than define a graphic element
-- Any composition that would look like a rectangle if printed on a sticker sheet
-- Cartoonish clip-art style — bright saturated colors, digital vector smoothness, no texture
-- More than ${s.maxColors} ink colors — this market uses ${s.maxColors} colors maximum
-
-✅ WHAT A DTF DESIGN MUST LOOK LIKE:
-Think of the design as a sticker with holes punched through it. The outer silhouette is organic — a badge shape, an emblem, an arch, scattered type elements — NEVER a rectangle or square. Inside the design there are genuine open areas where the white canvas (shirt fabric) shows through. Every element — text, illustration, border, detail — is a discrete graphic object with its own defined edge, floating in white space rather than swimming in a filled background.
-
-The shirt color itself becomes part of the design. Complexity lives IN the elements. The shirt breathes BETWEEN them.
-
-═══ THE 10-LAYER FORMULA ═══
-
-[1] PRINT FORMAT DECLARATION
-Always open with: "Ultra-detailed ${s.maxColors}-color t-shirt graphic design for DTF transfer printing, isolated graphic with open negative space throughout,"
-Never skip this. The phrases "DTF transfer printing" and "open negative space" must both appear in the opening line.
-
-[2] STYLE ANCHOR
-Primary aesthetic: ${s.primaryAesthetic}. Texture level: ${s.textureLevel}. This is NOT a digital vector illustration — it is a ${s.primaryAesthetic} design with ${s.textureLevel} texture. Describe the aesthetic in visual terms: line weight, texture density, compositional habits, print medium feel. Pattern: "${s.primaryAesthetic} aesthetic — [3-5 specific visual style descriptors matching this aesthetic], ${s.textureLevel} texture, [contrast approach appropriate to this style]"
-
-[3] CONCEPT CORE
-Describe the central visual element in maximum detail. Include: what the object/scene IS, its physical material and condition, what makes it specific to THIS niche/phrase. Must include at least 4 niche-accurate visual details.
-
-⚠️ IMMEDIATELY AFTER THE CONCEPT CORE, insert all four of these DTF silhouette enforcement statements word-for-word:
-1. "the design sits on a pure white background with genuine open negative space throughout — the white background is visible between all elements and inside the letterforms, never filled"
-2. "no background fill of any kind — no dark atmospheric background, no environment fill, no gradient wash, no vignette — only the graphic elements themselves carry ink"
-3. "the outer silhouette of the entire design is [CHOOSE ONE: badge/emblem | typographic stack | arch/banner | crest/coat of arms | scattered sponsor layout | icon + type lockup | vintage label] — not a rectangle, not a square, not a full bleed scene"
-4. "designed for DTF direct-to-film transfer printing — all negative space must be genuinely white/transparent so the shirt fabric shows through between and inside all design elements"
-
-[4] TYPOGRAPHY TREATMENT
-Typography style for this market: ${s.typographyStyle}. Be extremely specific: font personality matching ${s.typographyStyle}, physical texture of the letters (carved / spray-painted / hand-lettered / embossed), how text interacts with the design, layout behavior (arched / stacked / wrapped). Pattern: "[phrase] rendered in [font style matching ${s.typographyStyle}] with [physical material treatment], [how it interacts with surrounding elements], [placement in composition]"
-
-[5] NICHE-ACCURATE DETAILS
-Pull 3-6 specific micro-details that are authentic to this niche/community. These are the insider details that make a fan stop and say "they actually get it." Weave them into the composition as supporting elements: community objects, symbols, in-jokes, thematic references. CRITICAL: these details are discrete graphic objects floating in white space — they do NOT form a background scene.
-
-[6] LIGHTING + ATMOSPHERE
-Every design must have a defined light source appropriate to the ${s.primaryAesthetic} aesthetic. The light illuminates the graphic elements — it does NOT create a filled background environment. Write as: "lighting: [primary source] casting [color] [direction] on [what surfaces], secondary fill light from [secondary source] in [color], deep shadow in [areas], rim light highlighting [specific edges] — all light falls on graphic elements only, no background fill"
-
-[7] DISTRESS LAYER — constrained to ${s.textureLevel}
-Variation A (Clean/Bold): ${s.textureLevel === "heavy-vintage" || s.textureLevel === "moderate-worn" ? "Moderate distress — halftone grain, ink bleed, subtle wear at edges appropriate to " + s.primaryAesthetic : "Light distress only — subtle grain, minor wear at edges"}.
-Variation B (Distressed/Aged): Maximum distress appropriate to ${s.primaryAesthetic} — pull from: weathered and crumbling at the edges | screen-printed ink bleed on old fabric | halftone grain oxidation | faded vintage wash with color drop-out | sun-bleached ink fade | peeling paint revealing undercoat | letterpress ink squash on rough paper stock | age-yellowed paper with foxing spots | rust bleed from embedded metal
-Variation C (Alternative Composition): Moderate or stylistic distress only if it serves the alternate compositional angle.
-
-[8] COMPOSITION + LAYOUT — preferred: ${s.compositionPreferences.join(" or ")}
-Specify exactly how visual elements are arranged. Choose from the preferred compositions for this market: ${s.compositionPreferences.join(" | ")}. Add proportion guidance, axis alignment, breathing room vs. intentional density.
-
-[9] COLOR DECLARATION — HARD LIMIT: ${s.maxColors} colors maximum
-Color directive for this market: ${s.colorDirective}. Declare: primary color (50%+ of design), secondary color (30%), accent color (10-15%), highlight (5% — sparks, fine lines). Use muted, market-accurate color names. Example format: "color palette: primary [muted name] ([hex]), secondary [muted name] ([hex]), accent [muted name] ([hex]), highlight [muted name] ([hex]), designing for [shirt color] — all colors specified as ink on [dark/light] garment — MAXIMUM ${s.maxColors} COLORS TOTAL"
-
-[10] PRINT SAFETY CLOSE
-Every prompt MUST end with this exact block word-for-word:
-"— isolated on pure white background, genuine open negative space throughout the entire design including between all elements and inside all letterforms, no background fill of any kind, no atmospheric fill, no dark environment backdrop, no gradient wash, outer silhouette is an organic graphic shape not a rectangle, designed for DTF direct-to-film transfer printing so the shirt fabric shows through all negative space, clean die-cut edges, print-ready artwork, high contrast graphic elements only, t-shirt graphic design"
-
-═══ VARIATION DEFINITIONS ═══
-
-VARIATION A — Clean/Bold:
-- Full complexity, fully niche-accurate, all community details present
-- ${s.textureLevel === "heavy-vintage" || s.textureLevel === "moderate-worn" ? "Moderate distress appropriate to " + s.primaryAesthetic : "Light distress only"}
-- Maximum visual impact — this is the hero version
-- Prompt length: 400-600 words
-
-VARIATION B — Distressed/Aged:
-- Same core concept and composition as Variation A
-- Rebuilds the distress layer from scratch using heavy, specific damage language
-- Changes: add 4-6 distress techniques, shift colors to more faded/muted versions, add material degradation details
-- Prompt length: 400-600 words
-- Opening modifier: "Battle-damaged and time-worn version of a [concept description], extreme distress applied throughout,"
-
-VARIATION C — Alternative Composition:
-- Same phrase, different design angle — pick a different composition from the preferred list
-- Can shift to a different style lens within the ${s.primaryAesthetic} aesthetic
-- Prompt length: 400-600 words
-- Opening modifier: "Alternative composition for [concept], [new compositional angle],"
-
-═══ HARD CONSTRAINTS ═══
-1. ZERO trademarked character names anywhere in any prompt.
-2. ZERO references to copyrighted artwork or specific IP illustrations.
-3. Each prompt must be between 400-600 words — if under 300, it is too vague; rebuild it.
-4. The concept's HEADLINE and SUBTEXT must BOTH appear as clearly readable text in the design, spelled exactly as given (the source fan phrase lives inside them) — the headline is the typographic centerpiece. Render every provided text field that is not 'none'.
-5. All designs must be isolated on pure white background — the shirt IS the background.
-6. ZERO language describing a filled background environment. Describe elements AS objects floating in white space.
-7. Every prompt must name the outer silhouette shape. If you cannot name the shape, the design is a rectangle — rebuild it.
-8. All four DTF silhouette enforcement statements must appear immediately after the Concept Core [3].
-9. MAXIMUM ${s.maxColors} COLORS — this is a hard limit, not a suggestion.
-10. AVOID: ${s.avoidDirectives.join(", ")} — these are anti-patterns for this specific market.
-
-REQUIRED OUTPUT SCHEMA — return ONLY this JSON object:
-{
-  "variation_a": "string — full 400-600 word prompt for Clean/Bold variation",
-  "variation_b": "string — full 400-600 word prompt for Distressed/Aged variation",
-  "variation_c": "string — full 400-600 word prompt for Alternative Composition variation"
-}`;
+/** generateImage with ONE retry (PO 2026-06-12: a transient provider failure used to be swallowed
+ *  by allSettled and a whole run shipped 0 images — "Why were no images generated?"). */
+async function generateImageWithRetry(prompt: string, label: string): Promise<{ url?: string | null }> {
+  try {
+    return await withTimeout(generateImage({ prompt }), IMAGE_GEN_TIMEOUT_MS, label);
+  } catch (err) {
+    console.warn(`[Pipeline] ${label} failed, retrying once:`, err);
+    await new Promise((r) => setTimeout(r, 2000));
+    return withTimeout(generateImage({ prompt }), IMAGE_GEN_TIMEOUT_MS, `${label} (retry)`);
+  }
 }
-
-const IMAGE_PROMPT_SYSTEM = `You are a senior art director and DTF print specialist. Your job is to write THREE deeply detailed image generation prompts for a t-shirt graphic design. Each prompt must be built using the exact 10-layer formula below, in order. Minimum 400 words per prompt. Return ONLY a JSON object — no markdown, no explanation.
-
-You are writing a love letter to a specific fictional world expressed through the language of garment printing. Every prompt must make a fan think: "Whoever made this actually read the book."
-
-═══ DTF SILHOUETTE RULE — NON-NEGOTIABLE ═══
-
-These designs are printed via DTF (Direct to Film). Every pixel of the generated image becomes physical ink transferred onto fabric. There is NO masking, NO transparency — whatever the AI generates, the printer transfers.
-
-❌ WHAT KILLS A DTF DESIGN (NEVER DO THESE):
-- A solid dark background fill — transfers as a stiff plastic rectangle on the shirt
-- Atmospheric gradients filling space between elements
-- Scene-style illustrations where a background environment (dungeon walls, dark sky, stone floor) fills the entire canvas
-- Any area filled with color purely to create atmosphere rather than define a graphic element
-- Any composition that would look like a rectangle if printed on a sticker sheet
-
-✅ WHAT A DTF DESIGN MUST LOOK LIKE:
-Think of the design as a sticker with holes punched through it. The outer silhouette is organic — a badge shape, an emblem, an arch, scattered type elements — NEVER a rectangle or square. Inside the design there are genuine open areas where the white canvas (shirt fabric) shows through. Every element — text, illustration, border, detail — is a discrete graphic object with its own defined edge, floating in white space rather than swimming in a filled background.
-
-The shirt color itself becomes part of the design. Complexity lives IN the elements. The shirt breathes BETWEEN them.
-
-═══ THE 10-LAYER FORMULA ═══
-
-[1] PRINT FORMAT DECLARATION
-Always open with: "Ultra-detailed [N]-color t-shirt graphic design for DTF transfer printing, isolated graphic with open negative space throughout,"
-Never skip this. The phrases "DTF transfer printing" and "open negative space" must both appear in the opening line — they are the primary signals that prevent solid background blocks.
-
-[2] STYLE ANCHOR
-Pull the illustrator style from the World Bible. Describe their aesthetic in visual terms — lighting approach, line weight, texture density, compositional habits. Pattern: "[IP title] cover art aesthetic — [illustrator name if known] style: [3-5 specific visual style descriptors pulled from research], [genre visual mood], [contrast approach]"
-
-[3] CONCEPT CORE
-Describe the central visual element in maximum detail. Include: what the object/scene IS, its physical material and condition, its exact relationship to the IP world, what makes it specific to THIS book. Must include at least 4 IP-accurate visual details from the World Bible.
-
-⚠️ IMMEDIATELY AFTER THE CONCEPT CORE, insert all four of these DTF silhouette enforcement statements word-for-word:
-1. "the design sits on a pure white background with genuine open negative space throughout — the white background is visible between all elements and inside the letterforms, never filled"
-2. "no background fill of any kind — no dark atmospheric background, no dungeon environment fill, no gradient wash, no vignette — only the graphic elements themselves carry ink"
-3. "the outer silhouette of the entire design is [CHOOSE ONE: badge/emblem | typographic stack | arch/banner | crest/coat of arms | scattered sponsor layout | icon + type lockup | vintage label] — not a rectangle, not a square, not a full bleed scene"
-4. "designed for DTF direct-to-film transfer printing — all negative space must be genuinely white/transparent so the shirt fabric shows through between and inside all design elements"
-
-[4] TYPOGRAPHY TREATMENT
-Be extremely specific: font personality (blackletter gothic / heavy slab condensed / pixelated monospace / hand-painted stencil), physical texture of the letters (carved in stone / spray-painted / LED pixel / embossed metal), how text interacts with environment (casting shadows / glowing / cracking / bleeding ink), layout behavior (arched / stacked / wrapped around image / bleeding off edge). Pattern: "[phrase] rendered in [font style] with [physical material treatment] showing [specific damage or texture], [how it interacts with surrounding elements], [placement in composition]"
-
-[5] WORLD-ACCURATE DETAILS
-Pull 3-6 specific micro-details from the World Bible key objects, key environments, and texture language. These are the insider details that make a fan stop and say "they actually read the book." Weave them into the composition as supporting elements: environmental textures, object details, thematic symbols, in-world text fragments. CRITICAL: these details are discrete graphic objects floating in white space — they do NOT form a background scene or environment fill.
-
-[6] LIGHTING + ATMOSPHERE
-Every design must have a defined light source from the IP world. The light illuminates the graphic elements — it does NOT create a filled background environment. Write as: "lighting: [primary source] casting [color] [direction] on [what surfaces], secondary fill light from [secondary source] in [color], deep shadow in [areas], rim light highlighting [specific edges] — all light falls on graphic elements only, no background fill"
-
-[7] DISTRESS LAYER
-Variation A (Clean/Bold): Light distress only — subtle halftone grain, minor ink bleed, slight wear at edges.
-Variation B (Distressed/Aged): Maximum distress — pull from this vocabulary: weathered and crumbling at the edges | battle-scarred surface | acid-etched metal | spray-painted stencil with paint drips | screen-printed ink bleed on old fabric | halftone grain oxidation | faded vintage wash with color drop-out | oxidized and verdigris-covered metal | torn paper revealing layer beneath | corrupted pixel bleed escaping containment | heavy CRT scanline artifacts | impact cracks radiating from a stress point | water stain tide marks | sun-bleached ink fade | peeling paint revealing undercoat | fire-scorched edges | rust bleed from embedded metal fixtures | letterpress ink squash on rough paper stock | rubber tire smear overlay | oil stain contamination | age-yellowed paper stock with foxing spots
-Variation C (Alternative Composition): Moderate or stylistic distress only if it serves the alternate compositional angle.
-
-[8] COMPOSITION + LAYOUT
-Specify exactly how visual elements are arranged. Use clock positions, spatial relationships, proportion language. Choose from: Full chest monument (primary text 80%+ of chest width, no central illustration — pure typographic power) | Badge/emblem (circular or oval badge, illustration centered, text wrapping perimeter, layered borders) | Vertical stack (illustration top 40%, text fills bottom 60%) | Horizontal banner (text arched above/below central panoramic illustration) | Scattered sponsor layout (multiple text elements and icons distributed across full chest — large open shirt areas between each element) | Small chest logo (tight 3-4 inch left chest, all elements must read clearly at small scale) | Full bleed poster (elements arranged like a movie or concert poster). Add proportion guidance, axis alignment, breathing room vs. intentional density.
-
-[9] COLOR DECLARATION
-Declare: primary color (50%+ of design), secondary color (30%), accent color (10-15%), highlight (5% — sparks, glows, fine lines), shirt color context. Use IP-accurate color names from the World Bible color anchors, not generic names. Example format: "color palette: primary [IP-accurate name] ([hex]), secondary [IP-accurate name] ([hex]), accent [IP-accurate name] ([hex]), highlight [IP-accurate name] ([hex]), designing for [shirt color] — all colors specified as ink on [dark/light] garment"
-
-[10] PRINT SAFETY CLOSE
-Every prompt MUST end with this exact block word-for-word:
-"— isolated on pure white background, genuine open negative space throughout the entire design including between all elements and inside all letterforms, no background fill of any kind, no atmospheric fill, no dark environment backdrop, no gradient wash, outer silhouette is an organic graphic shape not a rectangle, designed for DTF direct-to-film transfer printing so the shirt fabric shows through all negative space, clean die-cut edges, print-ready artwork, high contrast graphic elements only, t-shirt graphic design"
-
-═══ VARIATION DEFINITIONS ═══
-
-VARIATION A — Clean/Bold:
-- Full complexity, fully IP-accurate, all world details present
-- Light distress only (halftone grain, subtle ink bleed)
-- Maximum visual impact — this is the hero version
-- Prompt length: 400-600 words
-
-VARIATION B — Distressed/Aged:
-- Same core concept and composition as Variation A
-- Rebuilds the distress layer from scratch using heavy, specific, IP-accurate damage language
-- Changes: add 4-6 distress techniques, shift colors to more faded/muted versions, add material degradation details
-- Prompt length: 400-600 words
-- Opening modifier: "Battle-damaged and time-worn version of a [concept description], extreme distress applied throughout,"
-
-VARIATION C — Alternative Composition:
-- Same phrase, different design angle — pick a different composition template from [8]
-- Can shift to a different art style lens (e.g., if A was painterly, C could be flat vector or pixel art)
-- Must still be 100% IP-accurate to the World Bible
-- Prompt length: 400-600 words
-- Opening modifier: "Alternative composition for [concept], [new style lens],"
-
-═══ HARD CONSTRAINTS ═══
-1. ZERO trademarked character names anywhere in any prompt.
-2. ZERO references to copyrighted book cover art or specific IP illustrations.
-3. Each prompt must be between 400-600 words — if under 300, it is too vague; rebuild it.
-4. The concept's HEADLINE and SUBTEXT must BOTH appear as clearly readable text in the design, spelled exactly as given (the source fan phrase lives inside them) — the headline is the typographic centerpiece. Render every provided text field that is not 'none'.
-5. All designs must be isolated on pure white background — the shirt IS the background.
-6. ZERO language describing a filled background environment (dungeon walls, dark sky, stone floor as backdrop). Describe elements AS objects floating in white space, not as a scene.
-7. Every prompt must name the outer silhouette shape. If you cannot name the shape, the design is a rectangle — rebuild it.
-8. All four DTF silhouette enforcement statements must appear immediately after the Concept Core [3].
-
-REQUIRED OUTPUT SCHEMA — return ONLY this JSON object:
-{
-  "variation_a": "string — full 400-600 word prompt for Clean/Bold variation",
-  "variation_b": "string — full 400-600 word prompt for Distressed/Aged variation",
-  "variation_c": "string — full 400-600 word prompt for Alternative Composition variation"
-}`;
 
 async function stageDesignExpansion(runId: number): Promise<number> {
   const stageStart = Date.now();
@@ -1216,78 +1024,33 @@ async function stageDesignExpansion(runId: number): Promise<number> {
     // Style Intelligence: read computed directives from book row (set by Stage 5.5)
     const styleDirectives = book?.styleDirectives as import("../shared/styleProfile").StyleProfile | null | undefined;
 
-    let activePromptSystem: string;
-    let userMsg: string;
+    // ONE focused prompt (PO 2026-06-12: the 400-600-word 10-layer essays produced cluttered,
+    // "terrible" designs — wood grain + eyes + lighting essays + micro-details all fighting).
+    // Same concise formula the PO approved on concepts.regenerateImage: headline verbatim, ONE
+    // focal graphic, the niche style line, a limited palette — nothing else.
+    const styleLine = styleDirectives
+      ? `${styleDirectives.primaryAesthetic}. Typography: ${styleDirectives.typographyStyle}. Colors: ${styleDirectives.colorDirective} (max ${styleDirectives.maxColors}). Avoid: ${styleDirectives.avoidDirectives.join(", ") || "none"}.`
+      : `${concept.style}. ${wb?.illustratorStyle ?? book?.typographyStyle ?? ""} ${wb?.emotionalTone ?? book?.mood ?? ""}`.trim();
 
-    if (styleDirectives) {
-      // Style-aware path: use directives computed by Stage 5.5
-      activePromptSystem = buildStyleAwarePromptSystem(styleDirectives);
-      userMsg = `Design concept:
-Name: ${concept.conceptName}
-Source Fan Phrase: ${concept.sourcePhrase ?? "not specified"}
-Humor Framework: ${concept.humorFramework ?? "general"}
-Format: ${concept.format}
-Style: ${concept.style}
-Headline: ${concept.headline ?? "none"}
-Subtext: ${concept.subtext ?? "none"}
-Color Palette: ${(concept.colorPalette as string[] ?? []).join(", ") || "not specified"}
-Layout: ${concept.layoutDescription ?? "not specified"}
-Font: ${concept.fontSuggestion ?? "not specified"}
-
-[STYLE_DIRECTIVES]
-Primary Aesthetic: ${styleDirectives.primaryAesthetic}
-Color Directive: ${styleDirectives.colorDirective}
-Max Colors: ${styleDirectives.maxColors}
-Texture Level: ${styleDirectives.textureLevel}
-Composition Preferences: ${styleDirectives.compositionPreferences.join(", ")}
-Typography Style: ${styleDirectives.typographyStyle}
-Market Reference: ${styleDirectives.marketReference}
-AVOID: ${styleDirectives.avoidDirectives.join(", ")}`;
-    } else {
-      // Legacy fallback: use original World Bible path
-      activePromptSystem = IMAGE_PROMPT_SYSTEM;
-      userMsg = `Design concept:
-Name: ${concept.conceptName}
-Source Fan Phrase: ${concept.sourcePhrase ?? "not specified"}
-Humor Framework: ${concept.humorFramework ?? "general"}
-Format: ${concept.format}
-Style: ${concept.style}
-Headline: ${concept.headline ?? "none"}
-Subtext: ${concept.subtext ?? "none"}
-Color Palette: ${(concept.colorPalette as string[] ?? []).join(", ") || "not specified"}
-Layout: ${concept.layoutDescription ?? "not specified"}
-Font: ${concept.fontSuggestion ?? "not specified"}
-
-[BOOK_WORLD_BIBLE]
-Illustrator Style: ${wb?.illustratorStyle ?? book?.typographyStyle ?? "not specified"}
-Key Visual Environments: ${(wb?.keyVisualEnvironments ?? []).join("; ") || "not specified"}
-Key Objects: ${(wb?.keyObjects ?? []).join("; ") || "not specified"}
-Lighting Signature: ${wb?.lightingSignature ?? "not specified"}
-Texture Language: ${wb?.textureLanguage ?? "not specified"}
-Typography Native: ${wb?.typographyNative ?? book?.typographyStyle ?? "not specified"}
-Emotional Tone: ${wb?.emotionalTone ?? book?.mood ?? "not specified"}
-Color Anchors: ${(wb?.colorAnchors ?? book?.dominantColors ?? []).join(", ") || "not specified"}
-
-Book Visual Universe (legacy fields):
-Dominant Colors: ${(book?.dominantColors ?? []).join(", ") || "not specified"}
-Visual Motifs: ${(book?.visualMotifs ?? []).join(", ") || "not specified"}
-Typography Style: ${book?.typographyStyle ?? "not specified"}
-Art Style / Mood: ${book?.mood ?? "not specified"}
-Setting: ${book?.setting ?? "not specified"}
-Subgenre: ${book?.subgenre ?? "not specified"}`;
-    }
+    const userMsg = `Concept name: ${concept.conceptName}
+HEADLINE (render verbatim): ${concept.headline ?? "none"}
+SUBTEXT (render verbatim): ${concept.subtext ?? "none"}
+Source fan phrase (the design's anchor): ${concept.sourcePhrase ?? "not specified"}
+Art style (use exactly): ${styleLine}
+Color palette: ${(concept.colorPalette as string[] ?? []).join(", ") || (wb?.colorAnchors ?? []).join(", ") || "deliberate limited palette"}
+Layout intent: ${concept.layoutDescription ?? "not specified"}`;
 
     try {
       const promptResult = await withTimeout(
         invokeLLM({
           messages: [
-            { role: "system", content: activePromptSystem },
+            { role: "system", content: CONCISE_IMAGE_PROMPT_SYSTEM },
             { role: "user", content: userMsg },
           ],
           response_format: { type: "json_object" },
         }),
         30_000,
-        `Image prompts for winner concept ${concept.id}`
+        `Image prompt for winner concept ${concept.id}`
       );
 
       const promptContent = typeof promptResult.choices[0]?.message?.content === "string"
@@ -1296,9 +1059,9 @@ Subgenre: ${book?.subgenre ?? "not specified"}`;
       const parsed = JSON.parse(promptContent);
       return {
         concept,
-        promptA: parsed.variation_a ?? parsed.prompt ?? "",
-        promptB: parsed.variation_b ?? "",
-        promptC: parsed.variation_c ?? "",
+        promptA: parsed.prompt ?? parsed.variation_a ?? "",
+        promptB: "",
+        promptC: "",
       };
     } catch (err) {
       console.warn(`[Pipeline] Prompt generation failed for winner concept ${concept.id}:`, err);
@@ -1327,9 +1090,8 @@ Subgenre: ${book?.subgenre ?? "not specified"}`;
   const imageResults = await Promise.allSettled(
     allImageTasks.map(async (task) => {
       try {
-        const img = await withTimeout(
-          generateImage({ prompt: task.prompt }),
-          IMAGE_GEN_TIMEOUT_MS,
+        const img = await generateImageWithRetry(
+          task.prompt,
           `Image ${task.variation} for concept ${task.concept.id}`
         );
         const rawUrl = img.url ?? null;
