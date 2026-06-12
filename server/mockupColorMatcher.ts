@@ -75,11 +75,20 @@ async function extractDesignPalette(
     .map(([key, n]) => ({ r: (key >> 16) & 0xff, g: (key >> 8) & 0xff, b: key & 0xff, weight: n / opaque }));
 }
 
+/** Ink covering at least this fraction of the design is FUNCTIONALLY critical (text, main art) —
+ *  it must stay readable on the blank, regardless of how well the other inks pop. */
+const SIGNIFICANT_INK_WEIGHT = 0.08;
+/** Visibility below this = effectively invisible on that blank. */
+const MIN_SIG_VISIBILITY = 0.25;
+
 /**
- * Pick the `count` blank colors on which the design reads best (highest area-weighted contrast).
- * A high-area ink color that is near-invisible on a blank drags that blank's score down, so
- * same/near-color shirts are naturally excluded. Falls back to the first `count` templates if the
- * design image can't be analyzed (network/format failure) — never blocks mockup generation.
+ * Pick the `count` blank colors on which the design reads best (highest area-weighted contrast),
+ * with a WORST-SIGNIFICANT-INK penalty: a blank where ANY significant ink (>=8% area — e.g. the
+ * headline text) is near-invisible gets scaled down proportionally, so it can't ride a high average
+ * into the top picks. PO-caught case (2026-06-12): navy-text + light-capybara design ranked BLACK #2
+ * because the big light capybara outvoted the invisible navy text; with the penalty Black drops to
+ * #11 and cream blanks (where the capybara itself vanishes) sink too — verified on the live design.
+ * Falls back to the first `count` templates if the design can't be analyzed — never blocks.
  */
 export async function pickBestColors(
   designImageUrl: string,
@@ -101,7 +110,14 @@ export async function pickBestColors(
     const blank = hexToRgb(t.colorHex);
     if (!blank) return { t, score: -1 }; // malformed hex sinks to the bottom
     let score = 0;
-    for (const c of palette) score += c.weight * visibility(c, blank);
+    let worstSig = 1; // visibility of the least-visible SIGNIFICANT ink on this blank
+    for (const c of palette) {
+      const v = visibility(c, blank);
+      score += c.weight * v;
+      if (c.weight >= SIGNIFICANT_INK_WEIGHT) worstSig = Math.min(worstSig, v);
+    }
+    // smooth, deterministic penalty: every significant ink must remain readable
+    if (worstSig < MIN_SIG_VISIBILITY) score *= worstSig / MIN_SIG_VISIBILITY;
     return { t, score };
   });
 
