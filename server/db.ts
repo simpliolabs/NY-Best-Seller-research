@@ -590,6 +590,7 @@ export async function getFavorites(filters?: {
       productionUrlA: designConcepts.productionUrlA,
       productionUrlB: designConcepts.productionUrlB,
       productionUrlC: designConcepts.productionUrlC,
+      printPlacements: designConcepts.printPlacements,
       createdAt: designConcepts.createdAt,
       bookTitle: books.title,
       bookAuthor: books.author,
