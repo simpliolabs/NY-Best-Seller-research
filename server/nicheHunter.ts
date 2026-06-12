@@ -16,6 +16,7 @@
 
 import { invokeLLM } from "./_core/llm";
 import type { TextContent } from "./_core/llm";
+import { capName } from "./db";
 import { generateImage } from "./_core/imageGeneration";
 import { storagePut } from "./storage";
 import { extractStyleFromImage } from "./styleExtractor";
@@ -1237,7 +1238,7 @@ export async function runNicheHunterScan(
         sourceScrapedAt: new Date(),
         sourceReviewCount: hotSeller?.sourceReviewCount ?? null,
         sourceCategory: hotSeller?.category ?? null,
-        patternName: p.patternName,
+        patternName: capName(p.patternName), // 50-char cap on generated names (PO 2026-06-12)
         composition: p.composition,
         colorStrategy: p.colorStrategy,
         emotionalHook: p.emotionalHook,

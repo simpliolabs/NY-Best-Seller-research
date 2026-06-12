@@ -43,6 +43,7 @@ import {
   getOrCreateManualUploadBook,
   insertConcept,
   updateConceptStyle,
+  updateConceptName,
 } from "./db";
 import { runPipeline, recoverStaleRuns, regenerateImagesForRun } from "./pipeline";
 import { processConceptProductionImages, processDesignForProduction } from "./productionImageProcessor";
@@ -926,6 +927,17 @@ Font feel: ${concept.fontSuggestion ?? "not specified"}`;
         await updateConceptImages(input.conceptId, { imageUrlA: input.imageUrl });
         await updateConceptProductionUrl(input.conceptId, "A", null);
         return { success: true, message: "Restored design to slot A." };
+      }),
+
+    /** Rename a concept (PO 2026-06-12) — generated names are capped at 50 chars, but the human can
+     *  always rename to anything readable, anywhere the concept appears. */
+    rename: protectedProcedure
+      .input(z.object({ conceptId: z.number(), name: z.string().min(1).max(120) }))
+      .mutation(async ({ input }) => {
+        const concept = await getConceptById(input.conceptId);
+        if (!concept) return { success: false, message: "Concept not found." };
+        await updateConceptName(input.conceptId, input.name.trim());
+        return { success: true };
       }),
 
     /** Generation history for a concept — every past design, newest first (the "Previous versions"

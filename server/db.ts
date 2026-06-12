@@ -417,6 +417,27 @@ export async function updateBookForumSignals(
 
 // ─── Design Concepts helpers ───────────────────────────────────────────────
 
+/** Cap a GENERATED display name at `max` chars (PO 2026-06-12: raw Etsy-title names are
+ *  unsustainable) — cuts at a word boundary and strips trailing punctuation. Generation-time only;
+ *  manual renames are not capped. */
+export function capName(name: string, max = 50): string {
+  const clean = (name ?? "")
+    .replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&") // scraped-title HTML entities
+    .replace(/\s+/g, " ").trim();
+  if (clean.length <= max) return clean;
+  let cut = clean.slice(0, max);
+  const lastSpace = cut.lastIndexOf(" ");
+  if (lastSpace > 25) cut = cut.slice(0, lastSpace);
+  return cut.replace(/[\s,;:\-\/|]+$/g, "");
+}
+
+/** Rename a concept (PO 2026-06-12) — the human's chosen name, stored as-is. */
+export async function updateConceptName(conceptId: number, name: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(designConcepts).set({ conceptName: name }).where(eq(designConcepts.id, conceptId));
+}
+
 export async function insertConcept(concept: InsertDesignConcept): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -1367,7 +1388,7 @@ export async function createConceptFromPattern(
   const conceptId = await insertConcept({
     bookId,
     runId: run.id,
-    conceptName: pattern.patternName,
+    conceptName: capName(pattern.patternName), // 50-char cap on generated names (PO 2026-06-12)
     format: "t-shirt",
     style: pattern.colorStrategy ?? "niche-adapted",
     headline: pattern.adaptedConcept ?? pattern.patternName,

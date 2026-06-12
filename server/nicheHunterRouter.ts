@@ -17,6 +17,7 @@ import {
   getLatestScanRun,
   getTrendPatternsByWorkspace,
   updateTrendPatternStatus,
+  updateTrendPatternName,
   recordApprovalSignal,
   recordRejectionSignal,
   updateTrendPatternDtfUrl,
@@ -228,6 +229,14 @@ export const nicheHunterRouter = router({
   /**
    * Dismiss a pattern — records rejection signal (reason + tags).
    */
+  /** Rename a niche pattern (PO 2026-06-12) — anywhere it appears. */
+  renamePattern: protectedProcedure
+    .input(z.object({ patternId: z.string(), name: z.string().min(1).max(120) }))
+    .mutation(async ({ input }) => {
+      await updateTrendPatternName(input.patternId, input.name.trim());
+      return { success: true };
+    }),
+
   dismissPattern: protectedProcedure
     .input(
       z.object({

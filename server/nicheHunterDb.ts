@@ -97,6 +97,13 @@ export async function updateTrendPatternStatus(
   await db.update(trendPatterns).set({ status }).where(eq(trendPatterns.id, id));
 }
 
+/** Rename a niche pattern (PO 2026-06-12) — the human's chosen name, stored as-is. */
+export async function updateTrendPatternName(id: string, patternName: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(trendPatterns).set({ patternName }).where(eq(trendPatterns.id, id));
+}
+
 export async function updateTrendPatternImage(
   id: string,
   previewImageUrl: string
