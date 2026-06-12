@@ -16,8 +16,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { PrintZoneEditor } from "@/components/PrintZoneEditor";
+import type { PrintZoneCoords } from "@/components/PrintZoneEditor";
 import { toast } from "sonner";
-import { Loader2, Image as ImageIcon, Shirt, RefreshCw, Trash2, AlertTriangle } from "lucide-react";
+import { Loader2, Image as ImageIcon, Shirt, RefreshCw, Trash2, AlertTriangle, Move } from "lucide-react";
 
 export default function Mockups() {
   const { activeWorkspace } = useWorkspace();
@@ -80,6 +88,20 @@ export default function Mockups() {
     },
     onError: (err) => toast.error(err.message),
   });
+
+  // Manual Placement state
+  const [placementDialogOpen, setPlacementDialogOpen] = useState(false);
+  const [selectedTemplateIdx, setSelectedTemplateIdx] = useState(0);
+
+  // Fetch group detail for manual placement dialog
+  const groupDetail = trpc.productGroup.get.useQuery(
+    { groupId: selectedGroupId! },
+    { enabled: !!selectedGroupId && placementDialogOpen }
+  );
+
+  // Manual placement mutations
+  const applyAll = trpc.productGroup.setManualPlacementAllColors.useMutation();
+  const updateGroup = trpc.productGroup.update.useMutation();
 
   // Filter concepts that have at least one image
   const conceptsWithImages = useMemo(() => {
@@ -227,19 +249,33 @@ export default function Mockups() {
             </div>
           </div>
 
-          <Button onClick={handleGenerate} disabled={!canGenerate} className="w-full sm:w-auto">
-            {generateMutation.isPending ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                Generating…
-              </>
-            ) : (
-              <>
-                <ImageIcon className="h-4 w-4 mr-2" />
-                Generate Mockups
-              </>
-            )}
-          </Button>
+          <div className="flex gap-2 flex-wrap">
+            <Button onClick={handleGenerate} disabled={!canGenerate} className="w-full sm:w-auto">
+              {generateMutation.isPending ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  Generating…
+                </>
+              ) : (
+                <>
+                  <ImageIcon className="h-4 w-4 mr-2" />
+                  Generate Mockups
+                </>
+              )}
+            </Button>
+            <Button
+              variant="outline"
+              disabled={!selectedGroupId}
+              onClick={() => {
+                setSelectedTemplateIdx(0);
+                setPlacementDialogOpen(true);
+              }}
+              className="w-full sm:w-auto"
+            >
+              <Move className="h-4 w-4 mr-2" />
+              Manual Placement
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
@@ -333,6 +369,74 @@ export default function Mockups() {
           <p className="text-sm">Select a concept above to view or generate mockups.</p>
         </div>
       )}
+      {/* Manual Placement Dialog */}
+      <Dialog open={placementDialogOpen} onOpenChange={setPlacementDialogOpen}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="font-['Syne']">Manual Placement</DialogTitle>
+          </DialogHeader>
+          {groupDetail.data?.mockups && groupDetail.data.mockups.length > 0 ? (
+            <div className="space-y-4">
+              {/* Color picker */}
+              <div className="flex flex-wrap gap-2">
+                {groupDetail.data.mockups.map((t, idx) => (
+                  <button
+                    key={t.id}
+                    onClick={() => setSelectedTemplateIdx(idx)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-medium transition-colors ${
+                      idx === selectedTemplateIdx
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border hover:border-primary/50"
+                    }`}
+                  >
+                    <span
+                      className="w-3 h-3 rounded-full border"
+                      style={{ backgroundColor: t.colorHex }}
+                    />
+                    {t.colorName}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Draw the print zone on one color — it copies to all colors on save.
+              </p>
+              {/* PrintZoneEditor */}
+              <PrintZoneEditor
+                imageUrl={groupDetail.data.mockups[selectedTemplateIdx].imageUrl}
+                initialZone={groupDetail.data.mockups[selectedTemplateIdx].garmentBbox ?? null}
+                saving={applyAll.isPending}
+                onCancel={() => setPlacementDialogOpen(false)}
+                onSave={async (zone: PrintZoneCoords) => {
+                  const result = await applyAll.mutateAsync({
+                    groupId: selectedGroupId!,
+                    printArea: { x: zone.x, y: zone.y, width: zone.width, height: zone.height },
+                  });
+                  // Persist the real-world print SIZE in inches (group-level)
+                  if (zone.widthIn && zone.heightIn) {
+                    await updateGroup.mutateAsync({
+                      groupId: selectedGroupId!,
+                      printZoneInches: { widthIn: zone.widthIn, heightIn: zone.heightIn },
+                    });
+                  }
+                  setPlacementDialogOpen(false);
+                  toast.success(
+                    `Placement applied to ${result.updatedCount} color${result.updatedCount !== 1 ? "s" : ""}`,
+                    { description: "Regenerate mockups to apply the new placement." }
+                  );
+                }}
+              />
+            </div>
+          ) : groupDetail.isLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground py-8 text-center">
+              No color templates found for this group. Upload mockup templates first.
+            </p>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
