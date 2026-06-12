@@ -212,6 +212,11 @@ export const designConcepts = mysqlTable("design_concepts", {
   productionUrlA: text("productionUrlA"),
   productionUrlB: text("productionUrlB"),
   productionUrlC: text("productionUrlC"),
+  /** Per-DESIGN print placement (PO 2026-06-12), keyed by product-group id. The Mockup studio's
+   *  Manual Placement saves HERE — scoped to this concept — and overrides at generate time. It must
+   *  NEVER touch the product group's per-colour calibration (template.garmentBbox), which the studio
+   *  used to overwrite (the "Product Group changes not persistent" bug). */
+  printPlacements: json("printPlacements").$type<Record<string, { x: number; y: number; width: number; height: number }>>(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 

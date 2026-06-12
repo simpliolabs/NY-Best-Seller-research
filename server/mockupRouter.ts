@@ -139,11 +139,14 @@ export const mockupRouter = router({
       const priorRenders = await getMockupsByConceptVariation(input.conceptId, input.variationKey);
 
       // 5. Composite each template and store result
+      // Per-DESIGN placement (concept.printPlacements[groupId], set in the Mockup studio) wins over
+      // the group's per-colour calibration — it's scoped to THIS concept and never mutates the group.
+      const conceptPlacement = (concept.printPlacements as Record<string, { x: number; y: number; width: number; height: number }> | null)?.[input.productGroupId] ?? null;
       const renders = [];
       for (const template of templates) {
         try {
-          // Per-template box wins, then the group zone, then DEFAULT (resolvePrintZone is total).
-          const printZone = resolvePrintZone(template.garmentBbox ?? null, group.printZone ?? null);
+          // Concept placement > per-template box > group zone > DEFAULT (resolvePrintZone is total).
+          const printZone = resolvePrintZone(conceptPlacement ?? template.garmentBbox ?? null, group.printZone ?? null);
           const compositeBuffer = await compositeDesignOnMockup({
             designUrl,
             mockupUrl: template.imageUrl,
@@ -232,6 +235,41 @@ export const mockupRouter = router({
       // For now, delete the old one — the user can trigger generate again
       await deleteMockupRender(input.mockupId);
       return { success: true };
+    }),
+
+  /** Per-DESIGN Manual Placement (PO 2026-06-12): save/clear the print box for THIS concept on THIS
+   *  product group. Replaces the old setManualPlacementAllColors flow from the Mockup studio, which
+   *  overwrote the group's per-colour calibration (the "Product Group changes not persistent" bug).
+   *  printArea null = clear (generate falls back to the group calibration). */
+  setConceptPlacement: protectedProcedure
+    .input(z.object({
+      conceptId: z.number(),
+      productGroupId: z.string(),
+      printArea: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).nullable(),
+    }))
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      const rows = await db.select({ printPlacements: designConcepts.printPlacements })
+        .from(designConcepts).where(eq(designConcepts.id, input.conceptId)).limit(1);
+      if (!rows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Concept not found" });
+      const map = { ...(rows[0].printPlacements as Record<string, unknown> | null ?? {}) };
+      if (input.printArea === null) delete map[input.productGroupId];
+      else map[input.productGroupId] = input.printArea;
+      await db.update(designConcepts).set({ printPlacements: map as any }).where(eq(designConcepts.id, input.conceptId));
+      return { ok: true, cleared: input.printArea === null };
+    }),
+
+  /** The saved per-design placement for a concept+group (drives the "(active)" button state). */
+  getConceptPlacement: protectedProcedure
+    .input(z.object({ conceptId: z.number(), productGroupId: z.string() }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) return null;
+      const rows = await db.select({ printPlacements: designConcepts.printPlacements })
+        .from(designConcepts).where(eq(designConcepts.id, input.conceptId)).limit(1);
+      const map = rows[0]?.printPlacements as Record<string, { x: number; y: number; width: number; height: number }> | null;
+      return map?.[input.productGroupId] ?? null;
     }),
 
   /** Delete a single mockup render */
