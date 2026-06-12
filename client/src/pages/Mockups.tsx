@@ -25,7 +25,7 @@ import {
 import { PrintZoneEditor } from "@/components/PrintZoneEditor";
 import type { PrintZoneCoords } from "@/components/PrintZoneEditor";
 import { toast } from "sonner";
-import { Loader2, Image as ImageIcon, Shirt, RefreshCw, Trash2, AlertTriangle, Move, Check } from "lucide-react";
+import { Loader2, Image as ImageIcon, Shirt, RefreshCw, Trash2, AlertTriangle, Move, Check, X } from "lucide-react";
 
 export default function Mockups() {
   const { activeWorkspace } = useWorkspace();
@@ -286,6 +286,22 @@ export default function Mockups() {
                 </>
               )}
             </Button>
+            {hasManualPlacement && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-red-600 hover:text-red-700"
+                disabled={applyAll.isPending}
+                onClick={async () => {
+                  if (!window.confirm("Remove the manual placement for ALL colors? Mockups revert to the group default zone.")) return;
+                  const res = await applyAll.mutateAsync({ groupId: selectedGroupId!, printArea: null as any });
+                  toast.success(`Manual placement removed \u2014 ${res.updatedCount} colors reverted`);
+                  utils.productGroup.get.invalidate({ groupId: selectedGroupId! });
+                }}
+              >
+                <X className="h-4 w-4 mr-1" /> Remove placement
+              </Button>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -437,24 +453,7 @@ export default function Mockups() {
                   );
                 }}
               />
-              {/* Remove placement button */}
-              {hasManualPlacement && (
-                <div className="flex pt-2 border-t">
-                  <Button
-                    variant="ghost"
-                    className="text-red-600 hover:text-red-700 mr-auto"
-                    disabled={applyAll.isPending}
-                    onClick={async () => {
-                      const res = await applyAll.mutateAsync({ groupId: selectedGroupId!, printArea: null as any });
-                      toast.success(`Manual placement removed \u2014 ${res.updatedCount} colors reverted to the group default zone`);
-                      utils.productGroup.get.invalidate({ groupId: selectedGroupId! });
-                      setPlacementDialogOpen(false);
-                    }}
-                  >
-                    Remove placement
-                  </Button>
-                </div>
-              )}
+
             </div>
           ) : groupDetail.isLoading ? (
             <div className="flex items-center justify-center py-12">
