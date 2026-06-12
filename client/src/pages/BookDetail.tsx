@@ -291,7 +291,7 @@ export default function BookDetail() {
       {/* Header row */}
       <div className="flex items-center justify-between">
         <Button variant="ghost" onClick={() => window.history.back()} className="gap-2">
-          <ArrowLeft className="h-4 w-4" /> Back
+          <ArrowLeft className="h-4 w-4" /> {isNicheWorkspace ? "Back to Signals" : "Back"}
         </Button>
 
         {/* Refresh button */}
@@ -348,8 +348,16 @@ export default function BookDetail() {
               />
             )}
             <div className="space-y-2 min-w-0">
+              {isNicheWorkspace && (
+                <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-300 text-[11px]">NICHE SIGNAL</Badge>
+              )}
               <CardTitle className="text-xl text-foreground">{book.title}</CardTitle>
               <p className="text-sm text-muted-foreground">{book.author}</p>
+              {isNicheWorkspace && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  This is the source trend found in the community — the concepts below are shirt ideas generated from it. A winner may riff on a different angle of the same niche.
+                </p>
+              )}
               <div className="flex flex-wrap gap-1.5">
                 {book.trendDirection === "up" && (
                   <Badge className="bg-emerald-100 text-emerald-700 border-emerald-300 gap-1">
@@ -523,7 +531,7 @@ export default function BookDetail() {
               <div className="flex items-center gap-2 mb-4">
                 <Crown className="h-5 w-5 text-amber-500" />
                 <h2 className="text-lg font-bold text-foreground">
-                  Winning Concepts ({winnerConcepts.length})
+                  {isNicheWorkspace ? `Winning Concepts — generated from this signal (${winnerConcepts.length})` : `Winning Concepts (${winnerConcepts.length})`}
                 </h2>
               </div>
               <div className="space-y-4">
@@ -632,7 +640,7 @@ export default function BookDetail() {
           {otherConcepts.length > 0 && (
             <div>
               <h2 className="text-lg font-semibold mb-3 text-foreground">
-                Other Concepts ({otherConcepts.length})
+                {isNicheWorkspace ? `Other Concepts from this signal (${otherConcepts.length})` : `Other Concepts (${otherConcepts.length})`}
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {otherConcepts.map((c: any) => {
