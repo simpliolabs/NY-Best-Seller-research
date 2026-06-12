@@ -284,6 +284,28 @@ export default function ReportDetail() {
               </Button>
             </div>
           )}
+
+          {isCompleted && (run?.imagesGenerated ?? 0) > 0 && (
+            <div className="mt-4 flex items-center gap-3 p-3 rounded-md bg-slate-50 border border-slate-200">
+              <RefreshCw className="h-4 w-4 text-slate-500 shrink-0" />
+              <div className="flex-1">
+                <p className="text-sm font-medium text-slate-700">Regenerate all winner images</p>
+                <p className="text-xs text-slate-500">Replaces all 5 winner designs with fresh generations — current designs are saved to each concept's version history first. For one or two bad images, use Regenerate on the concept card instead.</p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={regenLoading}
+                onClick={() => {
+                  if (!window.confirm("Regenerate ALL winner images? Current designs are snapshotted to version history and restorable.")) return;
+                  setRegenLoading(true);
+                  regenerateImages.mutate({ runId, force: true });
+                }}
+              >
+                {regenLoading ? (<><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Generating...</>) : (<><RefreshCw className="h-3 w-3 mr-1" /> Regenerate All</>)}
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 
