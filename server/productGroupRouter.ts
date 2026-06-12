@@ -18,12 +18,25 @@ import {
 } from "./productGroupDb";
 import { storagePut } from "./storage";
 import { DEFAULT_PRINT_AREA } from "./mockupCompositor";
+import { invokeLLM } from "./_core/llm";
 
 const pricingTierSchema = z.object({
   sizes: z.array(z.string()),
   price: z.number().positive(),
   cost: z.number().nonnegative().optional(), // per-tier COGS — sent to Shopify as the variant inventory cost
   compareAt: z.number().nonnegative().optional(), // per-tier strikethrough MSRP — variant compare_at_price
+});
+
+/** Shopify category metafields — garment facts, constant per group (PO 2026-06-12). */
+const categoryAttributesSchema = z.object({
+  ageGroup: z.string().max(60).optional(),
+  neckline: z.string().max(60).optional(),
+  sleeveLengthType: z.string().max(60).optional(),
+  targetGender: z.string().max(60).optional(),
+  topLengthType: z.string().max(60).optional(),
+  careInstructions: z.array(z.string().max(80)).optional(),
+  fabric: z.string().max(120).optional(),
+  clothingFeatures: z.array(z.string().max(80)).optional(),
 });
 
 export const productGroupRouter = router({
@@ -87,6 +100,7 @@ export const productGroupRouter = router({
         pricingTiers: z.array(pricingTierSchema).optional(),
         sizeWeights: z.record(z.string(), z.number().nonnegative()).optional(),
         shopifyCategoryGid: z.string().max(120).optional(),
+        categoryAttributes: categoryAttributesSchema.optional(),
         /** FULL group-level fallback box (+ optional inches) — the explicit "set group default"
          * path. The per-template editor does NOT use this; it sends printZoneInches instead. */
         printZone: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number(), widthIn: z.number().optional(), heightIn: z.number().optional() }).optional(),
@@ -121,6 +135,7 @@ export const productGroupRouter = router({
         ...(data.pricingTiers !== undefined && { pricingTiers: data.pricingTiers }),
         ...(data.sizeWeights !== undefined && { sizeWeights: data.sizeWeights }),
         ...(data.shopifyCategoryGid !== undefined && { shopifyCategoryGid: data.shopifyCategoryGid }),
+        ...(data.categoryAttributes !== undefined && { categoryAttributes: data.categoryAttributes }),
         ...(printZoneToStore !== undefined && { printZone: printZoneToStore }),
       });
       return { ok: true };
@@ -207,6 +222,55 @@ export const productGroupRouter = router({
         await updateMockupTemplate(t.id, { garmentBbox: input.printArea });
       }
       return { ok: true, updatedCount: templates.length, cleared: input.printArea === null };
+    }),
+
+  /** AI pre-fill for the Shopify category metafields (PO 2026-06-12). Drafts the 8 garment facts
+   *  from the group's name/description/product type — the human reviews + saves (the LLM never runs
+   *  per-export; these are constants of the blank). Returns the draft, does NOT save. */
+  suggestCategoryAttributes: protectedProcedure
+    .input(z.object({ groupId: z.string() }))
+    .mutation(async ({ input }) => {
+      const group = await getProductGroupById(input.groupId);
+      if (!group) throw new TRPCError({ code: "NOT_FOUND", message: "Product group not found" });
+      const result = await invokeLLM({
+        messages: [
+          {
+            role: "system",
+            content: `You are an apparel catalog specialist. Given a garment blank, return its Shopify category metafield values as JSON. Use Shopify's standard taxonomy value names (e.g. "Adults", "Crew", "Short sleeve", "Unisex", "Regular", "Machine wash", "Tumble dry"). If the blank is identifiable (e.g. a known Comfort Colors / Gildan / Bella+Canvas style number), use its REAL specs; otherwise give the most typical values for the product type. Never invent fabric contents you are unsure of — prefer the common spec for that style.`,
+          },
+          {
+            role: "user",
+            content: `Garment blank:\nName: ${group.name}\nProduct type: ${group.productType ?? "T-Shirt"}\nDescription: ${group.description ?? "(none)"}`,
+          },
+        ],
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "category_attributes",
+            strict: true,
+            schema: {
+              type: "object",
+              properties: {
+                ageGroup: { type: "string", description: "e.g. Adults" },
+                neckline: { type: "string", description: "e.g. Crew" },
+                sleeveLengthType: { type: "string", description: "e.g. Short sleeve" },
+                targetGender: { type: "string", description: "e.g. Unisex" },
+                topLengthType: { type: "string", description: "e.g. Regular" },
+                careInstructions: { type: "array", items: { type: "string" }, description: "e.g. Machine wash, Tumble dry" },
+                fabric: { type: "string", description: "e.g. 100% ring-spun cotton" },
+                clothingFeatures: { type: "array", items: { type: "string" }, description: "e.g. Relaxed fit" },
+              },
+              required: ["ageGroup", "neckline", "sleeveLengthType", "targetGender", "topLengthType", "careInstructions", "fabric", "clothingFeatures"],
+              additionalProperties: false,
+            },
+          },
+        },
+      });
+      const raw = result.choices?.[0]?.message?.content ?? "{}";
+      return JSON.parse(typeof raw === "string" ? raw : JSON.stringify(raw)) as {
+        ageGroup: string; neckline: string; sleeveLengthType: string; targetGender: string;
+        topLengthType: string; careInstructions: string[]; fabric: string; clothingFeatures: string[];
+      };
     }),
 
   /** Delete a mockup template (does not delete the S3 file) */

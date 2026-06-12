@@ -373,6 +373,107 @@ export async function linkOptionSwatches(
   return warnings;
 }
 
+// ─── Category metafields (PO 2026-06-12) ───────────────────────────────────────────────────────
+// The 8 garment-fact metafields on the product (Age group, Neckline, ...). Values are metaobject
+// references of system taxonomy types (same mechanism as the colour swatches): resolve each value
+// name -> metaobject GID (lookup by displayName, create if missing), then metafieldsSet
+// list.metaobject_reference in the "shopify" namespace. Needs read/write_metaobjects.
+
+const CATEGORY_ATTRIBUTE_DEFS: Array<{ attr: string; key: string; type: string }> = [
+  { attr: "ageGroup", key: "age-group", type: "shopify--age-group" },
+  { attr: "neckline", key: "neckline", type: "shopify--neckline" },
+  { attr: "sleeveLengthType", key: "sleeve-length-type", type: "shopify--sleeve-length-type" },
+  { attr: "targetGender", key: "target-gender", type: "shopify--target-gender" },
+  { attr: "topLengthType", key: "top-length-type", type: "shopify--top-length-type" },
+  { attr: "careInstructions", key: "care-instructions", type: "shopify--care-instructions" },
+  { attr: "fabric", key: "fabric", type: "shopify--fabric" },
+  { attr: "clothingFeatures", key: "clothing-features", type: "shopify--clothing-features" },
+];
+
+async function resolveMetaobjectGid(creds: ShopifyCredentials, type: string, name: string, cache: Map<string, Map<string, string>>): Promise<string | null> {
+  let byName = cache.get(type);
+  if (!byName) {
+    byName = new Map();
+    try {
+      const data = await shopifyGraphQL<{ metaobjects: { nodes: Array<{ id: string; displayName: string }> } }>(
+        creds,
+        "query M($type: String!){ metaobjects(type: $type, first: 250){ nodes{ id displayName } } }",
+        { type }
+      );
+      for (const n of data.metaobjects?.nodes ?? []) byName.set(n.displayName.toLowerCase(), n.id);
+    } catch (e: any) {
+      console.error(`[CATMETA] lookup ${type} failed:`, String(e?.message ?? e).slice(0, 160));
+    }
+    cache.set(type, byName);
+  }
+  const hit = byName.get(name.toLowerCase());
+  if (hit) return hit;
+  // not on the store yet — create it (taxonomy value metaobjects are created on first use)
+  try {
+    const data = await shopifyGraphQL<{ metaobjectCreate: { metaobject: { id: string } | null; userErrors: Array<{ message: string }> } }>(
+      creds,
+      "mutation MC($metaobject: MetaobjectCreateInput!){ metaobjectCreate(metaobject: $metaobject){ metaobject{ id } userErrors{ field message } } }",
+      { metaobject: { type, fields: [{ key: "label", value: name }] } }
+    );
+    const gid = data.metaobjectCreate?.metaobject?.id ?? null;
+    if (gid) byName.set(name.toLowerCase(), gid);
+    else console.error(`[CATMETA] create '${name}' (${type}) refused:`, JSON.stringify(data.metaobjectCreate?.userErrors ?? []));
+    return gid;
+  } catch (e: any) {
+    console.error(`[CATMETA] create '${name}' (${type}) failed:`, String(e?.message ?? e).slice(0, 160));
+    return null;
+  }
+}
+
+/** Set the 8 category metafields on a product from the group's saved garment facts. Best-effort:
+ *  returns warnings for any value that could not be resolved/created — never throws. */
+export async function setCategoryAttributeMetafields(
+  creds: ShopifyCredentials,
+  productId: number,
+  attrs: Record<string, string | string[] | undefined>
+): Promise<string[]> {
+  const warnings: string[] = [];
+  const cache = new Map<string, Map<string, string>>();
+  const metafields: Array<{ ownerId: string; namespace: string; key: string; type: string; value: string }> = [];
+  for (const def of CATEGORY_ATTRIBUTE_DEFS) {
+    const v = attrs[def.attr];
+    const names = (Array.isArray(v) ? v : v ? [v] : []).map((s) => String(s).trim()).filter(Boolean);
+    if (!names.length) continue;
+    const gids: string[] = [];
+    for (const name of names) {
+      const gid = await resolveMetaobjectGid(creds, def.type, name, cache);
+      if (gid) gids.push(gid);
+      else warnings.push(`Category metafield '${def.key}': could not resolve/create value '${name}'`);
+    }
+    if (gids.length) {
+      metafields.push({
+        ownerId: `gid://shopify/Product/${productId}`,
+        namespace: "shopify",
+        key: def.key,
+        type: "list.metaobject_reference",
+        value: JSON.stringify(gids),
+      });
+    }
+  }
+  if (!metafields.length) return warnings;
+  try {
+    const res = await shopifyGraphQL<{ metafieldsSet: { userErrors: Array<{ field?: string[]; message: string }> } }>(
+      creds,
+      "mutation MF($metafields: [MetafieldsSetInput!]!){ metafieldsSet(metafields: $metafields){ userErrors{ field message } } }",
+      { metafields }
+    );
+    const errs = res.metafieldsSet?.userErrors ?? [];
+    for (const e of errs) {
+      console.error(`[CATMETA] metafieldsSet error:`, JSON.stringify(e));
+      warnings.push(`Category metafield set failed: ${e.message}`);
+    }
+  } catch (e: any) {
+    console.error(`[CATMETA] metafieldsSet failed:`, String(e?.message ?? e).slice(0, 200));
+    warnings.push(`Category metafields failed: ${String(e?.message ?? e).slice(0, 160)}`);
+  }
+  return warnings;
+}
+
 /** TEMP diagnostic (PO 2026-06-12): test the inventory WRITE calls on a product's first variant and
  *  return the exact error — distinguishes a 403 (scope) from a 422 (item not stocked at location) from
  *  an untracked variant. Read of the product + two writes on ONE variant. */

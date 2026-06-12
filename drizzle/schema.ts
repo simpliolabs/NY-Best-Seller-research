@@ -332,6 +332,18 @@ export const productGroups = mysqlTable("product_groups", {
   /** Shopify product taxonomy category GID (e.g. "gid://shopify/TaxonomyCategory/aa-1-13-8" = T-Shirts).
    *  Sent on export — required before swatches can link. Null → T-Shirts default. PO 2026-06-11. */
   shopifyCategoryGid: varchar("shopifyCategoryGid", { length: 120 }),
+  /** Shopify category metafields (PO 2026-06-12) — GARMENT facts, constant per group (the blank),
+   *  set once (LLM pre-fill + human confirm) and auto-sent on every export as taxonomy metafields. */
+  categoryAttributes: json("categoryAttributes").$type<{
+    ageGroup?: string;          // e.g. "Adults"
+    neckline?: string;          // e.g. "Crew"
+    sleeveLengthType?: string;  // e.g. "Short sleeve"
+    targetGender?: string;      // e.g. "Unisex"
+    topLengthType?: string;     // e.g. "Regular"
+    careInstructions?: string[]; // e.g. ["Machine wash cold","Tumble dry low"]
+    fabric?: string;            // e.g. "100% ring-spun cotton"
+    clothingFeatures?: string[]; // e.g. ["Relaxed fit"]
+  }>(),
   /** Print zone — photo-relative ratios 0-1. x/y/width/height = the GROUP-level fallback box
    * (used when a color template has no per-template box). widthIn/heightIn = the real-world MAX
    * print-area size in INCHES (shared per group; the editor aspect-locks each box to this).

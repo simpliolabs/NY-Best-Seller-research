@@ -18,7 +18,7 @@ import { getConceptById } from "./db";
 import { getProductGroupById, getMockupsByGroup } from "./productGroupDb";
 import { invokeLLM } from "./_core/llm";
 import { getCredential } from "./workspaceDb";
-import { createProduct, addProductImageByUrl, setProductMetafield, getPrimaryLocationId, setInventoryLevel, setInventoryItemCost, publishProductToChannels, setProductCategory, TSHIRT_CATEGORY_GID, diagnoseInventoryWrites, bulkSetInventory, bulkSetVariantCosts, linkOptionSwatches } from "./shopifyClient";
+import { createProduct, addProductImageByUrl, setProductMetafield, getPrimaryLocationId, setInventoryLevel, setInventoryItemCost, publishProductToChannels, setProductCategory, TSHIRT_CATEGORY_GID, diagnoseInventoryWrites, bulkSetInventory, bulkSetVariantCosts, linkOptionSwatches, setCategoryAttributeMetafields } from "./shopifyClient";
 import { getMockupsByConceptVariation } from "./mockupDb";
 
 /** 3-char uppercase abbreviation for SKUs: keep the first letter, then the next consonants
@@ -411,6 +411,20 @@ export const listingRouter = router({
       } catch (swErr) {
         console.warn(`[publishToShopify] swatch linking failed (non-fatal):`, swErr);
         publishWarnings.push(`Swatch linking failed: ${String((swErr as any)?.message ?? swErr).slice(0, 160)}`);
+      }
+
+      // Category metafields (PO 2026-06-12): the 8 garment facts saved on the product group
+      // (age group, neckline, sleeve length, target gender, top length, care, fabric, features) —
+      // resolved to taxonomy metaobjects and set on the product. Best-effort.
+      try {
+        const attrs = (group as any)?.categoryAttributes;
+        if (attrs && Object.keys(attrs).length) {
+          publishWarnings.push(...await setCategoryAttributeMetafields(creds, product.id, attrs));
+        } else {
+          publishWarnings.push("No category metafields saved on the product group — fill them on the Product Groups page (AI pre-fill available).");
+        }
+      } catch (cmErr) {
+        console.warn(`[publishToShopify] category metafields failed (non-fatal):`, cmErr);
       }
 
       // SEO metafields — LLM-generated dedicated meta title/description (PO 2026-06-11).
