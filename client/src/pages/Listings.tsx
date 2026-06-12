@@ -357,6 +357,7 @@ export default function Listings() {
                 const group = groupsQuery.data?.find((g) => g.id === listing.productGroupId);
                 handleGenerateDescription(listing.id, listing.conceptId, listing.title, group?.name ?? "T-Shirt", (group as any)?.productType ?? "T-Shirt");
               }}
+              onSkipDescription={() => markReady(listing.id)}
               onMarkReady={() => markReady(listing.id)}
               onPublish={() => publishMutation.mutate({ id: listing.id, workspaceId })}
               isGenerating={generateDescMutation.isPending}
@@ -388,6 +389,7 @@ function ListingCard({
   listing,
   onDelete,
   onGenerateDescription,
+  onSkipDescription,
   onMarkReady,
   onPublish,
   isGenerating,
@@ -397,6 +399,7 @@ function ListingCard({
   listing: any;
   onDelete: () => void;
   onGenerateDescription: () => void;
+  onSkipDescription: () => void;
   onMarkReady: () => void;
   onPublish: () => void;
   isGenerating: boolean;
@@ -464,20 +467,31 @@ function ListingCard({
         {/* Actions */}
         <div className="flex items-center gap-2 pt-1">
           {!listing.description && listing.status === "draft" && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={onGenerateDescription}
-              disabled={isGenerating}
-              className="text-xs"
-            >
-              {isGenerating ? (
-                <Loader2 className="h-3 w-3 animate-spin mr-1" />
-              ) : (
-                <Sparkles className="h-3 w-3 mr-1" />
-              )}
-              Generate Copy
-            </Button>
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={onGenerateDescription}
+                disabled={isGenerating}
+                className="text-xs"
+              >
+                {isGenerating ? (
+                  <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                ) : (
+                  <Sparkles className="h-3 w-3 mr-1" />
+                )}
+                Generate Copy
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={onSkipDescription}
+                disabled={isGenerating}
+                className="text-xs text-muted-foreground"
+              >
+                Skip Description
+              </Button>
+            </>
           )}
           {listing.status === "draft" && listing.description && (
             <Button size="sm" onClick={onMarkReady} className="text-xs">
