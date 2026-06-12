@@ -18,7 +18,7 @@ import { getConceptById } from "./db";
 import { getProductGroupById, getMockupsByGroup } from "./productGroupDb";
 import { invokeLLM } from "./_core/llm";
 import { getCredential } from "./workspaceDb";
-import { createProduct, addProductImageByUrl, setProductMetafield, getPrimaryLocationId, setInventoryLevel, setInventoryItemCost, publishProductToChannels, setProductCategory, TSHIRT_CATEGORY_GID, diagnoseInventoryWrites, bulkSetInventory, bulkSetVariantCosts, linkOptionSwatches, setCategoryAttributeMetafields } from "./shopifyClient";
+import { createProduct, addProductImageByUrl, setProductMetafield, getPrimaryLocationId, setInventoryLevel, setInventoryItemCost, publishProductToChannels, setProductCategory, TSHIRT_CATEGORY_GID, diagnoseInventoryWrites, bulkSetInventory, bulkSetVariantCosts, linkOptionSwatches, setCategoryAttributeMetafields, diagnoseCategoryMetafields } from "./shopifyClient";
 import { getMockupsByConceptVariation } from "./mockupDb";
 
 /** 3-char uppercase abbreviation for SKUs: keep the first letter, then the next consonants
@@ -197,7 +197,10 @@ export const listingRouter = router({
         const grp = await getProductGroupById(exported.productGroupId);
         const attrs = (grp as any)?.categoryAttributes;
         categoryMetafields = attrs && Object.keys(attrs).length
-          ? { warnings: await setCategoryAttributeMetafields(creds, Number(exported.shopifyProductId), attrs) }
+          ? {
+              warnings: await setCategoryAttributeMetafields(creds, Number(exported.shopifyProductId), attrs),
+              introspection: await diagnoseCategoryMetafields(creds, Number(exported.shopifyProductId)),
+            }
           : { note: "group has no saved categoryAttributes" };
       }
       return { grantedScope, locationId, locationError, testedProductId: exported?.shopifyProductId ?? null, writes, categoryMetafields };

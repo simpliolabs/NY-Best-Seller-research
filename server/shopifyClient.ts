@@ -425,6 +425,28 @@ async function resolveMetaobjectGid(creds: ShopifyCredentials, type: string, nam
   }
 }
 
+/** TEMP diagnostic (PO 2026-06-12): the product's recorded category + the store's shopify-namespace
+ *  metafield definitions — pins down the "Owner subtype does not match" error. */
+export async function diagnoseCategoryMetafields(creds: ShopifyCredentials, productId: number): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  try {
+    const p = await shopifyGraphQL<{ product: { category: { id: string; fullName: string } | null } }>(
+      creds,
+      "query P($id: ID!){ product(id: $id){ category{ id fullName } } }",
+      { id: `gid://shopify/Product/${productId}` }
+    );
+    out.productCategory = p.product?.category ?? null;
+  } catch (e: any) { out.categoryError = String(e?.message ?? e).slice(0, 200); }
+  try {
+    const d = await shopifyGraphQL<{ metafieldDefinitions: { nodes: Array<{ key: string; name: string; type: { name: string } }> } }>(
+      creds,
+      'query D{ metafieldDefinitions(first: 30, ownerType: PRODUCT, namespace: "shopify"){ nodes{ key name type{ name } } } }'
+    );
+    out.shopifyNamespaceDefinitions = d.metafieldDefinitions?.nodes ?? [];
+  } catch (e: any) { out.definitionsError = String(e?.message ?? e).slice(0, 200); }
+  return out;
+}
+
 /** Set the 8 category metafields on a product from the group's saved garment facts. Best-effort:
  *  returns warnings for any value that could not be resolved/created — never throws. */
 export async function setCategoryAttributeMetafields(
