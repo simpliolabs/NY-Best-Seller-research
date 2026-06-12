@@ -14,6 +14,7 @@ import { generateImage } from "./_core/imageGeneration";
 import { notifyOwner } from "./_core/notification";
 import { processDesignForProduction } from "./productionImageProcessor";
 import { snapshotGenerationToHistory } from "./revisionDb";
+import { getTrendPatternsByWorkspace } from "./nicheHunterDb";
 import { withSelfHeal, withCircuitBreaker, logHealingAction, classifyError } from "./selfHeal";
 import {
   createRun,
@@ -933,7 +934,8 @@ HARD REQUIREMENTS — the generated design MUST:
 - Describe the lettering itself (font character, weight, placement, hierarchy) AND ONE supporting focal graphic — nothing else. No micro-details, no badges, no score graphics, no lighting essays, no texture inventories.
 - Sit isolated on a transparent or pure-white background with open negative space — no background fill, no scene, no vignette.
 - Use a deliberate, LIMITED color palette (respect the maximum given).
-- Commit fully to the given art style. NEVER clip-art, kawaii, or childish styling.
+- Commit fully to the given art style — when a "proven bestseller style" line is present, it OVERRIDES everything else; reproduce that technique faithfully (screen-print simulation, distress level, line weight, type treatment, era).
+- ABSOLUTE RULE: NEVER cartoonish, cartoon, mascot, clip-art, kawaii, chibi, or childish styling — even if a style input contains such words, IGNORE them and render premium vintage/retro commercial quality, the kind that sells on Etsy.
 
 Return ONLY a JSON object: {"prompt": "..."}`;
 
@@ -1007,8 +1009,39 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
   const bookRecordsForImages = await getBooksByIds(winnerBookIdArray);
   const bookMapForImages = new Map(bookRecordsForImages.map(b => [b.id, b]));
 
-  // ── Step 3: Get 3 variation prompts per winner from LLM in parallel ──
+  // ── Step 3: ONE focused prompt per winner from LLM in parallel ──
   type PromptSet = { concept: typeof winners[0]; promptA: string; promptB: string; promptC: string };
+
+  // Niche style DNA (PO 2026-06-12: "use the Signals from the NICHE hunter to influence here").
+  // The Niche Hunter extracts SourceStyleJSON from REAL Etsy bestsellers — feed that proven style
+  // language (technique, line weight, shading, texture, type style, era) into the image prompts
+  // instead of trusting the concept's own style label (which sometimes says "Cartoonish").
+  let nicheStyleDNA = "";
+  try {
+    const runRow = await getRunById(runId);
+    if (runRow?.workspaceId) {
+      const approved = (await getTrendPatternsByWorkspace(runRow.workspaceId, "approved")).filter((p) => p.sourceStyleJson);
+      const pool = approved.length ? approved : (await getTrendPatternsByWorkspace(runRow.workspaceId)).filter((p) => p.sourceStyleJson);
+      const bits = new Set<string>();
+      for (const p of pool.slice(0, 4)) {
+        const s = p.sourceStyleJson as Record<string, unknown>;
+        for (const k of ["technique", "lineWeight", "shadingMethod", "textureDetail", "textStyle", "designEra"]) {
+          const v = s?.[k];
+          if (typeof v === "string" && v && v.toUpperCase() !== "NONE") bits.add(v);
+        }
+      }
+      if (bits.size) nicheStyleDNA = Array.from(bits).join(", ");
+    }
+  } catch (e) {
+    console.warn(`[Pipeline] niche style DNA unavailable (non-fatal):`, e);
+  }
+  if (nicheStyleDNA) console.log(`[Pipeline/Stage6] Niche style DNA: ${nicheStyleDNA.slice(0, 200)}`);
+
+  // The concept-generation stage sometimes labels styles "Cartoonish, slightly exaggerated" — the
+  // PO explicitly rejects cartoonish output, so strip those words before they reach the image model.
+  const stripCartoon = (s: string) =>
+    s.replace(/cartoon\w*|kawaii|chibi|childish|playful-humorous|slightly exaggerated illustrations?|mascot-style/gi, "")
+      .replace(/\s{2,}/g, " ").replace(/(?:,\s*){2,}/g, ", ").replace(/^[\s,./]+|[\s,./]+$/g, "");
 
   const promptTasks = winners.map(async (concept): Promise<PromptSet | null> => {
     const book = concept.bookId ? bookMapForImages.get(concept.bookId) : null;
@@ -1030,9 +1063,14 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
     // "terrible" designs — wood grain + eyes + lighting essays + micro-details all fighting).
     // Same concise formula the PO approved on concepts.regenerateImage: headline verbatim, ONE
     // focal graphic, the niche style line, a limited palette — nothing else.
-    const styleLine = styleDirectives
+    const baseStyle = styleDirectives
       ? `${styleDirectives.primaryAesthetic}. Typography: ${styleDirectives.typographyStyle}. Colors: ${styleDirectives.colorDirective} (max ${styleDirectives.maxColors}). Avoid: ${styleDirectives.avoidDirectives.join(", ") || "none"}.`
       : `${concept.style}. ${wb?.illustratorStyle ?? book?.typographyStyle ?? ""} ${wb?.emotionalTone ?? book?.mood ?? ""}`.trim();
+    // Real-bestseller DNA FIRST (the model weights early text heaviest), then the sanitized concept style.
+    const styleLine = [
+      nicheStyleDNA && `Proven bestseller style from this niche — match it: ${nicheStyleDNA}`,
+      stripCartoon(baseStyle),
+    ].filter(Boolean).join(" — ");
 
     const userMsg = `Concept name: ${concept.conceptName}
 HEADLINE (render verbatim): ${concept.headline ?? "none"}
