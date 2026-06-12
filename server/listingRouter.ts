@@ -18,7 +18,7 @@ import { getConceptById } from "./db";
 import { getProductGroupById, getMockupsByGroup } from "./productGroupDb";
 import { invokeLLM } from "./_core/llm";
 import { getCredential } from "./workspaceDb";
-import { createProduct, addProductImageByUrl, setProductMetafield, getPrimaryLocationId, setInventoryLevel, setInventoryItemCost } from "./shopifyClient";
+import { createProduct, addProductImageByUrl, setProductMetafield, getPrimaryLocationId, setInventoryLevel, setInventoryItemCost, publishProductToChannels } from "./shopifyClient";
 import { getMockupsByConceptVariation } from "./mockupDb";
 
 /** 3-char uppercase abbreviation for SKUs: keep the first letter, then the next consonants
@@ -33,6 +33,19 @@ export function abbrev3(name: string): string {
 /** SKU base from the product-group name: alphanumeric, uppercase (e.g. "1717" → "1717"). */
 export function skuBase(name: string): string {
   return (name || "PRD").toUpperCase().replace(/[^A-Z0-9]/g, "") || "PRD";
+}
+
+/** Tags when a listing has none (Skip Description skips copy+tags) — derived from the concept:
+ *  format + signal phrases + the design-name words. PO 2026-06-11. */
+function deriveTags(
+  concept: { format?: string | null; signalTags?: string[] | null; conceptName?: string | null } | null | undefined,
+  fallbackTitle: string,
+): string {
+  const tags = new Set<string>();
+  if (concept?.format) tags.add(concept.format);
+  for (const s of concept?.signalTags ?? []) if (s) tags.add(s);
+  for (const w of String(concept?.conceptName ?? fallbackTitle).split(/\s+/)) if (w.length > 3) tags.add(w);
+  return Array.from(tags).slice(0, 12).join(", ");
 }
 
 /**
@@ -241,9 +254,11 @@ export const listingRouter = router({
         : null;
 
       // ── Build the size x color variant matrix (PO 2026-06-11) ───────────────────────────────
-      const tagsStr = Array.isArray(listing.tags) ? listing.tags.join(", ") : "";
       const vendor = await getCredential(input.workspaceId, "shopify", "vendor");
       const concept = await getConceptById(listing.conceptId);
+      const tagsStr = (Array.isArray(listing.tags) && listing.tags.length)
+        ? listing.tags.join(", ")
+        : deriveTags(concept, listing.title);
 
       // Colours = the colours of the mockups the user selected (render.templateId -> template.colorName).
       const mockupIds: string[] = Array.isArray(listing.mockupRenderIds) ? (listing.mockupRenderIds as string[]) : [];
@@ -260,14 +275,17 @@ export const listingRouter = router({
       const colorNames = Array.from(new Set(selectedRenders.map((r) => colorByTemplate.get(r.templateId)).filter((c): c is string => !!c)));
 
       // Sizes + per-size price from the group's pricing tiers (#2).
-      const tiers = (group?.pricingTiers ?? []) as Array<{ sizes: string[]; price: number; cost?: number }>;
+      const tiers = (group?.pricingTiers ?? []) as Array<{ sizes: string[]; price: number; cost?: number; compareAt?: number }>;
       const sizePrice = new Map<string, string>();
       const sizeCost = new Map<string, string>();
+      const sizeCompareAt = new Map<string, string>();
       for (const tier of tiers) for (const sz of tier.sizes) {
         sizePrice.set(sz, String(tier.price));
         if (tier.cost != null) sizeCost.set(sz, String(tier.cost));
+        if (tier.compareAt != null) sizeCompareAt.set(sz, String(tier.compareAt));
       }
       const sizes = Array.from(sizePrice.keys());
+      const sizeWeights = (group?.sizeWeights ?? {}) as Record<string, number>; // per-size oz (#6)
 
       // SKU pieces (#4): BASE(group)-SIZE-COLOR(abbr)-DESIGN(abbr), e.g. 1717-M-ESP-DNK.
       const base = skuBase(group?.name ?? "PRD");
@@ -282,10 +300,11 @@ export const listingRouter = router({
             option1: size,
             option2: color,
             price: sizePrice.get(size) ?? listing.price ?? "29.99",
-            ...(listing.compareAtPrice ? { compare_at_price: listing.compareAtPrice } : {}),
+            ...(sizeCompareAt.has(size) ? { compare_at_price: sizeCompareAt.get(size)! } : {}), // #3 per-tier MSRP
+            ...(sizeWeights[size] != null ? { weight: sizeWeights[size], weight_unit: "oz" as const } : {}), // #6 per-size weight
             sku: `${base}-${size.toUpperCase()}-${abbrev3(color)}-${designAbbr}`,
             inventory_management: "shopify",
-            inventory_policy: "continue", // #6 keep selling when out of stock
+            inventory_policy: "continue", // keep selling when out of stock
           });
         }
       }
@@ -304,11 +323,14 @@ export const listingRouter = router({
           : [{ price: listing.price ?? "29.99", inventory_management: "shopify", inventory_policy: "continue", ...(listing.compareAtPrice ? { compare_at_price: listing.compareAtPrice } : {}) }],
       });
 
-      // Upload each mockup image to Shopify (best-effort — don't fail publish if image upload fails)
+      // Upload each colour's mockup image and LINK it to that colour's variants (#2) so each variant
+      // shows its own colour. render.templateId -> colorName -> the variants whose option2 is that colour.
       for (let i = 0; i < selectedRenders.length; i++) {
         const render = selectedRenders[i]!;
+        const color = colorByTemplate.get(render.templateId);
+        const variantIds = (product.variants ?? []).filter((v) => v.option2 === color).map((v) => v.id);
         try {
-          await addProductImageByUrl(creds, product.id, render.compositeUrl, i + 1);
+          await addProductImageByUrl(creds, product.id, render.compositeUrl, i + 1, variantIds);
         } catch (imgErr) {
           console.warn(`[publishToShopify] Image upload failed for render ${render.id}:`, imgErr);
         }
@@ -334,6 +356,13 @@ export const listingRouter = router({
         }
       } catch (invErr) {
         console.warn(`[publishToShopify] inventory/cost step failed (non-fatal):`, invErr);
+      }
+
+      // Publish to the Online Store + Shop sales channels, not POS (#1). Needs write_publications.
+      try {
+        await publishProductToChannels(creds, product.id, ["Online Store", "Shop"]);
+      } catch (chErr) {
+        console.warn(`[publishToShopify] channel publish failed (non-fatal):`, chErr);
       }
 
       // SEO metafields — LLM-generated dedicated meta title/description (PO 2026-06-11).

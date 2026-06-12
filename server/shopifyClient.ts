@@ -42,6 +42,8 @@ export interface ShopifyProductInput {
     option3?: string;
     inventory_management?: "shopify" | null;
     inventory_policy?: "deny" | "continue";
+    weight?: number;
+    weight_unit?: "g" | "kg" | "oz" | "lb";
   }>;
 }
 
@@ -161,6 +163,44 @@ export async function setInventoryItemCost(
   });
 }
 
+/** Minimal GraphQL caller — REST can't manage sales-channel publications. */
+async function shopifyGraphQL<T>(creds: ShopifyCredentials, query: string, variables?: Record<string, unknown>): Promise<T> {
+  const domain = creds.storeDomain.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  const res = await fetch(`https://${domain}/admin/api/${API_VERSION}/graphql.json`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": creds.accessToken },
+    body: JSON.stringify({ query, variables }),
+  });
+  if (!res.ok) throw new Error(`Shopify GraphQL error ${res.status}`);
+  const json = (await res.json()) as { data?: T; errors?: unknown };
+  if (json.errors) throw new Error(`Shopify GraphQL: ${JSON.stringify(json.errors)}`);
+  return json.data as T;
+}
+
+/** Publish a product to named sales channels, e.g. ["Online Store","Shop"]. Best-effort; needs the
+ *  write_publications scope. Looks up each channel's publication id, then publishablePublish. */
+export async function publishProductToChannels(
+  creds: ShopifyCredentials,
+  productId: number,
+  channelNames: string[]
+): Promise<void> {
+  const pubs = await shopifyGraphQL<{ publications: { edges: Array<{ node: { id: string; name: string } }> } }>(
+    creds,
+    "{ publications(first: 25) { edges { node { id name } } } }"
+  );
+  const wanted = new Set(channelNames.map((n) => n.toLowerCase()));
+  const id = `gid://shopify/Product/${productId}`;
+  const toPublish = pubs.publications.edges.filter((e) => wanted.has(e.node.name.toLowerCase())).map((e) => ({ publicationId: e.node.id }));
+  const toUnpublish = pubs.publications.edges.filter((e) => !wanted.has(e.node.name.toLowerCase())).map((e) => ({ publicationId: e.node.id }));
+  if (toPublish.length) {
+    await shopifyGraphQL(creds, "mutation P($id: ID!, $input: [PublicationInput!]!){ publishablePublish(id:$id,input:$input){ userErrors{ message } } }", { id, input: toPublish });
+  }
+  if (toUnpublish.length) {
+    // remove POS / any other channel — the PO wants EXACTLY the named channels
+    await shopifyGraphQL(creds, "mutation U($id: ID!, $input: [PublicationInput!]!){ publishableUnpublish(id:$id,input:$input){ userErrors{ message } } }", { id, input: toUnpublish });
+  }
+}
+
 /**
  * Add an image to an existing product by URL.
  * Shopify will fetch the image from the URL and store it.
@@ -169,7 +209,8 @@ export async function addProductImageByUrl(
   creds: ShopifyCredentials,
   productId: number,
   imageUrl: string,
-  position?: number
+  position?: number,
+  variantIds?: number[]
 ): Promise<ShopifyProductImage> {
   const data = await shopifyFetch<{ image: ShopifyProductImage }>(
     creds,
@@ -179,6 +220,7 @@ export async function addProductImageByUrl(
       image: {
         src: imageUrl,
         ...(position !== undefined ? { position } : {}),
+        ...(variantIds && variantIds.length ? { variant_ids: variantIds } : {}),
       },
     }
   );

@@ -23,6 +23,7 @@ const pricingTierSchema = z.object({
   sizes: z.array(z.string()),
   price: z.number().positive(),
   cost: z.number().nonnegative().optional(), // per-tier COGS — sent to Shopify as the variant inventory cost
+  compareAt: z.number().nonnegative().optional(), // per-tier strikethrough MSRP — variant compare_at_price
 });
 
 export const productGroupRouter = router({
@@ -84,6 +85,7 @@ export const productGroupRouter = router({
         compareAtPrice: z.number().positive().optional(),
         costPerItem: z.number().nonnegative().optional(),
         pricingTiers: z.array(pricingTierSchema).optional(),
+        sizeWeights: z.record(z.string(), z.number().nonnegative()).optional(),
         /** FULL group-level fallback box (+ optional inches) — the explicit "set group default"
          * path. The per-template editor does NOT use this; it sends printZoneInches instead. */
         printZone: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number(), widthIn: z.number().optional(), heightIn: z.number().optional() }).optional(),
@@ -116,6 +118,7 @@ export const productGroupRouter = router({
         ...(data.compareAtPrice !== undefined && { compareAtPrice: String(data.compareAtPrice) }),
         ...(data.costPerItem !== undefined && { costPerItem: String(data.costPerItem) }),
         ...(data.pricingTiers !== undefined && { pricingTiers: data.pricingTiers }),
+        ...(data.sizeWeights !== undefined && { sizeWeights: data.sizeWeights }),
         ...(printZoneToStore !== undefined && { printZone: printZoneToStore }),
       });
       return { ok: true };

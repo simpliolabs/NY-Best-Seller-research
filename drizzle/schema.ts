@@ -323,8 +323,12 @@ export const productGroups = mysqlTable("product_groups", {
   /** DEPRECATED 2026-06-11: cost is now PER pricing tier (pricingTiers[].cost) — COGS varies by size.
    *  Column kept unused (no drop-migration); the per-tier cost in the JSON below is the source of truth. */
   costPerItem: decimal("costPerItem", { precision: 10, scale: 2 }),
-  /** JSON: [{sizes:["S","M","L","XL"], price:34.95, cost:8.50}, ...] — price = sale, cost = COGS, per tier. */
-  pricingTiers: json("pricingTiers").$type<Array<{ sizes: string[]; price: number; cost?: number }>>(),
+  /** JSON: [{sizes:["S","M","L","XL"], price:34.95, cost:8.50, compareAt:49.95}, ...] — per tier:
+   *  price = sale, cost = COGS, compareAt = strikethrough MSRP. */
+  pricingTiers: json("pricingTiers").$type<Array<{ sizes: string[]; price: number; cost?: number; compareAt?: number }>>(),
+  /** Per-INDIVIDUAL-SIZE shipping weight in oz, e.g. {"S":5.2,"M":5.6,...} — sent to Shopify as the
+   *  variant weight. Per size, not per tier (a 4XL weighs more than an S). PO 2026-06-11. */
+  sizeWeights: json("sizeWeights").$type<Record<string, number>>(),
   /** Print zone — photo-relative ratios 0-1. x/y/width/height = the GROUP-level fallback box
    * (used when a color template has no per-template box). widthIn/heightIn = the real-world MAX
    * print-area size in INCHES (shared per group; the editor aspect-locks each box to this).

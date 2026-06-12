@@ -12,7 +12,9 @@ import type { Express, Request, Response } from "express";
 import crypto from "crypto";
 import { getCredential, setCredential } from "./workspaceDb";
 
-const SCOPES = "write_products,read_products";
+// write_inventory + read_locations: set stock levels + per-variant cost. write_publications: publish
+// to the Online Store + Shop sales channels. (Ungate these in the Shopify app config too — PO 2026-06-11.)
+const SCOPES = "write_products,read_products,read_locations,write_inventory,write_publications";
 
 /** A Shopify shop's admin host — the ONLY kind of host we will ever build an OAuth authorize or
  *  token-exchange URL against. Single-label `<shop>.myshopify.com` only. */
