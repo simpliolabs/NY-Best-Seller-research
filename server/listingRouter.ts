@@ -18,7 +18,7 @@ import { getConceptById } from "./db";
 import { getProductGroupById, getMockupsByGroup } from "./productGroupDb";
 import { invokeLLM } from "./_core/llm";
 import { getCredential } from "./workspaceDb";
-import { createProduct, addProductImageByUrl, setProductMetafield, getPrimaryLocationId, setInventoryLevel, setInventoryItemCost, publishProductToChannels, setProductCategory, TSHIRT_CATEGORY_GID, diagnoseInventoryWrites } from "./shopifyClient";
+import { createProduct, addProductImageByUrl, setProductMetafield, getPrimaryLocationId, setInventoryLevel, setInventoryItemCost, publishProductToChannels, setProductCategory, TSHIRT_CATEGORY_GID, diagnoseInventoryWrites, bulkSetInventory, bulkSetVariantCosts, linkOptionSwatches } from "./shopifyClient";
 import { getMockupsByConceptVariation } from "./mockupDb";
 
 /** 3-char uppercase abbreviation for SKUs: keep the first letter, then the next consonants
@@ -55,17 +55,21 @@ function deriveTags(
  */
 async function generateSeoMeta(
   title: string,
-  description: string
+  description: string,
+  niche?: string
 ): Promise<{ metaTitle: string; metaDescription: string }> {
   const result = await invokeLLM({
     messages: [
       {
         role: "system",
-        content: `You write SEO meta tags for Shopify print-on-demand apparel. Return JSON with "metaTitle" (<=60 characters, compelling, key search terms front-loaded, no surrounding quotes) and "metaDescription" (<=155 characters, ONE line of plain text, no newlines, an enticing click-through summary).`,
+        // The niche grounding is load-bearing: with an empty description the model used to pattern-
+        // match "Easily Distracted By..." to the famous FISHING tee and invent the wrong niche
+        // (PO-caught: "Funny Fishing Tee" on a pickleball shirt). Only the given niche may appear.
+        content: `You write SEO meta tags for Shopify print-on-demand apparel. Return JSON with "metaTitle" (<=60 characters, compelling, key search terms front-loaded, no surrounding quotes) and "metaDescription" (<=155 characters, ONE line of plain text, no newlines, an enticing click-through summary). HARD RULE: use ONLY the niche/theme given in the input. NEVER introduce any other hobby, sport, or niche — if the niche keywords say pickleball, the meta is about pickleball, not fishing or anything else.`,
       },
       {
         role: "user",
-        content: `Product title: ${title}\n\nProduct description:\n${(description || "").slice(0, 800)}`,
+        content: `Product title: ${title}\n\nNiche / theme keywords (the ONLY allowed topic): ${niche || "infer strictly from the title"}\n\nProduct description:\n${(description || "").slice(0, 800)}`,
       },
     ],
     response_format: {
@@ -343,37 +347,39 @@ export const listingRouter = router({
           : [{ price: listing.price ?? "29.99", inventory_management: "shopify", inventory_policy: "continue", ...(listing.compareAtPrice ? { compare_at_price: listing.compareAtPrice } : {}) }],
       });
 
-      // Upload each colour's mockup image and LINK it to that colour's variants (#2) so each variant
-      // shows its own colour. render.templateId -> colorName -> the variants whose option2 is that colour.
+      // Upload each colour's mockup image, LINK it to that colour's variants (#2) so each variant
+      // shows its own colour, and set a descriptive per-colour ALT text (SEO/accessibility).
+      const productTypeLabel = (group as any)?.productType ?? "T-Shirt";
       for (let i = 0; i < selectedRenders.length; i++) {
         const render = selectedRenders[i]!;
         const color = colorByTemplate.get(render.templateId);
         const variantIds = (product.variants ?? []).filter((v) => v.option2 === color).map((v) => v.id);
+        const alt = `May include ${listing.title} ${color ? `in ${color.toLowerCase()} ` : ""}${String(productTypeLabel).toLowerCase()} with ${concept?.conceptName ?? "graphic"} design`;
         try {
-          await addProductImageByUrl(creds, product.id, render.compositeUrl, i + 1, variantIds);
+          await addProductImageByUrl(creds, product.id, render.compositeUrl, i + 1, variantIds, alt);
         } catch (imgErr) {
           console.warn(`[publishToShopify] Image upload failed for render ${render.id}:`, imgErr);
         }
       }
 
-      // Stock 100/variant (#5) + per-tier cost (#3). Shopify sets stock via the InventoryLevel
-      // resource and cost via the InventoryItem (neither is settable on variant create). Cost is by
-      // PRICING TIER (COGS varies by size) — looked up per variant by its size. Best-effort per
-      // variant — the product already exists, so an inventory/cost failure must never block publish.
+      // Stock 100/variant + per-tier COGS — ONE bulk GraphQL call each. The old per-variant REST
+      // loop (2 calls x 35 variants) blew Shopify's rate limit (burst 40, 2/s) and the TAIL variants
+      // silently got stock/cost 0 (PO-reported). Best-effort: never blocks the publish.
       try {
         const locationId = await getPrimaryLocationId(creds);
-        for (const v of product.variants ?? []) {
-          if (!v.inventory_item_id) continue;
-          if (locationId) {
-            try { await setInventoryLevel(creds, locationId, v.inventory_item_id, 100); }
-            catch (e) { console.warn(`[publishToShopify] stock set failed for variant ${v.id}:`, e); }
-          }
-          const cost = v.option1 ? sizeCost.get(v.option1) : undefined; // per-tier COGS, by the variant's size
-          if (cost) {
-            try { await setInventoryItemCost(creds, v.inventory_item_id, cost); }
-            catch (e) { console.warn(`[publishToShopify] cost set failed for variant ${v.id}:`, e); }
-          }
+        const variants = product.variants ?? [];
+        if (locationId) {
+          try {
+            await bulkSetInventory(creds, locationId, variants
+              .filter((v) => v.inventory_item_id)
+              .map((v) => ({ inventoryItemId: v.inventory_item_id, quantity: 100 })));
+          } catch (e) { console.warn(`[publishToShopify] bulk stock set failed:`, e); }
         }
+        try {
+          await bulkSetVariantCosts(creds, product.id, variants
+            .map((v) => ({ variantId: v.id, cost: v.option1 ? sizeCost.get(v.option1) : undefined }))
+            .filter((x): x is { variantId: number; cost: string } => !!x.cost));
+        } catch (e) { console.warn(`[publishToShopify] bulk cost set failed:`, e); }
       } catch (invErr) {
         console.warn(`[publishToShopify] inventory/cost step failed (non-fatal):`, invErr);
       }
@@ -387,17 +393,31 @@ export const listingRouter = router({
 
       // Product taxonomy category (#2) — the group's mapped category or the T-Shirts default. Required
       // before Shopify can link colour swatches. Best-effort.
+      const publishWarnings: string[] = [];
       try {
         await setProductCategory(creds, product.id, (group as any)?.shopifyCategoryGid || TSHIRT_CATEGORY_GID);
       } catch (catErr) {
         console.warn(`[publishToShopify] category set failed (non-fatal):`, catErr);
+        publishWarnings.push("Category set failed — swatch linking likely skipped too.");
+      }
+
+      // Swatch linking (PO spec 2026-06-12): link the Color/Size options to the shopify taxonomy
+      // metafields so the theme renders ROUND COLOUR SWATCHES instead of text pills. Must run AFTER
+      // the category is set. Unknown colours attempt metaobject creation, else warn loudly.
+      try {
+        const colorHexByName: Record<string, string | undefined> = {};
+        for (const t of templates) colorHexByName[t.colorName] = (t as any).colorHex ?? undefined;
+        publishWarnings.push(...await linkOptionSwatches(creds, product.id, colorHexByName));
+      } catch (swErr) {
+        console.warn(`[publishToShopify] swatch linking failed (non-fatal):`, swErr);
+        publishWarnings.push(`Swatch linking failed: ${String((swErr as any)?.message ?? swErr).slice(0, 160)}`);
       }
 
       // SEO metafields — LLM-generated dedicated meta title/description (PO 2026-06-11).
       // global.title_tag / global.description_tag are Shopify's SEO fields. Best-effort: the
       // product + images already exist, so a meta failure must never block the publish.
       try {
-        const meta = await generateSeoMeta(listing.title, listing.description ?? "");
+        const meta = await generateSeoMeta(listing.title, listing.description ?? "", tagsStr);
         if (meta.metaTitle) {
           await setProductMetafield(creds, product.id, "global", "title_tag", meta.metaTitle);
         }
@@ -417,6 +437,7 @@ export const listingRouter = router({
       return {
         shopifyProductId: String(product.id),
         shopifyAdminUrl: `https://${storeDomain}/admin/products/${product.id}`,
+        warnings: publishWarnings,
       };
     }),
 

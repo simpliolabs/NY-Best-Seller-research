@@ -710,11 +710,11 @@ export async function compositeDesignOnMockup(config: CompositeConfig): Promise<
   if (mockupW > 1000 || mockupH > 1000) {
     outputBuf = await sharp(composited)
       .resize(1000, 1000, { fit: "inside", withoutEnlargement: true })
-      .webp({ quality: 82, effort: 4 })
+      .webp({ quality: 75, effort: 5 })
       .toBuffer();
   } else {
     outputBuf = await sharp(composited)
-      .webp({ quality: 82, effort: 4 })
+      .webp({ quality: 75, effort: 5 })
       .toBuffer();
   }
 
