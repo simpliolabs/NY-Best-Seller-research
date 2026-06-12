@@ -9,6 +9,9 @@
  */
 
 const API_VERSION = "2024-01";
+// GraphQL needs a newer version for the product-taxonomy `category` field + the productUpdate(product:)
+// form. REST stays on 2024-01 (the rest of this client relies on its behaviour).
+const GRAPHQL_API_VERSION = "2025-01";
 
 export interface ShopifyCredentials {
   storeDomain: string; // e.g. "my-store.myshopify.com"
@@ -166,7 +169,7 @@ export async function setInventoryItemCost(
 /** Minimal GraphQL caller — REST can't manage sales-channel publications. */
 async function shopifyGraphQL<T>(creds: ShopifyCredentials, query: string, variables?: Record<string, unknown>): Promise<T> {
   const domain = creds.storeDomain.replace(/^https?:\/\//, "").replace(/\/$/, "");
-  const res = await fetch(`https://${domain}/admin/api/${API_VERSION}/graphql.json`, {
+  const res = await fetch(`https://${domain}/admin/api/${GRAPHQL_API_VERSION}/graphql.json`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": creds.accessToken },
     body: JSON.stringify({ query, variables }),
@@ -199,6 +202,18 @@ export async function publishProductToChannels(
     // remove POS / any other channel — the PO wants EXACTLY the named channels
     await shopifyGraphQL(creds, "mutation U($id: ID!, $input: [PublicationInput!]!){ publishableUnpublish(id:$id,input:$input){ userErrors{ message } } }", { id, input: toUnpublish });
   }
+}
+
+/** T-Shirts in Shopify's product taxonomy — the default category when a group hasn't mapped one. */
+export const TSHIRT_CATEGORY_GID = "gid://shopify/TaxonomyCategory/aa-1-13-8";
+
+/** Set the product's taxonomy category (required before colour swatches can link). Best-effort. */
+export async function setProductCategory(creds: ShopifyCredentials, productId: number, categoryGid: string): Promise<void> {
+  await shopifyGraphQL(
+    creds,
+    "mutation C($product: ProductUpdateInput!){ productUpdate(product: $product){ userErrors{ field message } } }",
+    { product: { id: `gid://shopify/Product/${productId}`, category: categoryGid } }
+  );
 }
 
 /**

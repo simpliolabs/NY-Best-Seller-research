@@ -86,6 +86,7 @@ export const productGroupRouter = router({
         costPerItem: z.number().nonnegative().optional(),
         pricingTiers: z.array(pricingTierSchema).optional(),
         sizeWeights: z.record(z.string(), z.number().nonnegative()).optional(),
+        shopifyCategoryGid: z.string().max(120).optional(),
         /** FULL group-level fallback box (+ optional inches) — the explicit "set group default"
          * path. The per-template editor does NOT use this; it sends printZoneInches instead. */
         printZone: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number(), widthIn: z.number().optional(), heightIn: z.number().optional() }).optional(),
@@ -119,6 +120,7 @@ export const productGroupRouter = router({
         ...(data.costPerItem !== undefined && { costPerItem: String(data.costPerItem) }),
         ...(data.pricingTiers !== undefined && { pricingTiers: data.pricingTiers }),
         ...(data.sizeWeights !== undefined && { sizeWeights: data.sizeWeights }),
+        ...(data.shopifyCategoryGid !== undefined && { shopifyCategoryGid: data.shopifyCategoryGid }),
         ...(printZoneToStore !== undefined && { printZone: printZoneToStore }),
       });
       return { ok: true };

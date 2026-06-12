@@ -329,6 +329,9 @@ export const productGroups = mysqlTable("product_groups", {
   /** Per-INDIVIDUAL-SIZE shipping weight in oz, e.g. {"S":5.2,"M":5.6,...} — sent to Shopify as the
    *  variant weight. Per size, not per tier (a 4XL weighs more than an S). PO 2026-06-11. */
   sizeWeights: json("sizeWeights").$type<Record<string, number>>(),
+  /** Shopify product taxonomy category GID (e.g. "gid://shopify/TaxonomyCategory/aa-1-13-8" = T-Shirts).
+   *  Sent on export — required before swatches can link. Null → T-Shirts default. PO 2026-06-11. */
+  shopifyCategoryGid: varchar("shopifyCategoryGid", { length: 120 }),
   /** Print zone — photo-relative ratios 0-1. x/y/width/height = the GROUP-level fallback box
    * (used when a color template has no per-template box). widthIn/heightIn = the real-world MAX
    * print-area size in INCHES (shared per group; the editor aspect-locks each box to this).

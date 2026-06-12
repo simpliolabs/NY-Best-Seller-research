@@ -18,7 +18,7 @@ import { getConceptById } from "./db";
 import { getProductGroupById, getMockupsByGroup } from "./productGroupDb";
 import { invokeLLM } from "./_core/llm";
 import { getCredential } from "./workspaceDb";
-import { createProduct, addProductImageByUrl, setProductMetafield, getPrimaryLocationId, setInventoryLevel, setInventoryItemCost, publishProductToChannels } from "./shopifyClient";
+import { createProduct, addProductImageByUrl, setProductMetafield, getPrimaryLocationId, setInventoryLevel, setInventoryItemCost, publishProductToChannels, setProductCategory, TSHIRT_CATEGORY_GID } from "./shopifyClient";
 import { getMockupsByConceptVariation } from "./mockupDb";
 
 /** 3-char uppercase abbreviation for SKUs: keep the first letter, then the next consonants
@@ -363,6 +363,14 @@ export const listingRouter = router({
         await publishProductToChannels(creds, product.id, ["Online Store", "Shop"]);
       } catch (chErr) {
         console.warn(`[publishToShopify] channel publish failed (non-fatal):`, chErr);
+      }
+
+      // Product taxonomy category (#2) — the group's mapped category or the T-Shirts default. Required
+      // before Shopify can link colour swatches. Best-effort.
+      try {
+        await setProductCategory(creds, product.id, (group as any)?.shopifyCategoryGid || TSHIRT_CATEGORY_GID);
+      } catch (catErr) {
+        console.warn(`[publishToShopify] category set failed (non-fatal):`, catErr);
       }
 
       // SEO metafields — LLM-generated dedicated meta title/description (PO 2026-06-11).

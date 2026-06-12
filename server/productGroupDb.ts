@@ -35,7 +35,7 @@ export async function createProductGroup(
 
 export async function updateProductGroup(
   id: string,
-  data: Partial<Pick<InsertProductGroup, "name" | "description" | "productType" | "compareAtPrice" | "costPerItem" | "pricingTiers" | "sizeWeights" | "printZone">>
+  data: Partial<Pick<InsertProductGroup, "name" | "description" | "productType" | "compareAtPrice" | "costPerItem" | "pricingTiers" | "sizeWeights" | "shopifyCategoryGid" | "printZone">>
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
