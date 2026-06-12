@@ -4,6 +4,7 @@
  * Karpathy: plain functions, no class, no speculative abstractions.
  */
 import { eq, and, desc, sql } from "drizzle-orm";
+import { nanoid } from "nanoid";
 import { getDb } from "./db";
 import { designRevisions } from "../drizzle/schema";
 import type { DesignRevision } from "../drizzle/schema";
@@ -50,6 +51,28 @@ export async function getRevisionsByConceptVariation(
       )
     )
     .orderBy(desc(designRevisions.iterationNumber));
+}
+
+/** Generation history is stored in this table under a sentinel variationKey. "H" never collides
+ *  with the real A/B/C variations the Design Studio edits, and varchar(1) only fits a single char. */
+export const HISTORY_KEY = "H";
+
+/** Snapshot a design URL into a concept's generation history (sentinel "H" key), deduped by URL so
+ *  the same design never stacks up. Call BEFORE overwriting imageUrlA so nothing is ever lost. */
+export async function snapshotGenerationToHistory(conceptId: number, url: string | null, style: string | null): Promise<void> {
+  if (!url) return;
+  const hist = await getRevisionsByConceptVariation(conceptId, HISTORY_KEY);
+  if (hist.some((r) => r.resultImageUrl === url)) return;
+  await insertRevision({
+    id: nanoid(),
+    conceptId,
+    variationKey: HISTORY_KEY,
+    iterationNumber: await getNextIterationNumber(conceptId, HISTORY_KEY),
+    instruction: `Generation — ${style ?? "previous"}`,
+    referenceImageUrl: url,
+    resultImageUrl: url,
+    accepted: false,
+  });
 }
 
 /** Get a single revision by ID */

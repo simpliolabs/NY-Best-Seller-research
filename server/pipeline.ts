@@ -13,6 +13,7 @@ import { invokeLLM } from "./_core/llm";
 import { generateImage } from "./_core/imageGeneration";
 import { notifyOwner } from "./_core/notification";
 import { processDesignForProduction } from "./productionImageProcessor";
+import { snapshotGenerationToHistory } from "./revisionDb";
 import { withSelfHeal, withCircuitBreaker, logHealingAction, classifyError } from "./selfHeal";
 import {
   createRun,
@@ -948,7 +949,7 @@ async function generateImageWithRetry(prompt: string, label: string): Promise<{ 
   }
 }
 
-async function stageDesignExpansion(runId: number): Promise<number> {
+async function stageDesignExpansion(runId: number, force = false): Promise<number> {
   const stageStart = Date.now();
   console.log(`[Pipeline/Stage6] START stageDesignExpansion for run ${runId}`);
   const concepts = await getConceptsByRunId(runId);
@@ -970,10 +971,11 @@ async function stageDesignExpansion(runId: number): Promise<number> {
   }
 
   // ── Step 2: Select top 5 winners for image generation ────────────────
-  // IMMUTABILITY GUARD: Only generate images for winners that don't already have them.
-  // Concepts are permanent records — existing images must never be replaced.
+  // Default: only winners that don't already have images (no accidental replacement).
+  // force=true (PO 2026-06-12, "Regenerate All Images" button): regenerate every winner — safe now
+  // because the prior design is snapshotted into generation history before the overwrite below.
   const allWinners = ranked.slice(0, MAX_WINNER_CONCEPTS);
-  const winners = allWinners.filter((c) => !c.imageUrlA);
+  const winners = force ? allWinners : allWinners.filter((c) => !c.imageUrlA);
 
   if (allWinners.length === 0) {
     console.log(`[Pipeline/Stage6] No scored concepts — skipping image generation (elapsed: ${Date.now() - stageStart}ms)`);
@@ -1135,7 +1137,15 @@ Layout intent: ${concept.layoutDescription ?? "not specified"}`;
   // Write all image data to DB
   // IMMUTABILITY GUARD: Only pass fields that have actual values — never pass null for URLs.
   // The updateConceptImages guard also protects against this, but defense-in-depth.
+  const priorById = new Map(ranked.map((c) => [c.id, c]));
   for (const [conceptId, imgs] of Array.from(conceptImageMap)) {
+    // Keep full generation history (PO directive): snapshot the design being replaced BEFORE the
+    // overwrite — same rule as concepts.regenerateImage, now also on bulk/forced regeneration.
+    const prior = priorById.get(conceptId);
+    if (imgs.urlA && prior?.imageUrlA && prior.imageUrlA !== imgs.urlA) {
+      try { await snapshotGenerationToHistory(conceptId, prior.imageUrlA, prior.style); }
+      catch (e) { console.warn(`[Pipeline] history snapshot failed for concept ${conceptId} (non-fatal):`, e); }
+    }
     const update: Parameters<typeof updateConceptImages>[1] = {};
     if (imgs.promptA) update.imagePromptA = imgs.promptA;
     if (imgs.promptB) update.imagePromptB = imgs.promptB;
@@ -2182,8 +2192,8 @@ async function resumePipeline(runId: number, fromStage: number): Promise<void> {
  * Also re-runs scoring (Stage 5) if all concepts have NULL trendScore (scoring timed out).
  * Safe to call multiple times — only regenerates concepts with null imageUrlA.
  */
-export async function regenerateImagesForRun(runId: number): Promise<number> {
-  console.log(`[Pipeline] Regenerating images for run #${runId}...`);
+export async function regenerateImagesForRun(runId: number, force = false): Promise<number> {
+  console.log(`[Pipeline] Regenerating images for run #${runId}${force ? " (FORCE — all winners)" : ""}...`);
 
   // Check if scoring needs to be re-run (all concepts have NULL trendScore)
   const concepts = await getConceptsByRunId(runId);
@@ -2203,7 +2213,7 @@ export async function regenerateImagesForRun(runId: number): Promise<number> {
     }
   }
 
-  const count = await stageDesignExpansion(runId);
+  const count = await stageDesignExpansion(runId, force);
   await updateRunImagesGenerated(runId, count);
   console.log(`[Pipeline] Image regeneration complete: ${count} images for run #${runId}`);
   return count;

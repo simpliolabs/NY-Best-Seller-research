@@ -63,32 +63,9 @@ import { healingLog } from "../drizzle/schema";
 import { desc, eq } from "drizzle-orm";
 import { designConcepts } from "../drizzle/schema";
 import { getDb } from "./db";
-import { insertRevision, getNextIterationNumber, getRevisionsByConceptVariation } from "./revisionDb";
-import { nanoid } from "nanoid";
-
-// Generation history is stored in the design_revisions table under a sentinel variationKey.
-// "H" never collides with the real A/B/C variations the Design Studio edits (its getHistory /
-// edit-base queries are keyed to A/B/C), and varchar(1) only fits a single char — so no new
-// table, no migration, no interference with the revision edit-base logic.
-const HISTORY_KEY = "H";
-
-/** Snapshot a design URL into a concept's generation history (sentinel "H" key), deduped by URL so
- *  the same design never stacks up. Call BEFORE overwriting imageUrlA so nothing is ever lost. */
-async function snapshotGenerationToHistory(conceptId: number, url: string | null, style: string | null): Promise<void> {
-  if (!url) return;
-  const hist = await getRevisionsByConceptVariation(conceptId, HISTORY_KEY);
-  if (hist.some((r) => r.resultImageUrl === url)) return;
-  await insertRevision({
-    id: nanoid(),
-    conceptId,
-    variationKey: HISTORY_KEY,
-    iterationNumber: await getNextIterationNumber(conceptId, HISTORY_KEY),
-    instruction: `Generation — ${style ?? "previous"}`,
-    referenceImageUrl: url,
-    resultImageUrl: url,
-    accepted: false,
-  });
-}
+// Generation history lives in design_revisions under the sentinel "H" key — helper + key moved to
+// revisionDb.ts (2026-06-12) so the scan pipeline's bulk regenerate can snapshot too.
+import { getRevisionsByConceptVariation, HISTORY_KEY, snapshotGenerationToHistory } from "./revisionDb";
 
 // Track running pipeline to prevent concurrent runs
 let pipelineRunning = false;
@@ -283,7 +260,11 @@ export const appRouter = router({
      * Safe to call on any completed run — only generates for concepts missing imageUrlA.
      */
     regenerateImages: protectedProcedure
-      .input(z.object({ runId: z.number() }))
+      .input(z.object({
+        runId: z.number(),
+        /** true = regenerate EVERY winner (prior designs snapshot to history); false/absent = only winners missing images */
+        force: z.boolean().optional(),
+      }))
       .mutation(async ({ input }) => {
         if (pipelineRunning) {
           return { success: false, message: "Pipeline is currently running. Try again after it completes.", imagesGenerated: 0 };
@@ -295,7 +276,7 @@ export const appRouter = router({
         }
         pipelineRunning = true;
         try {
-          const count = await regenerateImagesForRun(input.runId);
+          const count = await regenerateImagesForRun(input.runId, input.force ?? false);
           return { success: true, message: `Generated ${count} images.`, imagesGenerated: count };
         } finally {
           pipelineRunning = false;
