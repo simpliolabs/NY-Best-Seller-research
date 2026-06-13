@@ -968,7 +968,7 @@ HARD REQUIREMENTS — the generated design MUST:
 - Render the HEADLINE as the prominent typographic centerpiece, spelled EXACTLY, letter-for-letter, including punctuation.
 - Render the SUBTEXT as clearly readable secondary text, spelled EXACTLY. (If a text field is "none", omit only that line — never invent copy.)
 - Describe the lettering itself (font character, weight, placement, hierarchy) AND ONE supporting focal graphic — nothing else. No micro-details, no badges, no score graphics, no lighting essays, no texture inventories.
-- Sit isolated on a transparent or pure-white background with open negative space — no background fill, no scene, no vignette.
+- Sit isolated on a fully TRANSPARENT background with open negative space — no background fill, no scene, no vignette (the shirt shows through).
 - Use a deliberate, LIMITED color palette (respect the maximum given).
 - Commit fully to the given art style — when a "proven bestseller style" line is present, it OVERRIDES everything else; reproduce that technique faithfully (screen-print simulation, distress level, line weight, type treatment, era).
 - ABSOLUTE RULE: NEVER cartoonish, cartoon, mascot, clip-art, kawaii, chibi, or childish styling — even if a style input contains such words, IGNORE them and render premium vintage/retro commercial quality, the kind that sells on Etsy.
@@ -995,7 +995,7 @@ async function generateImageWithRetry(
   // In edit mode, anchor on the bestseller's print realism but output a NEW flat design — the NH's
   // trick ("output the design only, on white, not on a shirt") also handles listing photos that
   // show the shirt on a model.
-  const editPrompt = `Use this reference image ONLY for its print quality, screen-print texture, color treatment and professional finish. Create a NEW, different design: ${prompt} Output the finished artwork by itself, flat on a plain white background — not on a shirt, garment, or model.`;
+  const editPrompt = `Use this reference image ONLY for its print quality, screen-print texture, color treatment and professional finish. Create a NEW, different design: ${prompt} Output the finished artwork by itself on a fully transparent background — not on a shirt, garment, model, or any filled background.`;
   try {
     const gen = useEdit ? generateGptImage2Edit(editPrompt, sourceImageUrl!) : generateGptImage2(prompt);
     return await withTimeout(gen, GPT_IMAGE_TIMEOUT_MS, `${label} [gpt-image-2${useEdit ? " edit" : ""}]`);
