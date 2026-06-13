@@ -241,15 +241,25 @@ async function stageNicheIngest(nicheProfile: NicheProfile, etsyApiKey?: string)
       for (const keyword of nicheProfile.etsyKeywords.slice(0, 5)) {
         try {
           const url = `https://openapi.etsy.com/v3/application/listings/active?keywords=${encodeURIComponent(keyword)}&limit=10&sort_on=score&includes=Images`;
-          const resp = await fetch(url, {
-            headers: { "x-api-key": etsyApiKey },
-            signal: AbortSignal.timeout(8000),
-          });
-          if (!resp.ok) {
-            if (resp.status === 401 || resp.status === 403) break; // Key invalid — stop all Etsy calls
-            continue;
-          }
-          const data = await resp.json();
+          // HARD-bound the fetch+parse with withTimeout (reliable Promise.race). AbortSignal.timeout
+          // alone did NOT fire in production — a throttled Etsy connection hung Stage 1 for the whole
+          // pipeline budget (runs 750001/780001 died in ingest, 0 signals). 9s/keyword → ≤45s total.
+          const data = await withTimeout(
+            (async () => {
+              const resp = await fetch(url, {
+                headers: { "x-api-key": etsyApiKey },
+                signal: AbortSignal.timeout(8000),
+              });
+              if (!resp.ok) {
+                const e = new Error(`Etsy ${resp.status}`) as Error & { status?: number };
+                e.status = resp.status; // surface 401/403 to break the loop in catch
+                throw e;
+              }
+              return resp.json() as Promise<{ results?: any[] }>;
+            })(),
+            9_000,
+            `Etsy fetch "${keyword}"`,
+          );
           const results = data.results ?? [];
           for (const listing of results.slice(0, 3)) {
             const title = (listing.title ?? "").trim().slice(0, 80);
@@ -266,7 +276,9 @@ async function stageNicheIngest(nicheProfile: NicheProfile, etsyApiKey?: string)
           }
           await new Promise((r) => setTimeout(r, 250)); // Etsy rate limit
         } catch (err) {
-          console.warn(`[Pipeline/NicheIngest] Etsy fetch failed for "${keyword}":`, err);
+          const status = (err as { status?: number })?.status;
+          if (status === 401 || status === 403) break; // key invalid — stop all Etsy calls
+          console.warn(`[Pipeline/NicheIngest] Etsy fetch failed/timed out for "${keyword}":`, err);
         }
       }
     }
