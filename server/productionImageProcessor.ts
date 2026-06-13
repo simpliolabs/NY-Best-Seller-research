@@ -56,12 +56,12 @@ async function generateStandaloneDesign(
 
   console.log(`[ProdProcessor v2] Generating standalone design. Prompt: "${prompt.substring(0, 120)}..."`);
 
-  // Use images/generations endpoint (NOT edits) with the source as style reference
+  // images/edits endpoint (the only one that accepts image[]) with the source as style reference
   const formData = new FormData();
   formData.append("model", "gpt-image-2");
   formData.append("prompt", prompt);
   formData.append("size", "1024x1024");
-  formData.append("quality", "high");
+  formData.append("quality", "medium"); // was "high" — halve cost/latency of this 2nd call (audit #2); matches the first-pass gen
   // Pass source image as style reference
   const blob = new Blob([imgBuf], { type: "image/png" });
   formData.append("image[]", blob, "style_reference.png");

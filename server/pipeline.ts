@@ -57,7 +57,8 @@ const NYT_LISTS = [
 const TOP_N_BOOKS = 6;
 const HIGH_SCORE_THRESHOLD = 210; // 70% of 300
 const MAX_WINNER_CONCEPTS = 5; // Top 5 concepts GLOBALLY across all books get images
-const IMAGES_PER_WINNER = 3; // 3 style variations per winner = 15 images max
+const IMAGES_PER_WINNER = 1; // scans-to-1 (PO 2026-06-11): ONE hero image per winner (was 3)
+const PRODUCTION_PROCESS_TIMEOUT_MS = 110_000; // bound the magenta-regen background-removal call (audit #8)
 const IMAGE_GEN_TIMEOUT_MS = 60_000; // 60s timeout per image generation call
 const OVERALL_PIPELINE_TIMEOUT_MS = 15 * 60 * 1000; // 15 min — premium gpt-image-2 gen is slower than Forge (run #720001 hit the old 7-min cap mid-stage-6)
 
@@ -1004,6 +1005,29 @@ async function generateImageWithRetry(
   }
 }
 
+/** An edit-mode rendering anchor drawn from the workspace's Niche Hunter library. */
+export type NicheAnchor = { image: string; status: string; score: number; text: string };
+
+const ANCHOR_STOP = new Set(["the", "and", "for", "with", "shirt", "tshirt", "tee", "design", "gift", "funny", "cute"]);
+const anchorTokens = (s: string) => new Set((s || "").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !ANCHOR_STOP.has(w)));
+
+/** Pick the best edit anchor for a concept (audit #9 — extracted pure for unit testing):
+ *  thematic token-overlap match wins; with no overlap, rotate the approved-first/score-sorted pool
+ *  by index so the run's winners don't all collapse onto one design. Returns null for an empty pool. */
+export function selectAnchorImage(pool: NicheAnchor[], conceptText: string, idx: number): string | null {
+  if (!pool.length) return null;
+  const ct = anchorTokens(conceptText);
+  let best: NicheAnchor | null = null, bestOverlap = 0;
+  for (const a of pool) {
+    const at = anchorTokens(a.text);
+    let overlap = 0; ct.forEach((t) => { if (at.has(t)) overlap++; });
+    if (overlap > bestOverlap) { bestOverlap = overlap; best = a; }
+  }
+  if (best && bestOverlap > 0) return best.image;
+  const byPref = [...pool].sort((a, b) => (b.status === "approved" ? 1 : 0) - (a.status === "approved" ? 1 : 0) || b.score - a.score);
+  return byPref[idx % byPref.length].image;
+}
+
 async function stageDesignExpansion(runId: number, force = false): Promise<number> {
   const stageStart = Date.now();
   console.log(`[Pipeline/Stage6] START stageDesignExpansion for run ${runId}`);
@@ -1086,7 +1110,6 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
   // cold-start fallback when the library has no usable anchor.
   let nicheStyleDNA = "";
   let avoidDirectives = "";
-  type NicheAnchor = { image: string; status: string; score: number; text: string };
   let anchorPool: NicheAnchor[] = [];
   try {
     const runRow = await getRunById(runId);
@@ -1143,28 +1166,9 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
   }
   if (nicheStyleDNA) console.log(`[Pipeline/Stage6] Niche style DNA: ${nicheStyleDNA.slice(0, 200)}`);
 
-  // Match a concept to its best edit anchor: relevance (token overlap) dominates, then an approved
-  // bonus, then pattern score — so the library is always used when present ("everything together").
-  const ANCHOR_STOP = new Set(["the", "and", "for", "with", "shirt", "tshirt", "tee", "design", "gift", "funny", "cute"]);
-  const anchorTokens = (s: string) => new Set((s || "").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !ANCHOR_STOP.has(w)));
-  const anchorsByPreference = [...anchorPool].sort(
-    (a, b) => (b.status === "approved" ? 1 : 0) - (a.status === "approved" ? 1 : 0) || b.score - a.score,
-  );
-  const pickAnchor = (concept: typeof winners[0], idx: number): string | null => {
-    if (!anchorPool.length) return null;
-    // Best THEMATIC match (token overlap) wins — keeps the anchor's subject close to the concept.
-    const ct = anchorTokens(`${concept.conceptName} ${concept.headline ?? ""} ${concept.layoutDescription ?? ""}`);
-    let best: NicheAnchor | null = null, bestOverlap = 0;
-    for (const a of anchorPool) {
-      const at = anchorTokens(a.text);
-      let overlap = 0; ct.forEach((t) => { if (at.has(t)) overlap++; });
-      if (overlap > bestOverlap) { bestOverlap = overlap; best = a; }
-    }
-    if (best && bestOverlap > 0) return best.image;
-    // No thematic match → rotate approved-first/score-sorted anchors so the 5 winners don't all
-    // collapse onto the same design (avoids within-run homogenization).
-    return anchorsByPreference[idx % anchorsByPreference.length].image;
-  };
+  // Match each concept to its best edit anchor (pure logic extracted to selectAnchorImage, audit #9).
+  const pickAnchor = (concept: typeof winners[0], idx: number): string | null =>
+    selectAnchorImage(anchorPool, `${concept.conceptName} ${concept.headline ?? ""} ${concept.layoutDescription ?? ""}`, idx);
 
   // The concept-generation stage sometimes labels styles "Cartoonish, slightly exaggerated" — the
   // PO explicitly rejects cartoonish output, so strip those words before they reach the image model.
@@ -1278,9 +1282,14 @@ Layout intent: ${concept.layoutDescription ?? "not specified"}${avoidDirectives 
         // can composite directly without any background removal at render time.
         if (rawUrl) {
           try {
-            await processDesignForProduction(rawUrl, task.concept.id, task.variation, task.prompt);
+            // Bounded (audit #8): the magenta-regen background-removal fires a 2nd gpt-image-2 call;
+            // wrap so a hang can't block stage 6. Non-fatal — the card falls back to the raw image.
+            await withTimeout(
+              processDesignForProduction(rawUrl, task.concept.id, task.variation, task.prompt),
+              PRODUCTION_PROCESS_TIMEOUT_MS,
+              `Production processing concept ${task.concept.id}`,
+            );
           } catch (procErr) {
-            // Non-fatal: log and continue. The compositor will fall back to the raw image.
             console.warn(`[Pipeline] Production processing failed for concept ${task.concept.id} variation ${task.variation}:`, procErr);
           }
         }

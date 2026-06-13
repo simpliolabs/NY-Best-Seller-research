@@ -41,11 +41,11 @@ describe("withTimeout utility", () => {
 });
 
 describe("pipeline configuration constants", () => {
-  it("MAX_WINNER_CONCEPTS = 5 global winners with 3 images each", async () => {
+  it("MAX_WINNER_CONCEPTS = 5 global winners, ONE hero image each (scans-to-1)", async () => {
     const fs = await import("fs");
     const source = fs.readFileSync("server/pipeline.ts", "utf8");
     expect(source).toContain("const MAX_WINNER_CONCEPTS = 5;");
-    expect(source).toContain("const IMAGES_PER_WINNER = 3;");
+    expect(source).toContain("const IMAGES_PER_WINNER = 1;");
     // Verify global ranking logic exists
     expect(source).toContain("const isWinner = i < MAX_WINNER_CONCEPTS;");
     expect(source).toContain("globalRank: i + 1");
@@ -189,5 +189,72 @@ describe("recoverStaleRuns", () => {
     const { recoverStaleRuns } = await import("./pipeline");
     // With a very short maxAge, it should still not throw
     await expect(recoverStaleRuns(1000)).resolves.not.toThrow();
+  });
+});
+
+// ─── Edit-mode anchor selection (Niche Hunter library sourcing) ───────────
+describe("selectAnchorImage", () => {
+  const A = (image: string, status: string, score: number, text: string) => ({ image, status, score, text });
+
+  it("returns null for an empty pool (cold-start → falls through to Etsy/text)", async () => {
+    const { selectAnchorImage } = await import("./pipeline");
+    expect(selectAnchorImage([], "pickleball dink llama", 0)).toBeNull();
+  });
+
+  it("prefers the THEMATIC token-overlap match over score/approval", async () => {
+    const { selectAnchorImage } = await import("./pipeline");
+    const pool = [
+      A("img-approved-unrelated", "approved", 99, "vintage coffee espresso roaster"),
+      A("img-relevant", "discovered", 10, "pickleball paddle dink kitchen"),
+    ];
+    expect(selectAnchorImage(pool, "Just Dink It — pickleball paddle", 0)).toBe("img-relevant");
+  });
+
+  it("with NO overlap, rotates by index so winners don't collapse onto one design", async () => {
+    const { selectAnchorImage } = await import("./pipeline");
+    const pool = [
+      A("img-a", "approved", 50, "alpha"),
+      A("img-b", "approved", 40, "bravo"),
+    ];
+    const picks = [0, 1].map((i) => selectAnchorImage(pool, "zzz no overlap zzz", i));
+    expect(new Set(picks).size).toBe(2); // distinct anchors for distinct winners
+  });
+
+  it("in the no-overlap rotation, approved sorts ahead of discovered", async () => {
+    const { selectAnchorImage } = await import("./pipeline");
+    const pool = [
+      A("img-discovered", "discovered", 99, "alpha"),
+      A("img-approved", "approved", 1, "bravo"),
+    ];
+    expect(selectAnchorImage(pool, "zzz", 0)).toBe("img-approved");
+  });
+});
+
+// ─── Audit-fix guards (lock in the 2026-06-13 Manus-audit fixes) ──────────
+describe("image pipeline audit fixes", () => {
+  it("the 2nd (background-removal) gpt-image-2 call is medium quality, not high (audit #2)", async () => {
+    const fs = await import("fs");
+    const src = fs.readFileSync("server/productionImageProcessor.ts", "utf8");
+    expect(src).not.toContain('formData.append("quality", "high")');
+    expect(src).toContain('formData.append("quality", "medium")');
+  });
+
+  it("production processing is wrapped in withTimeout in stage 6 (audit #8)", async () => {
+    const fs = await import("fs");
+    const src = fs.readFileSync("server/pipeline.ts", "utf8");
+    expect(src).toContain("PRODUCTION_PROCESS_TIMEOUT_MS");
+    expect(src).toMatch(/withTimeout\(\s*\n?\s*processDesignForProduction/);
+  });
+
+  it("scans-to-1: IMAGES_PER_WINNER is 1 (audit #1)", async () => {
+    const fs = await import("fs");
+    const src = fs.readFileSync("server/pipeline.ts", "utf8");
+    expect(src).toContain("const IMAGES_PER_WINNER = 1;");
+  });
+
+  it("winner generation falls back to Forge so a run never ships 0 images", async () => {
+    const fs = await import("fs");
+    const src = fs.readFileSync("server/pipeline.ts", "utf8");
+    expect(src).toContain("[forge fallback]");
   });
 });
