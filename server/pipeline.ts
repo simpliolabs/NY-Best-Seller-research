@@ -1079,14 +1079,27 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
   // The Niche Hunter extracts SourceStyleJSON from REAL Etsy bestsellers — feed that proven style
   // language (technique, line weight, shading, texture, type style, era) into the image prompts
   // instead of trusting the concept's own style label (which sometimes says "Cartoonish").
+  // ── Curated Niche Hunter library (PO 2026-06-13): the workspace's OWN patterns + accept/reject
+  // signals are the source of truth — "everything together". We (1) anchor edits on APPROVED
+  // designs/real bestsellers, (2) learn the STYLE from approved patterns, (3) AVOID what was
+  // dismissed (rejection tags → directives). Re-pulling Etsy (bestsellerPool/coverUrl) is only the
+  // cold-start fallback when the library has no usable anchor.
   let nicheStyleDNA = "";
+  let avoidDirectives = "";
+  type NicheAnchor = { image: string; status: string; score: number; text: string };
+  let anchorPool: NicheAnchor[] = [];
   try {
     const runRow = await getRunById(runId);
     if (runRow?.workspaceId) {
-      const approved = (await getTrendPatternsByWorkspace(runRow.workspaceId, "approved")).filter((p) => p.sourceStyleJson);
-      const pool = approved.length ? approved : (await getTrendPatternsByWorkspace(runRow.workspaceId)).filter((p) => p.sourceStyleJson);
+      const all = await getTrendPatternsByWorkspace(runRow.workspaceId);
+      const approved = all.filter((p) => p.status === "approved");
+      const live = all.filter((p) => p.status !== "dismissed");
+      const dismissed = all.filter((p) => p.status === "dismissed");
+
+      // (1) STYLE — prefer the patterns YOU approved
+      const stylePool = (approved.length ? approved : live).filter((p) => p.sourceStyleJson);
       const bits = new Set<string>();
-      for (const p of pool.slice(0, 4)) {
+      for (const p of stylePool.slice(0, 4)) {
         const s = p.sourceStyleJson as Record<string, unknown>;
         for (const k of ["technique", "lineWeight", "shadingMethod", "textureDetail", "textStyle", "designEra"]) {
           const v = s?.[k];
@@ -1094,11 +1107,64 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
         }
       }
       if (bits.size) nicheStyleDNA = Array.from(bits).join(", ");
+
+      // (2) AVOID — learn from what you dismissed (top rejection tags → positive directives)
+      const TAG_DIRECTIVE: Record<string, string> = {
+        poor_composition: "a strong, balanced composition",
+        off_brand: "stay strictly on-brand for this niche",
+        transfer_failed: "an idea native to THIS niche (no awkward cross-niche transfer)",
+        bad_subject: "a clear, appealing focal subject",
+        weak_humor: "genuinely sharp, funny writing",
+        bad_colors: "a deliberate, harmonious limited palette",
+        too_generic: "a distinctive, non-generic idea",
+        wrong_style: "the niche's proven art style",
+      };
+      const tagCounts: Record<string, number> = {};
+      for (const p of dismissed) for (const t of ((p.rejectionTags as string[]) ?? [])) tagCounts[t] = (tagCounts[t] ?? 0) + 1;
+      const topTags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([t]) => TAG_DIRECTIVE[t]).filter(Boolean);
+      if (topTags.length) avoidDirectives = topTags.join("; ");
+
+      // (3) ANCHOR POOL — non-dismissed patterns with a real image. Prefer YOUR approved clean design
+      // (productionDesignUrl); else the real scraped bestseller (sourceImageUrl).
+      anchorPool = live
+        .map((p): NicheAnchor | null => {
+          const img = (p.status === "approved" && p.productionDesignUrl && /^https?:\/\//.test(p.productionDesignUrl))
+            ? p.productionDesignUrl
+            : (p.sourceImageUrl && /^https?:\/\//.test(p.sourceImageUrl) ? p.sourceImageUrl : null);
+          if (!img) return null;
+          const subj = (p.sourceStyleJson as Record<string, unknown> | null)?.subject;
+          return { image: img, status: p.status, score: p.score ?? 0, text: `${p.patternName ?? ""} ${typeof subj === "string" ? subj : ""}`.toLowerCase() };
+        })
+        .filter((a): a is NicheAnchor => !!a);
+      console.log(`[Pipeline/Stage6] Niche library: ${all.length} patterns (${approved.length} approved, ${dismissed.length} dismissed) → ${anchorPool.length} edit anchors | avoid: ${avoidDirectives || "none"}`);
     }
   } catch (e) {
-    console.warn(`[Pipeline] niche style DNA unavailable (non-fatal):`, e);
+    console.warn(`[Pipeline] niche library sourcing unavailable (non-fatal):`, e);
   }
   if (nicheStyleDNA) console.log(`[Pipeline/Stage6] Niche style DNA: ${nicheStyleDNA.slice(0, 200)}`);
+
+  // Match a concept to its best edit anchor: relevance (token overlap) dominates, then an approved
+  // bonus, then pattern score — so the library is always used when present ("everything together").
+  const ANCHOR_STOP = new Set(["the", "and", "for", "with", "shirt", "tshirt", "tee", "design", "gift", "funny", "cute"]);
+  const anchorTokens = (s: string) => new Set((s || "").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !ANCHOR_STOP.has(w)));
+  const anchorsByPreference = [...anchorPool].sort(
+    (a, b) => (b.status === "approved" ? 1 : 0) - (a.status === "approved" ? 1 : 0) || b.score - a.score,
+  );
+  const pickAnchor = (concept: typeof winners[0], idx: number): string | null => {
+    if (!anchorPool.length) return null;
+    // Best THEMATIC match (token overlap) wins — keeps the anchor's subject close to the concept.
+    const ct = anchorTokens(`${concept.conceptName} ${concept.headline ?? ""} ${concept.layoutDescription ?? ""}`);
+    let best: NicheAnchor | null = null, bestOverlap = 0;
+    for (const a of anchorPool) {
+      const at = anchorTokens(a.text);
+      let overlap = 0; ct.forEach((t) => { if (at.has(t)) overlap++; });
+      if (overlap > bestOverlap) { bestOverlap = overlap; best = a; }
+    }
+    if (best && bestOverlap > 0) return best.image;
+    // No thematic match → rotate approved-first/score-sorted anchors so the 5 winners don't all
+    // collapse onto the same design (avoids within-run homogenization).
+    return anchorsByPreference[idx % anchorsByPreference.length].image;
+  };
 
   // The concept-generation stage sometimes labels styles "Cartoonish, slightly exaggerated" — the
   // PO explicitly rejects cartoonish output, so strip those words before they reach the image model.
@@ -1141,7 +1207,7 @@ SUBTEXT (render verbatim): ${concept.subtext ?? "none"}
 Source fan phrase (the design's anchor): ${concept.sourcePhrase ?? "not specified"}
 Art style (use exactly): ${styleLine}
 Color palette: ${(concept.colorPalette as string[] ?? []).join(", ") || (wb?.colorAnchors ?? []).join(", ") || "deliberate limited palette"}
-Layout intent: ${concept.layoutDescription ?? "not specified"}`;
+Layout intent: ${concept.layoutDescription ?? "not specified"}${avoidDirectives ? `\nMUST ensure (learned from the buyer's past rejections): ${avoidDirectives}` : ""}`;
 
     try {
       const promptResult = await withTimeout(
@@ -1165,9 +1231,12 @@ Layout intent: ${concept.layoutDescription ?? "not specified"}`;
         promptA: parsed.prompt ?? parsed.variation_a ?? "",
         promptB: "",
         promptC: "",
-        // Hybrid edit-mode anchor: the winner's own signal image if it has one, else a real in-niche
-        // bestseller from the pool (round-robin by winner index) so every winner gets a quality anchor.
+        // Edit-mode anchor priority (PO 2026-06-13 "everything together"):
+        //   1. curated NH library match (your approved design / real bestseller)  ← primary
+        //   2. this winner's own signal image captured this run (Etsy cold-start)
+        //   3. any real bestseller captured this run (cold-start pool)
         sourceImageUrl:
+          pickAnchor(concept, idx) ??
           (book?.coverUrl && /^https?:\/\//.test(book.coverUrl) ? book.coverUrl : null) ??
           (bestsellerPool.length ? bestsellerPool[idx % bestsellerPool.length] : null),
       };
