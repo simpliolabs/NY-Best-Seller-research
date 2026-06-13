@@ -10,7 +10,7 @@
  * Stage 7: Report delivery + notifyOwner
  */
 import { invokeLLM } from "./_core/llm";
-import { generateImage } from "./_core/imageGeneration";
+import { generateImage, generateGptImage2 } from "./_core/imageGeneration";
 import { notifyOwner } from "./_core/notification";
 import { processDesignForProduction } from "./productionImageProcessor";
 import { snapshotGenerationToHistory } from "./revisionDb";
@@ -939,16 +939,23 @@ HARD REQUIREMENTS — the generated design MUST:
 
 Return ONLY a JSON object: {"prompt": "..."}`;
 
-/** generateImage with ONE retry (PO 2026-06-12: a transient provider failure used to be swallowed
- *  by allSettled and a whole run shipped 0 images — "Why were no images generated?"). */
+/** Winner image generation (PO 2026-06-12: scan designs read "animated, terrible color and
+ *  typography" because they used the Forge ImageService; the Niche Hunter's good designs use
+ *  OpenAI gpt-image-2). Primary: gpt-image-2 (premium typography/realism). Fallback: Forge, so a
+ *  transient gpt failure never ships 0 images (the earlier "why no images?" bug). One retry on the
+ *  primary before falling back. */
+const GPT_IMAGE_TIMEOUT_MS = 120_000; // gpt-image-2 "high" is slower than Forge
 async function generateImageWithRetry(prompt: string, label: string): Promise<{ url?: string | null }> {
-  try {
-    return await withTimeout(generateImage({ prompt }), IMAGE_GEN_TIMEOUT_MS, label);
-  } catch (err) {
-    console.warn(`[Pipeline] ${label} failed, retrying once:`, err);
-    await new Promise((r) => setTimeout(r, 2000));
-    return withTimeout(generateImage({ prompt }), IMAGE_GEN_TIMEOUT_MS, `${label} (retry)`);
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      return await withTimeout(generateGptImage2(prompt), GPT_IMAGE_TIMEOUT_MS, `${label} [gpt-image-2 #${attempt}]`);
+    } catch (err) {
+      console.warn(`[Pipeline] ${label} gpt-image-2 attempt ${attempt} failed:`, err);
+      if (attempt === 1) await new Promise((r) => setTimeout(r, 2000));
+    }
   }
+  console.warn(`[Pipeline] ${label} falling back to Forge ImageService`);
+  return withTimeout(generateImage({ prompt }), IMAGE_GEN_TIMEOUT_MS, `${label} [forge fallback]`);
 }
 
 async function stageDesignExpansion(runId: number, force = false): Promise<number> {
