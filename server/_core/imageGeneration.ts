@@ -56,7 +56,7 @@ export async function generateGptImage2(
       model: "gpt-image-2",
       prompt,
       size: "1024x1024",
-      quality: "high",
+      quality: "medium", // medium = ~2x faster than high, still far better than Forge (fits pipeline budget)
       n: 1,
     }),
     signal,
@@ -107,7 +107,7 @@ export async function generateGptImage2Edit(
   formData.append("model", "gpt-image-2");
   formData.append("prompt", prompt);
   formData.append("size", "1024x1024");
-  formData.append("quality", "high");
+  formData.append("quality", "medium"); // medium = ~2x faster than high, still far better than Forge
   formData.append("image[]", new Blob([imgBuf], { type: "image/jpeg" }), "source.jpg");
 
   const resp = await fetch("https://api.openai.com/v1/images/edits", {

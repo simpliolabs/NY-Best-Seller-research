@@ -63,10 +63,10 @@ describe("pipeline configuration constants", () => {
     expect(source).toContain("const TOP_N_BOOKS = 6;");
   });
 
-  it("OVERALL_PIPELINE_TIMEOUT_MS is 5 minutes", async () => {
+  it("OVERALL_PIPELINE_TIMEOUT_MS is 15 minutes", async () => {
     const fs = await import("fs");
     const source = fs.readFileSync("server/pipeline.ts", "utf8");
-    expect(source).toContain("const OVERALL_PIPELINE_TIMEOUT_MS = 7 * 60 * 1000;");
+    expect(source).toContain("const OVERALL_PIPELINE_TIMEOUT_MS = 15 * 60 * 1000;");
   });
 
   it("image generation uses parallel Promise.allSettled", async () => {

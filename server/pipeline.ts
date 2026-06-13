@@ -59,7 +59,7 @@ const HIGH_SCORE_THRESHOLD = 210; // 70% of 300
 const MAX_WINNER_CONCEPTS = 5; // Top 5 concepts GLOBALLY across all books get images
 const IMAGES_PER_WINNER = 3; // 3 style variations per winner = 15 images max
 const IMAGE_GEN_TIMEOUT_MS = 60_000; // 60s timeout per image generation call
-const OVERALL_PIPELINE_TIMEOUT_MS = 7 * 60 * 1000; // 7 minute overall pipeline timeout (more images now)
+const OVERALL_PIPELINE_TIMEOUT_MS = 15 * 60 * 1000; // 15 min — premium gpt-image-2 gen is slower than Forge (run #720001 hit the old 7-min cap mid-stage-6)
 
 // ─── Utility: Timeout wrapper ────────────────────────────────────────────
 
@@ -979,41 +979,29 @@ Return ONLY a JSON object: {"prompt": "..."}`;
  *  OpenAI gpt-image-2). Primary: gpt-image-2 (premium typography/realism). Fallback: Forge, so a
  *  transient gpt failure never ships 0 images (the earlier "why no images?" bug). One retry on the
  *  primary before falling back. */
-const GPT_IMAGE_TIMEOUT_MS = 120_000; // gpt-image-2 "high" is slower than Forge
+const GPT_IMAGE_TIMEOUT_MS = 90_000; // gpt-image-2 "medium" upper bound; fail fast to the fallback
+// BOUNDED per-image time (PO 2026-06-12 — run #720001 timed out at stage 6 when a stacked
+// edit→edit-retry→gpt-text→Forge chain ran ~400s/image). Now exactly ONE gpt-image-2 attempt
+// (edit if a bestseller image is present, else text-to-image) → Forge fallback. Worst case
+// ~90s + 60s; Forge guarantees we never ship 0 images.
 async function generateImageWithRetry(
   prompt: string,
   label: string,
-  sourceImageUrl?: string | null, // hybrid (PO 2026-06-12): when the winner's signal carries a real
-                                  // bestseller image, EDIT it (NH mechanism) instead of text-to-image
+  sourceImageUrl?: string | null, // hybrid: when the winner's signal carries a real bestseller image,
+                                  // EDIT it (NH mechanism) instead of text-to-image
 ): Promise<{ url?: string | null }> {
   const useEdit = !!sourceImageUrl && /^https?:\/\//.test(sourceImageUrl);
   // In edit mode, anchor on the bestseller's print realism but output a NEW flat design — the NH's
   // trick ("output the design only, on white, not on a shirt") also handles listing photos that
   // show the shirt on a model.
   const editPrompt = `Use this reference image ONLY for its print quality, screen-print texture, color treatment and professional finish. Create a NEW, different design: ${prompt} Output the finished artwork by itself, flat on a plain white background — not on a shirt, garment, or model.`;
-  // Primary: gpt-image-2 — EDIT off the bestseller if we have one, else text-to-image.
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      const gen = useEdit
-        ? generateGptImage2Edit(editPrompt, sourceImageUrl!)
-        : generateGptImage2(prompt);
-      return await withTimeout(gen, GPT_IMAGE_TIMEOUT_MS, `${label} [gpt-image-2${useEdit ? " edit" : ""} #${attempt}]`);
-    } catch (err) {
-      console.warn(`[Pipeline] ${label} gpt-image-2${useEdit ? " edit" : ""} attempt ${attempt} failed:`, err);
-      if (attempt === 1) await new Promise((r) => setTimeout(r, 2000));
-    }
+  try {
+    const gen = useEdit ? generateGptImage2Edit(editPrompt, sourceImageUrl!) : generateGptImage2(prompt);
+    return await withTimeout(gen, GPT_IMAGE_TIMEOUT_MS, `${label} [gpt-image-2${useEdit ? " edit" : ""}]`);
+  } catch (err) {
+    console.warn(`[Pipeline] ${label} gpt-image-2${useEdit ? " edit" : ""} failed — Forge fallback:`, err);
+    return withTimeout(generateImage({ prompt }), IMAGE_GEN_TIMEOUT_MS, `${label} [forge fallback]`);
   }
-  // Edit failed → try plain gpt-image-2 text-to-image before dropping to Forge.
-  if (useEdit) {
-    try {
-      console.warn(`[Pipeline] ${label} edit exhausted — trying gpt-image-2 text-to-image`);
-      return await withTimeout(generateGptImage2(prompt), GPT_IMAGE_TIMEOUT_MS, `${label} [gpt-image-2 text]`);
-    } catch (err) {
-      console.warn(`[Pipeline] ${label} gpt-image-2 text fallback failed:`, err);
-    }
-  }
-  console.warn(`[Pipeline] ${label} falling back to Forge ImageService`);
-  return withTimeout(generateImage({ prompt }), IMAGE_GEN_TIMEOUT_MS, `${label} [forge fallback]`);
 }
 
 async function stageDesignExpansion(runId: number, force = false): Promise<number> {
