@@ -556,6 +556,9 @@ Every concept MUST be anchored to one of those real fan phrases. The phrase beco
 ═══ STEP 3: STYLE FROM THE BOOK'S VISUAL UNIVERSE ═══
 The style, colors, typography, and visual motifs MUST come from the book's actual aesthetic universe — the dominant colors, visual motifs, and art style provided in the book profile. Do NOT apply generic design trends. The design should feel like it belongs to this specific book's world.
 
+═══ STEP 4: PAIR THE PHRASE WITH A CONCRETE VISUAL SUBJECT ═══
+A headline floating alone is a weak shirt. WHERE a "NICHE VISUAL VOCABULARY" block is provided below, MOST of your concepts (at least 3 of 5) must pair the fan phrase with a concrete visual SUBJECT drawn from that vocabulary — a mascot, character, creature, or visual gag — so the design has a focal graphic, not just type. Example: phrase "Just Dink It" → a cute llama mid-dink with the text below it. Put that subject explicitly in "layout_description" as the hero graphic the phrase sits with. A minority of concepts may be type-only when the typography itself is genuinely the strong idea — never default ALL five to plain text.
+
 Return a JSON object with a "concepts" array of exactly 5 objects. Do NOT include any text outside the JSON.
 
 REQUIRED OUTPUT SCHEMA:
@@ -570,7 +573,7 @@ REQUIRED OUTPUT SCHEMA:
       "headline": "string — the main text on the design. Must be the source_phrase itself or a direct, minimal adaptation of it. NOT the book title.",
       "subtext": "string — optional secondary text that adds context or humor",
       "color_palette": ["string — 3-4 hex codes derived from the book's dominant color palette"],
-      "layout_description": "string — 2-3 sentences describing the visual layout. Must reference the book's visual motifs and art style.",
+      "layout_description": "string — 2-3 sentences describing the visual layout. Name the concrete focal SUBJECT/graphic (a mascot, character, or visual gag from the niche vocabulary where provided) and how the headline sits with it. Reference the book's visual motifs and art style.",
       "font_suggestion": "string — font style that matches the book's typography aesthetic",
       "signal_tags": ["string — confirmed cross-source signals this concept uses (empty array if none)"],
       "copyright_safe": true
@@ -584,7 +587,8 @@ RULES:
 3. Color palettes MUST be derived from the book's actual dominant colors — not generic.
 4. Style MUST match the book's visual universe — not a generic trend.
 5. The headline MUST be the source_phrase or a direct adaptation — never an invented phrase.
-6. Return ONLY the JSON object.`;
+6. Where a niche visual vocabulary is provided, at least 3 of 5 concepts must feature a concrete visual subject from it (not text-only).
+7. Return ONLY the JSON object.`;
 
 async function stageGenerate(
   bookRecords: {
@@ -601,8 +605,35 @@ async function stageGenerate(
   }[],
   nicheResearchMap: Map<number, { fanConversations: any; designStyles: any; whiteSpace: any }>,
   forumSignalsMap?: Map<number, ForumSignals>,
-  allowedStyles?: string[]
+  allowedStyles?: string[],
+  // Workspace niche knowledge DNA (PO 2026-06-12) — the niche's own mascots/visual gags/jokes, so
+  // concepts pair a fan phrase with a concrete visual subject ("llama" + "Just Dink It") instead of
+  // flat text. Optional: NYT workspaces and unconfigured niches pass nothing → block omitted.
+  culturalMap?: {
+    animalMascots?: Array<{ animal?: string; visualTreatment?: string }>;
+    funPoints?: Array<{ visualConcept?: string }>;
+    transferableVisualConcepts?: Array<{ sourcePattern?: string; targetAdaptation?: string }>;
+    physicalComedy?: Array<{ scenario?: string }>;
+    insideJokes?: Array<{ joke?: string }>;
+    catchphrases?: string[];
+  }
 ): Promise<void> {
+  // Build the niche visual-vocabulary block once (same for every book in this run).
+  const cmBlocks: string[] = [];
+  const mascots = (culturalMap?.animalMascots ?? []).filter(m => m.animal).map(m => m.animal + (m.visualTreatment ? ` (${m.visualTreatment})` : ""));
+  if (mascots.length) cmBlocks.push(`Mascots/characters fans love: ${mascots.join("; ")}`);
+  const visualConcepts = (culturalMap?.funPoints ?? []).map(f => f.visualConcept).filter((s): s is string => !!s);
+  if (visualConcepts.length) cmBlocks.push(`Visual concepts that delight fans: ${visualConcepts.join("; ")}`);
+  const transferable = (culturalMap?.transferableVisualConcepts ?? []).filter(t => t.sourcePattern && t.targetAdaptation).map(t => `${t.sourcePattern} → ${t.targetAdaptation}`);
+  if (transferable.length) cmBlocks.push(`Transferable visual gags: ${transferable.join("; ")}`);
+  const physical = (culturalMap?.physicalComedy ?? []).map(p => p.scenario).filter((s): s is string => !!s);
+  if (physical.length) cmBlocks.push(`Funny visual scenarios: ${physical.join("; ")}`);
+  const jokes = (culturalMap?.insideJokes ?? []).map(j => j.joke).filter((s): s is string => !!s);
+  if (jokes.length) cmBlocks.push(`Inside jokes: ${jokes.join("; ")}`);
+  if (culturalMap?.catchphrases?.length) cmBlocks.push(`Catchphrases: ${culturalMap.catchphrases.join(", ")}`);
+  const nicheVocabBlock = cmBlocks.length
+    ? `\nNICHE VISUAL VOCABULARY (the niche's OWN characters, gags, and visual concepts — USE THESE to give concepts a concrete visual subject, per STEP 4, not just text):\n${cmBlocks.map(b => `- ${b}`).join("\n")}\n`
+    : "";
   // Parallel concept generation — all books at once instead of sequential
   await Promise.allSettled(
     bookRecords.map(async (book) => {
@@ -630,7 +661,7 @@ NICHE RESEARCH:
 Fan Conversations: ${niche ? JSON.stringify(niche.fanConversations) : "No research available"}
 Design Styles: ${niche ? JSON.stringify(niche.designStyles) : "No research available"}
 White Space Opportunities: ${niche ? JSON.stringify(niche.whiteSpace) : "No research available"}
-
+${nicheVocabBlock}
 STYLE RULE (MANDATORY): Never set a concept's "style" to anything cartoonish, clip-art, kawaii, chibi, or childish/exaggerated.${(allowedStyles && allowedStyles.length) ? ` Set each concept's "style" to the single best-matching option from this approved allowlist: ${allowedStyles.join(", ")}.` : ""}`;
 
     try {
@@ -1599,7 +1630,8 @@ export async function runPipeline(opts: {
           })),
           nicheMap,
           forumSignalsMap,
-          allowedStyles
+          allowedStyles,
+          nicheProfile?.culturalMap
         ),
         maxRetries: 2,
         baseDelayMs: 3000,
@@ -2134,7 +2166,9 @@ async function resumePipeline(runId: number, fromStage: number): Promise<void> {
             fanCulture: b.fanCulture,
           })),
           nicheMap,
-          forumSignalsMap
+          forumSignalsMap,
+          undefined,
+          resumeNicheProfile?.culturalMap
         ),
         maxRetries: 2,
         baseDelayMs: 3000,
