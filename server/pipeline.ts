@@ -10,7 +10,7 @@
  * Stage 7: Report delivery + notifyOwner
  */
 import { invokeLLM } from "./_core/llm";
-import { generateImage, generateGptImage2 } from "./_core/imageGeneration";
+import { generateImage, generateGptImage2, generateGptImage2Edit } from "./_core/imageGeneration";
 import { notifyOwner } from "./_core/notification";
 import { processDesignForProduction } from "./productionImageProcessor";
 import { snapshotGenerationToHistory } from "./revisionDb";
@@ -231,13 +231,15 @@ async function stageNicheIngest(nicheProfile: NicheProfile, etsyApiKey?: string)
   // Step 2: Etsy in-niche keyword analysis
   // If Etsy API is available, fetch real bestsellers; otherwise use LLM analysis
   if (nicheProfile.etsyKeywords && nicheProfile.etsyKeywords.length > 0) {
-    let etsyTopics: Array<{ title: string; synopsis: string; rank: number }> = [];
+    // image: the real bestseller listing image — captured (PO 2026-06-12 hybrid) so winners can be
+    // rendered by EDITING a proven top-seller (NH-style), not text-to-image from scratch.
+    let etsyTopics: Array<{ title: string; synopsis: string; rank: number; image?: string }> = [];
 
     if (etsyApiKey) {
       // Real Etsy API: fetch top listings for each keyword
       for (const keyword of nicheProfile.etsyKeywords.slice(0, 5)) {
         try {
-          const url = `https://openapi.etsy.com/v3/application/listings/active?keywords=${encodeURIComponent(keyword)}&limit=10&sort_on=score`;
+          const url = `https://openapi.etsy.com/v3/application/listings/active?keywords=${encodeURIComponent(keyword)}&limit=10&sort_on=score&includes=Images`;
           const resp = await fetch(url, {
             headers: { "x-api-key": etsyApiKey },
             signal: AbortSignal.timeout(8000),
@@ -253,10 +255,12 @@ async function stageNicheIngest(nicheProfile: NicheProfile, etsyApiKey?: string)
             if (!title || seenTitles.has(title.toLowerCase())) continue;
             seenTitles.add(title.toLowerCase());
             const favorites = listing.num_favorers ?? 0;
+            const image = listing.images?.[0]?.url_fullxfull ?? listing.images?.[0]?.url_570xN ?? undefined;
             etsyTopics.push({
               title,
               synopsis: `Bestselling Etsy listing in "${keyword}" niche with ${favorites} favorites. Price: $${((listing.price?.amount ?? 0) / (listing.price?.divisor ?? 100)).toFixed(2)}. Tags: ${(listing.tags ?? []).slice(0, 5).join(", ")}.`,
               rank: Math.min(10, Math.max(1, Math.round(favorites / 50))),
+              image,
             });
           }
           await new Promise((r) => setTimeout(r, 250)); // Etsy rate limit
@@ -298,7 +302,7 @@ async function stageNicheIngest(nicheProfile: NicheProfile, etsyApiKey?: string)
         title,
         author: "Etsy: in-niche bestseller",
         isbn: `niche-etsy-${Buffer.from(title).toString("base64").slice(0, 12)}`,
-        coverUrl: "",
+        coverUrl: t.image ?? "", // real bestseller image → hybrid edit-mode rendering at stage 6
         synopsis: t.synopsis ?? "",
         rank: t.rank ?? 5,
         weeksOnList: 0,
@@ -976,13 +980,36 @@ Return ONLY a JSON object: {"prompt": "..."}`;
  *  transient gpt failure never ships 0 images (the earlier "why no images?" bug). One retry on the
  *  primary before falling back. */
 const GPT_IMAGE_TIMEOUT_MS = 120_000; // gpt-image-2 "high" is slower than Forge
-async function generateImageWithRetry(prompt: string, label: string): Promise<{ url?: string | null }> {
+async function generateImageWithRetry(
+  prompt: string,
+  label: string,
+  sourceImageUrl?: string | null, // hybrid (PO 2026-06-12): when the winner's signal carries a real
+                                  // bestseller image, EDIT it (NH mechanism) instead of text-to-image
+): Promise<{ url?: string | null }> {
+  const useEdit = !!sourceImageUrl && /^https?:\/\//.test(sourceImageUrl);
+  // In edit mode, anchor on the bestseller's print realism but output a NEW flat design — the NH's
+  // trick ("output the design only, on white, not on a shirt") also handles listing photos that
+  // show the shirt on a model.
+  const editPrompt = `Use this reference image ONLY for its print quality, screen-print texture, color treatment and professional finish. Create a NEW, different design: ${prompt} Output the finished artwork by itself, flat on a plain white background — not on a shirt, garment, or model.`;
+  // Primary: gpt-image-2 — EDIT off the bestseller if we have one, else text-to-image.
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      return await withTimeout(generateGptImage2(prompt), GPT_IMAGE_TIMEOUT_MS, `${label} [gpt-image-2 #${attempt}]`);
+      const gen = useEdit
+        ? generateGptImage2Edit(editPrompt, sourceImageUrl!)
+        : generateGptImage2(prompt);
+      return await withTimeout(gen, GPT_IMAGE_TIMEOUT_MS, `${label} [gpt-image-2${useEdit ? " edit" : ""} #${attempt}]`);
     } catch (err) {
-      console.warn(`[Pipeline] ${label} gpt-image-2 attempt ${attempt} failed:`, err);
+      console.warn(`[Pipeline] ${label} gpt-image-2${useEdit ? " edit" : ""} attempt ${attempt} failed:`, err);
       if (attempt === 1) await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+  // Edit failed → try plain gpt-image-2 text-to-image before dropping to Forge.
+  if (useEdit) {
+    try {
+      console.warn(`[Pipeline] ${label} edit exhausted — trying gpt-image-2 text-to-image`);
+      return await withTimeout(generateGptImage2(prompt), GPT_IMAGE_TIMEOUT_MS, `${label} [gpt-image-2 text]`);
+    } catch (err) {
+      console.warn(`[Pipeline] ${label} gpt-image-2 text fallback failed:`, err);
     }
   }
   console.warn(`[Pipeline] ${label} falling back to Forge ImageService`);
@@ -1047,8 +1074,18 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
   const bookRecordsForImages = await getBooksByIds(winnerBookIdArray);
   const bookMapForImages = new Map(bookRecordsForImages.map(b => [b.id, b]));
 
+  // Hybrid (PO 2026-06-12): pool of REAL in-niche Etsy bestseller images captured at ingest. Used
+  // as the print-quality ANCHOR for edit-mode rendering. The bestseller need NOT match a winner's
+  // own signal — the edit prompt uses it only as a quality/texture reference and creates a NEW
+  // design — so winners whose own signal is Reddit-sourced (no image) still get one from the pool.
+  const allRunBooks = await getBooksByRunId(runId);
+  const bestsellerPool = allRunBooks
+    .map((b) => b.coverUrl)
+    .filter((u): u is string => !!u && /^https?:\/\//.test(u));
+  console.log(`[Pipeline/Stage6] Bestseller image pool: ${bestsellerPool.length} real in-niche images for edit-mode rendering`);
+
   // ── Step 3: ONE focused prompt per winner from LLM in parallel ──
-  type PromptSet = { concept: typeof winners[0]; promptA: string; promptB: string; promptC: string };
+  type PromptSet = { concept: typeof winners[0]; promptA: string; promptB: string; promptC: string; sourceImageUrl?: string | null };
 
   // Niche style DNA (PO 2026-06-12: "use the Signals from the NICHE hunter to influence here").
   // The Niche Hunter extracts SourceStyleJSON from REAL Etsy bestsellers — feed that proven style
@@ -1081,7 +1118,7 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
     s.replace(/cartoon\w*|kawaii|chibi|childish|playful-humorous|slightly exaggerated illustrations?|mascot-style/gi, "")
       .replace(/\s{2,}/g, " ").replace(/(?:,\s*){2,}/g, ", ").replace(/^[\s,./]+|[\s,./]+$/g, "");
 
-  const promptTasks = winners.map(async (concept): Promise<PromptSet | null> => {
+  const promptTasks = winners.map(async (concept, idx): Promise<PromptSet | null> => {
     const book = concept.bookId ? bookMapForImages.get(concept.bookId) : null;
     const wb = book?.worldBible as {
       illustratorStyle?: string;
@@ -1140,6 +1177,11 @@ Layout intent: ${concept.layoutDescription ?? "not specified"}`;
         promptA: parsed.prompt ?? parsed.variation_a ?? "",
         promptB: "",
         promptC: "",
+        // Hybrid edit-mode anchor: the winner's own signal image if it has one, else a real in-niche
+        // bestseller from the pool (round-robin by winner index) so every winner gets a quality anchor.
+        sourceImageUrl:
+          (book?.coverUrl && /^https?:\/\//.test(book.coverUrl) ? book.coverUrl : null) ??
+          (bestsellerPool.length ? bestsellerPool[idx % bestsellerPool.length] : null),
       };
     } catch (err) {
       console.warn(`[Pipeline] Prompt generation failed for winner concept ${concept.id}:`, err);
@@ -1155,14 +1197,14 @@ Layout intent: ${concept.layoutDescription ?? "not specified"}`;
   console.log(`[Pipeline] Got ${validPromptSets.length} valid prompt sets, generating ${validPromptSets.length} images (1 hero per concept) in parallel...`);
 
   // ── Step 4: Generate all images in parallel (up to 15) ───────────────
-  type ImageTask = { concept: typeof winners[0]; variation: "A" | "B" | "C"; prompt: string };
+  type ImageTask = { concept: typeof winners[0]; variation: "A" | "B" | "C"; prompt: string; sourceImageUrl?: string | null };
   const allImageTasks: ImageTask[] = [];
 
   for (const ps of validPromptSets) {
     // scans-to-1 (PO 2026-06-11): render ONE hero image per concept (was 3) — cuts scan image-gen
     // cost 3x. Prefer variation A (Clean/Bold hero); fall back to B/C only if A came back empty.
     const heroPrompt = ps.promptA || ps.promptB || ps.promptC;
-    if (heroPrompt) allImageTasks.push({ concept: ps.concept, variation: "A", prompt: heroPrompt });
+    if (heroPrompt) allImageTasks.push({ concept: ps.concept, variation: "A", prompt: heroPrompt, sourceImageUrl: ps.sourceImageUrl });
   }
 
   const imageResults = await Promise.allSettled(
@@ -1170,7 +1212,8 @@ Layout intent: ${concept.layoutDescription ?? "not specified"}`;
       try {
         const img = await generateImageWithRetry(
           task.prompt,
-          `Image ${task.variation} for concept ${task.concept.id}`
+          `Image ${task.variation} for concept ${task.concept.id}`,
+          task.sourceImageUrl,
         );
         const rawUrl = img.url ?? null;
         // Immediately process the generated image into a production-ready transparent PNG.

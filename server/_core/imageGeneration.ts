@@ -85,6 +85,61 @@ export async function generateGptImage2(
   return { url };
 }
 
+/**
+ * Image-to-image EDIT via gpt-image-2 /images/edits — the Niche Hunter's quality mechanism (PO
+ * 2026-06-12 hybrid). Anchors the output to a REAL in-niche bestseller image (its print quality,
+ * texture, realism) while the prompt expresses the new concept, instead of hallucinating from
+ * scratch. Fail-loud: throws so the caller can fall back to text-to-image.
+ */
+export async function generateGptImage2Edit(
+  prompt: string,
+  sourceImageUrl: string,
+  signal?: AbortSignal
+): Promise<GenerateImageResponse> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured — cannot call gpt-image-2");
+
+  const imgResp = await fetch(sourceImageUrl, { signal });
+  if (!imgResp.ok) throw new Error(`Failed to download source image: ${imgResp.status}`);
+  const imgBuf = Buffer.from(await imgResp.arrayBuffer());
+
+  const formData = new FormData();
+  formData.append("model", "gpt-image-2");
+  formData.append("prompt", prompt);
+  formData.append("size", "1024x1024");
+  formData.append("quality", "high");
+  formData.append("image[]", new Blob([imgBuf], { type: "image/jpeg" }), "source.jpg");
+
+  const resp = await fetch("https://api.openai.com/v1/images/edits", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${apiKey}` },
+    body: formData,
+    signal,
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => "");
+    throw new Error(`gpt-image-2 edit error (${resp.status}): ${errText.substring(0, 300)}`);
+  }
+
+  const data = (await resp.json()) as { data: Array<{ b64_json?: string; url?: string }> };
+  const item = data.data?.[0];
+  if (!item) throw new Error("gpt-image-2 returned no image data");
+
+  let buffer: Buffer;
+  if (item.b64_json) {
+    buffer = Buffer.from(item.b64_json, "base64");
+  } else if (item.url) {
+    const dl = await fetch(item.url);
+    buffer = Buffer.from(await dl.arrayBuffer());
+  } else {
+    throw new Error("gpt-image-2 response has neither b64_json nor url");
+  }
+
+  const { url } = await storagePut(`generated/gpt-image-2/${Date.now()}.png`, buffer, "image/png");
+  return { url };
+}
+
 export async function generateImage(
   options: GenerateImageOptions
 ): Promise<GenerateImageResponse> {
