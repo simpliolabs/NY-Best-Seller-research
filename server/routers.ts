@@ -301,6 +301,13 @@ export const appRouter = router({
         }
         try { const r = await generateImage({ prompt: testPrompt }); out.forge = { ok: true, url: r.url }; }
         catch (e) { out.forge = { ok: false, error: cap(e) }; }
+        // PARALLEL BURST — replicate the scan's 5-at-once concurrency to confirm/deny rate-limiting.
+        const burst = await Promise.allSettled(Array.from({ length: 5 }, () => generateGptImage2(testPrompt)));
+        out.parallelBurst5 = {
+          ok: burst.filter((r) => r.status === "fulfilled").length,
+          failed: burst.filter((r) => r.status === "rejected").length,
+          errors: burst.filter((r): r is PromiseRejectedResult => r.status === "rejected").map((r) => cap(r.reason)).slice(0, 5),
+        };
         return out;
       }),
 
