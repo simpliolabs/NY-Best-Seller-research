@@ -243,6 +243,14 @@ export async function updateRunImagesGenerated(
     .where(eq(botRuns.id, runId));
 }
 
+/** TEMP diagnostic (2026-06-13): record stage-6 image-gen errors into errorLog WITHOUT failing the
+ *  run, so a completed-but-partial scan still surfaces why images failed. Remove once fixed. */
+export async function setRunImageDebug(runId: number, log: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(botRuns).set({ errorLog: log.slice(0, 2000) }).where(eq(botRuns.id, runId));
+}
+
 export async function updateRunBooksProcessed(
   runId: number,
   count: number

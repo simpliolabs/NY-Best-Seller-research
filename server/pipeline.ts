@@ -12,7 +12,6 @@
 import { invokeLLM } from "./_core/llm";
 import { generateImage, generateGptImage2, generateGptImage2Edit } from "./_core/imageGeneration";
 import { notifyOwner } from "./_core/notification";
-import { processDesignForProduction } from "./productionImageProcessor";
 import { snapshotGenerationToHistory } from "./revisionDb";
 import { getTrendPatternsByWorkspace } from "./nicheHunterDb";
 import { withSelfHeal, withCircuitBreaker, logHealingAction, classifyError } from "./selfHeal";
@@ -36,6 +35,7 @@ import {
   updateConceptImages,
   updateConceptScore,
   updateRunImagesGenerated,
+  setRunImageDebug,
   updateRunBooksProcessed,
   getRunById,
   getPreviousCompletedRunId,
@@ -58,7 +58,6 @@ const TOP_N_BOOKS = 6;
 const HIGH_SCORE_THRESHOLD = 210; // 70% of 300
 const MAX_WINNER_CONCEPTS = 5; // Top 5 concepts GLOBALLY across all books get images
 const IMAGES_PER_WINNER = 1; // scans-to-1 (PO 2026-06-11): ONE hero image per winner (was 3)
-const PRODUCTION_PROCESS_TIMEOUT_MS = 110_000; // bound the magenta-regen background-removal call (audit #8)
 const IMAGE_GEN_TIMEOUT_MS = 60_000; // 60s timeout per image generation call
 const OVERALL_PIPELINE_TIMEOUT_MS = 15 * 60 * 1000; // 15 min — premium gpt-image-2 gen is slower than Forge (run #720001 hit the old 7-min cap mid-stage-6)
 
@@ -997,20 +996,27 @@ async function generateImageWithRetry(
   // ONE retry, ONLY on a RATE LIMIT (429), with an 8s backoff — run #840001 rendered just 1/5 winners,
   // the classic concurrent-429 signature (5/5 in an isolated burst). Any other error falls straight
   // through to Forge (bounded). Forge guarantees we never ship 0 images. Time-bounded for the cap.
+  let lastGptError = "unknown";
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       const gen = useEdit ? generateGptImage2Edit(editPrompt, sourceImageUrl!) : generateGptImage2(prompt);
       return await withTimeout(gen, GPT_IMAGE_TIMEOUT_MS, `${label} [gpt-image-2${useEdit ? " edit" : ""} #${attempt}]`);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      const rateLimited = /\b429\b|rate.?limit|too many requests/i.test(msg);
-      console.warn(`[Pipeline] ${label} gpt-image-2 attempt ${attempt} failed${rateLimited ? " (rate-limited)" : ""}: ${msg.slice(0, 160)}`);
+      lastGptError = err instanceof Error ? err.message : String(err);
+      const rateLimited = /\b429\b|rate.?limit|too many requests/i.test(lastGptError);
+      console.warn(`[Pipeline] ${label} gpt-image-2 attempt ${attempt} failed${rateLimited ? " (rate-limited)" : ""}: ${lastGptError.slice(0, 160)}`);
       if (rateLimited && attempt < 2) { await new Promise((r) => setTimeout(r, 8000)); continue; }
       break;
     }
   }
   console.warn(`[Pipeline] ${label} falling back to Forge ImageService`);
-  return withTimeout(generateImage({ prompt }), IMAGE_GEN_TIMEOUT_MS, `${label} [forge fallback]`);
+  try {
+    return await withTimeout(generateImage({ prompt }), IMAGE_GEN_TIMEOUT_MS, `${label} [forge fallback]`);
+  } catch (forgeErr) {
+    // TEMP (2026-06-13): surface BOTH failures so stage 6 can persist why an image was lost.
+    const fmsg = forgeErr instanceof Error ? forgeErr.message : String(forgeErr);
+    throw new Error(`gpt[${lastGptError.slice(0, 130)}] forge[${fmsg.slice(0, 130)}]`);
+  }
 }
 
 /** The niche DESIGN COUNCIL (PO 2026-06-13): the trained brain that vets each NEW concept against the
@@ -1325,22 +1331,10 @@ Fan phrase it's anchored to: ${concept.sourcePhrase ?? "not specified"}`;
         task.sourceImageUrl,
       );
       const rawUrl = img.url ?? null;
-      // Immediately process the generated image into a production-ready transparent PNG.
-      // This runs AI background removal once at generation time so the compositor
-      // can composite directly without any background removal at render time.
-      if (rawUrl) {
-        try {
-          // Bounded (audit #8): the magenta-regen background-removal fires a 2nd gpt-image-2 call;
-          // wrap so a hang can't block stage 6. Non-fatal — the card falls back to the raw image.
-          await withTimeout(
-            processDesignForProduction(rawUrl, task.concept.id, task.variation, task.prompt),
-            PRODUCTION_PROCESS_TIMEOUT_MS,
-            `Production processing concept ${task.concept.id}`,
-          );
-        } catch (procErr) {
-          console.warn(`[Pipeline] Production processing failed for concept ${task.concept.id} variation ${task.variation}:`, procErr);
-        }
-      }
+      // Production-ready transparent PNG (background removal) is DEFERRED out of the scan (PO
+      // 2026-06-13): it fired a SECOND gpt-image-2 call + heavy sharp work per image, doubling the
+      // stage-6 load that was failing 4/5 renders. The first-gen is transparent already; the
+      // on-demand "Process Images" path (processProductionImages) creates productionUrl* when needed.
       return { ...task, imageUrl: rawUrl, error: null };
     } catch (err) {
       console.warn(`[Pipeline] Image ${task.variation} failed for concept ${task.concept.id}:`, err);
@@ -1356,6 +1350,15 @@ Fan phrase it's anchored to: ${concept.sourcePhrase ?? "not specified"}`;
   for (let i = 0; i < allImageTasks.length; i += IMG_CONCURRENCY) {
     const batch = allImageTasks.slice(i, i + IMG_CONCURRENCY);
     imageResults.push(...(await Promise.allSettled(batch.map(runImageTask))));
+  }
+
+  // TEMP diagnostic (2026-06-13): persist per-image failure reasons (each "gpt[...] forge[...]") to
+  // errorLog so a completed-but-partial scan reveals WHY images failed, without Cloud Run log access.
+  const imgFailures = imageResults
+    .map((r) => (r.status === "fulfilled" ? (r.value.error instanceof Error ? r.value.error.message : r.value.error ? String(r.value.error) : null) : String(r.reason)))
+    .filter((e): e is string => !!e);
+  if (imgFailures.length) {
+    try { await setRunImageDebug(runId, `IMG ${imgFailures.length}/${allImageTasks.length} failed :: ${imgFailures.join(" :: ")}`); } catch { /* non-fatal */ }
   }
 
   // ── Step 5: Group results by concept and save to DB ──────────────────

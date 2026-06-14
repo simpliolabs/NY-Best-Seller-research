@@ -239,11 +239,12 @@ describe("image pipeline audit fixes", () => {
     expect(src).toContain('formData.append("quality", "medium")');
   });
 
-  it("production processing is wrapped in withTimeout in stage 6 (audit #8)", async () => {
+  it("production processing is DEFERRED out of the scan's stage 6 (background removal is on-demand)", async () => {
     const fs = await import("fs");
     const src = fs.readFileSync("server/pipeline.ts", "utf8");
-    expect(src).toContain("PRODUCTION_PROCESS_TIMEOUT_MS");
-    expect(src).toMatch(/withTimeout\(\s*\n?\s*processDesignForProduction/);
+    // The 2nd gpt-image-2 call (magenta-regen bg removal) doubled stage-6 load and was deferred to
+    // the on-demand "Process Images" path — it must not run inline in the scan pipeline.
+    expect(src).not.toContain("processDesignForProduction");
   });
 
   it("scans-to-1: IMAGES_PER_WINNER is 1 (audit #1)", async () => {
