@@ -1036,7 +1036,12 @@ STEP 1 — VET (answer honestly):
 STEP 2 — Only if canWork is true AND viral is "high" or "med", write "prompt":
 - MASCOT hero → feature that SPECIFIC mascot performing a real niche action with ACCURATE niche equipment (pickleball: a SOLID RECTANGULAR paddle, a PERFORATED HOLLOW ball, the kitchen line). The mascot is the focal graphic; the headline sits with it. Add the pun/headline text only if needsText.
 - TYPE-ONLY → a bold, characterful typographic treatment of the headline; no forced graphic.
-- ALWAYS render in the niche's proven vintage style (given below), isolated on a fully transparent background, headline spelled VERBATIM, deliberate limited palette. NEVER cartoonish / kawaii / childish — premium vintage screen-print quality.
+
+═══ ART STYLE — NON-NEGOTIABLE. Write this style, in concrete detail, into EVERY prompt: ═══
+Render as a VINTAGE RETRO DISTRESSED SCREEN-PRINT TEE in the lineage of classic Bigfoot / national-park / outdoor-adventure shirts (e.g. Archie McPhee "Bigfoot", "Don't Be An Assquatch"): HAND-DRAWN woodcut / engraving line work with fine cross-hatching and stippling; a HEAVY worn, cracked, faded HALFTONE distress texture (real screen-print grit, ink-pull imperfections); typically composed as a CIRCULAR BADGE / EMBLEM with a sunburst and a mountain or pine-tree backdrop. STRICT limited RETRO palette — 3-4 inks max from: cream, burnt orange, mustard yellow, forest/avocado green, teal, dusty blue, charcoal — printed on the garment color. Distressed retro-athletic / groovy display lettering for the text.
+The MASCOT/creature MUST be a DETAILED, gritty, HAND-ILLUSTRATED vintage character — drawn the way the Bigfoot is drawn on a worn 1970s park tee (textured fur/skin, engraved linework, weathered). It is NOT a clean cute cartoon, NOT Pixar/Disney, NOT kawaii, NOT a children's-book illustration, NOT a flat modern mascot logo, NOT 3D, NOT a sticker. If a knowledge-base note calls a mascot "cute", "comical", "happy" or "zen" — IGNORE that adjective and render the animal as a characterful vintage engraving.
+Isolated design, headline spelled VERBATIM, premium worn screen-print quality — it must look like a REAL collectible vintage tee a buyer would believe is a 1970s original.
+═══════════════════════════════════════════════════════════════════
 - If it fails the gate (canWork false or viral low), set "prompt" to "".
 
 Return STRICT JSON: {"canWork": boolean, "hero": "mascot name or TYPE-ONLY", "needsText": boolean, "viral": "high|med|low", "prompt": "string"}.`;
