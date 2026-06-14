@@ -289,31 +289,22 @@ export const appRouter = router({
     diagnoseImageGen: protectedProcedure
       .input(z.object({ sourceImageUrl: z.string().optional(), prompt: z.string().optional() }))
       .mutation(async ({ input }) => {
-        const { generateGptImage2, generateGptImage2Edit, generateImage } = await import("./_core/imageGeneration");
+        const { generateGptImage2 } = await import("./_core/imageGeneration");
         const testPrompt = "A bold vintage distressed t-shirt graphic, large serif text reading PICKLEBALL, isolated design, limited palette.";
         const p = input.prompt || testPrompt; // pass a REAL council prompt to replicate the scan's exact call
         const cap = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 500);
-        // Replicate the scan's per-image wrapper EXACTLY: withTimeout(90s).
         const withTO = <T,>(pr: Promise<T>, ms: number) => Promise.race([pr, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`Timeout after ${ms}ms`)), ms))]);
-        const out: Record<string, unknown> = { openaiKeySet: !!process.env.OPENAI_API_KEY, forgeUrlSet: !!process.env.BUILT_IN_FORGE_API_URL, promptChars: p.length };
-        try { const r = await generateGptImage2(p); out.gptText = { ok: true, url: r.url }; }
-        catch (e) { out.gptText = { ok: false, error: cap(e) }; }
-        // The scan path: generateGptImage2(realPrompt) wrapped in withTimeout(90s) — does the REAL prompt time out?
-        try { const r = await withTO(generateGptImage2(p), 90_000); out.gptText_90sWrapped = { ok: true, url: r.url }; }
-        catch (e) { out.gptText_90sWrapped = { ok: false, error: cap(e) }; }
-        if (input.sourceImageUrl) {
-          try { const r = await generateGptImage2Edit(testPrompt, input.sourceImageUrl); out.gptEdit = { ok: true, url: r.url }; }
-          catch (e) { out.gptEdit = { ok: false, error: cap(e) }; }
+        const out: Record<string, unknown> = { openaiKeySet: !!process.env.OPENAI_API_KEY, promptChars: p.length };
+        // ONE timed call, capped at 80s (under the proxy limit) so it always returns. If it TIMES OUT
+        // at ~80s → the real council prompt renders slower than the scan's 90s cap (the bug). If it
+        // returns with elapsedMs well under 90s → render time is NOT the cause.
+        const t0 = Date.now();
+        try {
+          const r = await withTO(generateGptImage2(p), 80_000);
+          out.realPrompt = { ok: true, elapsedMs: Date.now() - t0, url: r.url };
+        } catch (e) {
+          out.realPrompt = { ok: false, elapsedMs: Date.now() - t0, error: cap(e) };
         }
-        try { const r = await generateImage({ prompt: p }); out.forge = { ok: true, url: r.url }; }
-        catch (e) { out.forge = { ok: false, error: cap(e) }; }
-        // PARALLEL BURST of the REAL prompt, each wrapped in the scan's 90s timeout — the true replica.
-        const burst = await Promise.allSettled(Array.from({ length: 5 }, () => withTO(generateGptImage2(p), 90_000)));
-        out.parallelBurst5_90sWrapped = {
-          ok: burst.filter((r) => r.status === "fulfilled").length,
-          failed: burst.filter((r) => r.status === "rejected").length,
-          errors: burst.filter((r): r is PromiseRejectedResult => r.status === "rejected").map((r) => cap(r.reason)).slice(0, 5),
-        };
         return out;
       }),
 
