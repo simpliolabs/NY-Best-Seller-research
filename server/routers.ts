@@ -283,6 +283,27 @@ export const appRouter = router({
         }
       }),
 
+    /** TEMP DIAGNOSTIC (2026-06-13): run #810001 completed with 0 images — every gpt-image-2 AND
+     *  Forge call returned null but errors are only console.warn'd. This isolates each image path
+     *  and surfaces the EXACT error. Remove after the image-gen bug is fixed. */
+    diagnoseImageGen: protectedProcedure
+      .input(z.object({ sourceImageUrl: z.string().optional() }))
+      .mutation(async ({ input }) => {
+        const { generateGptImage2, generateGptImage2Edit, generateImage } = await import("./_core/imageGeneration");
+        const testPrompt = "A bold vintage distressed t-shirt graphic, large serif text reading PICKLEBALL, isolated design, limited palette.";
+        const cap = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 500);
+        const out: Record<string, unknown> = { openaiKeySet: !!process.env.OPENAI_API_KEY, forgeUrlSet: !!process.env.BUILT_IN_FORGE_API_URL };
+        try { const r = await generateGptImage2(testPrompt); out.gptText = { ok: true, url: r.url }; }
+        catch (e) { out.gptText = { ok: false, error: cap(e) }; }
+        if (input.sourceImageUrl) {
+          try { const r = await generateGptImage2Edit(testPrompt, input.sourceImageUrl); out.gptEdit = { ok: true, url: r.url }; }
+          catch (e) { out.gptEdit = { ok: false, error: cap(e) }; }
+        }
+        try { const r = await generateImage({ prompt: testPrompt }); out.forge = { ok: true, url: r.url }; }
+        catch (e) { out.forge = { ok: false, error: cap(e) }; }
+        return out;
+      }),
+
     /**
      * Backfill production-ready transparent PNGs for all concepts in a run.
      * Processes concepts that have imageUrl* but no productionUrl*.
