@@ -55,21 +55,22 @@ async function storeGptImage2Response(resp: Response): Promise<GenerateImageResp
   return { url };
 }
 
-/** True if the error looks like gpt-image-2 rejecting the `background` param (so we retry opaque). */
-function isBackgroundParamUnsupported(e: unknown): boolean {
-  const m = e instanceof Error ? e.message : String(e);
-  return /background/i.test(m) && !/OPENAI_API_KEY/.test(m);
-}
-
-async function gptImage2Generate(prompt: string, transparent: boolean, signal?: AbortSignal): Promise<GenerateImageResponse> {
+/**
+ * Text-to-image via OpenAI gpt-image-2 (premium typography/realism vs the Forge ImageService).
+ * SCAN ONLY — the Niche Hunter uses its own callGptImage2Edit + generateImage (Forge), so changes
+ * here never affect it. Fail-loud so the caller can fall back to Forge.
+ *
+ * (The `background:"transparent"` best-effort was removed 2026-06-13: the /generations endpoint
+ * ALWAYS rejects it — every image wasted a failing attempt — and deferring background-removal out
+ * of the scan made it pointless. Designs render opaque; bg removal runs on-demand for mockups.)
+ */
+export async function generateGptImage2(prompt: string, signal?: AbortSignal): Promise<GenerateImageResponse> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured — cannot call gpt-image-2");
-  const body: Record<string, unknown> = { model: "gpt-image-2", prompt, size: "1024x1024", quality: "medium", n: 1 };
-  if (transparent) body.background = "transparent"; // → first-gen is transparent → processDesignForProduction skips its 2nd gpt call
   const resp = await fetch("https://api.openai.com/v1/images/generations", {
     method: "POST",
     headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ model: "gpt-image-2", prompt, size: "1024x1024", quality: "medium", n: 1 }),
     signal,
   });
   if (!resp.ok) {
@@ -80,24 +81,10 @@ async function gptImage2Generate(prompt: string, transparent: boolean, signal?: 
 }
 
 /**
- * Text-to-image via OpenAI gpt-image-2 (premium typography/realism vs the Forge ImageService).
- * Requests a transparent background (PO 2026-06-13) so the scan's background-removal step can skip
- * its second gpt call — best-effort: if gpt-image-2 rejects `background`, retries opaque (current
- * behavior). SCAN ONLY. Fail-loud otherwise so the caller can fall back to Forge.
+ * Image-to-image EDIT via gpt-image-2 /images/edits — anchors output to a real in-niche bestseller
+ * image while the prompt expresses the new concept. SCAN ONLY. Fail-loud so the caller can fall back.
  */
-export async function generateGptImage2(prompt: string, signal?: AbortSignal): Promise<GenerateImageResponse> {
-  try {
-    return await gptImage2Generate(prompt, true, signal);
-  } catch (e) {
-    if (isBackgroundParamUnsupported(e)) {
-      console.warn("[gpt-image-2] background:transparent unsupported — retrying opaque");
-      return gptImage2Generate(prompt, false, signal);
-    }
-    throw e;
-  }
-}
-
-async function gptImage2EditOnce(prompt: string, sourceImageUrl: string, transparent: boolean, signal?: AbortSignal): Promise<GenerateImageResponse> {
+export async function generateGptImage2Edit(prompt: string, sourceImageUrl: string, signal?: AbortSignal): Promise<GenerateImageResponse> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured — cannot call gpt-image-2");
   const imgResp = await fetch(sourceImageUrl, { signal });
@@ -108,7 +95,6 @@ async function gptImage2EditOnce(prompt: string, sourceImageUrl: string, transpa
   formData.append("prompt", prompt);
   formData.append("size", "1024x1024");
   formData.append("quality", "medium");
-  if (transparent) formData.append("background", "transparent");
   formData.append("image[]", new Blob([imgBuf], { type: "image/jpeg" }), "source.jpg");
   const resp = await fetch("https://api.openai.com/v1/images/edits", {
     method: "POST",
@@ -121,23 +107,6 @@ async function gptImage2EditOnce(prompt: string, sourceImageUrl: string, transpa
     throw new Error(`gpt-image-2 edit error (${resp.status}): ${errText.substring(0, 300)}`);
   }
   return storeGptImage2Response(resp);
-}
-
-/**
- * Image-to-image EDIT via gpt-image-2 /images/edits — anchors output to a real in-niche bestseller
- * image while the prompt expresses the new concept. Transparent background best-effort (see above).
- * SCAN ONLY. Fail-loud so the caller can fall back to text-to-image.
- */
-export async function generateGptImage2Edit(prompt: string, sourceImageUrl: string, signal?: AbortSignal): Promise<GenerateImageResponse> {
-  try {
-    return await gptImage2EditOnce(prompt, sourceImageUrl, true, signal);
-  } catch (e) {
-    if (isBackgroundParamUnsupported(e)) {
-      console.warn("[gpt-image-2] edit background:transparent unsupported — retrying opaque");
-      return gptImage2EditOnce(prompt, sourceImageUrl, false, signal);
-    }
-    throw e;
-  }
 }
 
 export async function generateImage(
