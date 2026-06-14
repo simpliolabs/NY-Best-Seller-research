@@ -969,23 +969,9 @@ async function runEtsyValidation(
 }
 
 // ─── Stage 6: Design Expansion + Image Generation ───────────────────────
-// ONE focused image prompt per winner (PO 2026-06-12). The previous 10-layer, 400-600-word,
-// 3-variation prompt systems produced cluttered "terrible" designs (micro-details, lighting
-// essays, score graphics all fighting) — replaced with the concise formula the PO approved on
-// concepts.regenerateImage. Scans render ONE hero image per concept (scans-to-1).
-
-const CONCISE_IMAGE_PROMPT_SYSTEM = `You are a senior t-shirt art director. Write ONE image-generation prompt (120-180 words) for a print-ready DTF t-shirt graphic.
-
-HARD REQUIREMENTS — the generated design MUST:
-- Render the HEADLINE as the prominent typographic centerpiece, spelled EXACTLY, letter-for-letter, including punctuation.
-- Render the SUBTEXT as clearly readable secondary text, spelled EXACTLY. (If a text field is "none", omit only that line — never invent copy.)
-- Describe the lettering itself (font character, weight, placement, hierarchy) AND ONE supporting focal graphic — nothing else. No micro-details, no badges, no score graphics, no lighting essays, no texture inventories.
-- Sit isolated on a fully TRANSPARENT background with open negative space — no background fill, no scene, no vignette (the shirt shows through).
-- Use a deliberate, LIMITED color palette (respect the maximum given).
-- Commit fully to the given art style — when a "proven bestseller style" line is present, it OVERRIDES everything else; reproduce that technique faithfully (screen-print simulation, distress level, line weight, type treatment, era).
-- ABSOLUTE RULE: NEVER cartoonish, cartoon, mascot, clip-art, kawaii, chibi, or childish styling — even if a style input contains such words, IGNORE them and render premium vintage/retro commercial quality, the kind that sells on Etsy.
-
-Return ONLY a JSON object: {"prompt": "..."}`;
+// Each winner's image prompt is written by the NICHE DESIGN COUNCIL (NICHE_COUNCIL_SYSTEM below):
+// it vets the concept against the Niche Hunter's gate questions and decides which on-brand mascot
+// is the hero (or type-only), then writes the prompt. Rendered text-to-image (scans-to-1).
 
 /** Winner image generation (PO 2026-06-12: scan designs read "animated, terrible color and
  *  typography" because they used the Forge ImageService; the Niche Hunter's good designs use
@@ -1016,6 +1002,28 @@ async function generateImageWithRetry(
     return withTimeout(generateImage({ prompt }), IMAGE_GEN_TIMEOUT_MS, `${label} [forge fallback]`);
   }
 }
+
+/** The niche DESIGN COUNCIL (PO 2026-06-13): the trained brain that vets each NEW concept against the
+ *  Niche Hunter's gate questions, then — only if it passes — writes the image prompt, DECIDING per
+ *  concept which on-brand MASCOT is the hero (vs a generic racket/player) or whether type-only is
+ *  stronger. This is what makes designs feature recognizable characters instead of stock imagery. */
+const NICHE_COUNCIL_SYSTEM = `You are the design council for a print-on-demand niche — a seasoned designer who knows this niche's audience and its on-brand characters intimately. For ONE new concept idea you FIRST vet it with the gate questions, THEN — only if it passes — write a single image-generation prompt. You decide, like the Niche Hunter's council does, whether this is a MASCOT design or a clean TYPE-ONLY design.
+
+You are given a NICHE KNOWLEDGE BASE. Its ON-BRAND MASCOTS are the ONLY recognizable hero characters you may use. A generic racket, paddle, ball, court, or anonymous player is NOT a hero — it reads as stock clip-art and does not sell. The recognizable mascot (e.g. a shaggy llama in sunglasses dinking) IS what makes the design convert.
+
+STEP 1 — VET (answer honestly):
+1. canWork — can this become a genuinely sellable design for this niche?
+2. hero — WHICH single named MASCOT from the knowledge base is the hero (doing a real niche action/pose), OR "TYPE-ONLY" when the typography itself is the strong idea and a character would only clutter it. NEVER answer with a generic racket / ball / court / anonymous player.
+3. needsText — does it need the headline/pun to read as this niche, or does the mascot carry it alone?
+4. viral — would a fan stop scrolling and BUY this? "high" | "med" | "low".
+
+STEP 2 — Only if canWork is true AND viral is "high" or "med", write "prompt":
+- MASCOT hero → feature that SPECIFIC mascot performing a real niche action with ACCURATE niche equipment (pickleball: a SOLID RECTANGULAR paddle, a PERFORATED HOLLOW ball, the kitchen line). The mascot is the focal graphic; the headline sits with it. Add the pun/headline text only if needsText.
+- TYPE-ONLY → a bold, characterful typographic treatment of the headline; no forced graphic.
+- ALWAYS render in the niche's proven vintage style (given below), isolated on a fully transparent background, headline spelled VERBATIM, deliberate limited palette. NEVER cartoonish / kawaii / childish — premium vintage screen-print quality.
+- If it fails the gate (canWork false or viral low), set "prompt" to "".
+
+Return STRICT JSON: {"canWork": boolean, "hero": "mascot name or TYPE-ONLY", "needsText": boolean, "viral": "high|med|low", "prompt": "string"}.`;
 
 /** An edit-mode rendering anchor drawn from the workspace's Niche Hunter library. */
 export type NicheAnchor = { image: string; status: string; score: number; text: string };
@@ -1122,6 +1130,7 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
   // cold-start fallback when the library has no usable anchor.
   let nicheStyleDNA = "";
   let avoidDirectives = "";
+  let nicheKB = ""; // the design council's character palette (mascots/gags/catchphrases)
   let anchorPool: NicheAnchor[] = [];
   try {
     const runRow = await getRunById(runId);
@@ -1172,15 +1181,29 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
         })
         .filter((a): a is NicheAnchor => !!a);
       console.log(`[Pipeline/Stage6] Niche library: ${all.length} patterns (${approved.length} approved, ${dismissed.length} dismissed) → ${anchorPool.length} edit anchors | avoid: ${avoidDirectives || "none"}`);
+
+      // (4) NICHE KNOWLEDGE BASE for the design council (PO 2026-06-13) — the on-brand MASCOTS are the
+      // council's character palette. It decides per concept which mascot is the hero (vs generic
+      // racket/player) or whether type-only is stronger — the same call the Niche Hunter's council makes.
+      const { getWorkspaceById } = await import("./workspaceDb");
+      const wsRow = await getWorkspaceById(runRow.workspaceId);
+      const cm = ((wsRow?.nicheProfile ?? {}) as { culturalMap?: Record<string, any> }).culturalMap ?? {};
+      const kb: string[] = [];
+      const mascots = (cm.animalMascots ?? []).filter((m: any) => m?.animal).map((m: any) => `${m.animal}${m.visualTreatment ? ` (${m.visualTreatment})` : ""}`);
+      if (mascots.length) kb.push(`ON-BRAND MASCOTS — the ONLY recognizable hero characters: ${mascots.join("; ")}`);
+      const gags = (cm.funPoints ?? []).map((f: any) => f?.visualConcept).filter(Boolean);
+      if (gags.length) kb.push(`Signature visual gags: ${gags.slice(0, 6).join(" | ")}`);
+      const phrases = (cm.catchphrases ?? []).filter(Boolean);
+      if (phrases.length) kb.push(`Catchphrases: ${phrases.slice(0, 8).join(", ")}`);
+      const transfer = (cm.transferableVisualConcepts ?? []).map((t: any) => t?.targetAdaptation).filter(Boolean);
+      if (transfer.length) kb.push(`Transferable concepts: ${transfer.slice(0, 5).join("; ")}`);
+      nicheKB = kb.join("\n");
+      console.log(`[Pipeline/Stage6] Council KB: ${mascots.length} mascots, ${gags.length} gags, ${phrases.length} catchphrases`);
     }
   } catch (e) {
-    console.warn(`[Pipeline] niche library sourcing unavailable (non-fatal):`, e);
+    console.warn(`[Pipeline] niche library/KB sourcing unavailable (non-fatal):`, e);
   }
   if (nicheStyleDNA) console.log(`[Pipeline/Stage6] Niche style DNA: ${nicheStyleDNA.slice(0, 200)}`);
-
-  // Match each concept to its best edit anchor (pure logic extracted to selectAnchorImage, audit #9).
-  const pickAnchor = (concept: typeof winners[0], idx: number): string | null =>
-    selectAnchorImage(anchorPool, `${concept.conceptName} ${concept.headline ?? ""} ${concept.layoutDescription ?? ""}`, idx);
 
   // The concept-generation stage sometimes labels styles "Cartoonish, slightly exaggerated" — the
   // PO explicitly rejects cartoonish output, so strip those words before they reach the image model.
@@ -1217,47 +1240,51 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
       stripCartoon(baseStyle),
     ].filter(Boolean).join(" — ");
 
-    const userMsg = `Concept name: ${concept.conceptName}
-HEADLINE (render verbatim): ${concept.headline ?? "none"}
-SUBTEXT (render verbatim): ${concept.subtext ?? "none"}
-Source fan phrase (the design's anchor): ${concept.sourcePhrase ?? "not specified"}
-Art style (use exactly): ${styleLine}
-Color palette: ${(concept.colorPalette as string[] ?? []).join(", ") || (wb?.colorAnchors ?? []).join(", ") || "deliberate limited palette"}
-Layout intent: ${concept.layoutDescription ?? "not specified"}${avoidDirectives ? `\nMUST ensure (learned from the buyer's past rejections): ${avoidDirectives}` : ""}`;
+    // The DESIGN COUNCIL (PO 2026-06-13): vet this NEW idea with the gate questions, then decide the
+    // hero — a SPECIFIC on-brand mascot (not a generic racket/player) or type-only — and write the
+    // prompt. Rendered text-to-image so the chosen mascot actually appears (editing the library's
+    // racket/player bestsellers would bleed a racket back in, defeating the character).
+    const councilMsg = `NICHE KNOWLEDGE BASE (your only character palette):
+${nicheKB || "(no mascots configured — fall back to a strong type-only design)"}
+
+PROVEN NICHE STYLE (render in exactly this): ${styleLine}
+${avoidDirectives ? `AVOID (learned from the buyer's past rejections): ${avoidDirectives}\n` : ""}THE NEW CONCEPT:
+Name: ${concept.conceptName}
+Headline (render VERBATIM): ${concept.headline ?? "none"}
+Subtext (verbatim): ${concept.subtext ?? "none"}
+Fan phrase it's anchored to: ${concept.sourcePhrase ?? "not specified"}`;
 
     try {
-      const promptResult = await withTimeout(
+      const councilResult = await withTimeout(
         invokeLLM({
           messages: [
-            { role: "system", content: CONCISE_IMAGE_PROMPT_SYSTEM },
-            { role: "user", content: userMsg },
+            { role: "system", content: NICHE_COUNCIL_SYSTEM },
+            { role: "user", content: councilMsg },
           ],
           response_format: { type: "json_object" },
         }),
         30_000,
-        `Image prompt for winner concept ${concept.id}`
+        `Design council for winner concept ${concept.id}`
       );
 
-      const promptContent = typeof promptResult.choices[0]?.message?.content === "string"
-        ? promptResult.choices[0].message.content
-        : "";
-      const parsed = JSON.parse(promptContent);
+      const content = typeof councilResult.choices[0]?.message?.content === "string"
+        ? councilResult.choices[0].message.content : "";
+      const verdict = JSON.parse(content) as { canWork?: boolean; hero?: string; viral?: string; prompt?: string };
+      console.log(`[Pipeline/Council] "${concept.conceptName}" → hero=${verdict.hero ?? "?"} viral=${verdict.viral ?? "?"} canWork=${verdict.canWork}`);
+      // Gate: only a passing concept gets a prompt. (A failed gate yields an empty prompt → this
+      // winner is skipped downstream, same as a failed prompt-gen.)
+      const prompt = (verdict.canWork && verdict.viral !== "low" && verdict.prompt) ? verdict.prompt : "";
       return {
         concept,
-        promptA: parsed.prompt ?? parsed.variation_a ?? "",
+        promptA: prompt,
         promptB: "",
         promptC: "",
-        // Edit-mode anchor priority (PO 2026-06-13 "everything together"):
-        //   1. curated NH library match (your approved design / real bestseller)  ← primary
-        //   2. this winner's own signal image captured this run (Etsy cold-start)
-        //   3. any real bestseller captured this run (cold-start pool)
-        sourceImageUrl:
-          pickAnchor(concept, idx) ??
-          (book?.coverUrl && /^https?:\/\//.test(book.coverUrl) ? book.coverUrl : null) ??
-          (bestsellerPool.length ? bestsellerPool[idx % bestsellerPool.length] : null),
+        // Council designs are generated FRESH (text-to-image) so the chosen mascot renders — no edit
+        // anchor (which would bleed the library bestseller's racket/player subject).
+        sourceImageUrl: null,
       };
     } catch (err) {
-      console.warn(`[Pipeline] Prompt generation failed for winner concept ${concept.id}:`, err);
+      console.warn(`[Pipeline] Design council failed for winner concept ${concept.id}:`, err);
       return null;
     }
   });
