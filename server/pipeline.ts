@@ -884,9 +884,16 @@ async function stageScoreAndValidate(
     throw err;
   }
 
-  // Etsy validation — runs for each concept with keywords
+  // Etsy validation — TOP-5 WINNERS only (PO 2026-06-14). Previously hit the Etsy API for all 20
+  // concepts even though only the 5 winners show market data on their report card — 75% waste, and
+  // 20 throttled calls were a major source of stage-5 latency / Etsy quota burn.
   if (etsyApiKey) {
-    await runEtsyValidation(concepts, etsyApiKey);
+    const fresh = await getConceptsByRunId(runId); // pick up the trendScore just written above
+    const top5 = [...fresh]
+      .filter((c) => c.trendScore !== null && c.trendScore > 0)
+      .sort((a, b) => (b.trendScore ?? 0) - (a.trendScore ?? 0))
+      .slice(0, MAX_WINNER_CONCEPTS);
+    await runEtsyValidation(top5, etsyApiKey);
   } else {
     console.log("[Pipeline] Etsy API key not configured — skipping market validation");
   }
