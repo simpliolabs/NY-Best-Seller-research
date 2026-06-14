@@ -994,13 +994,23 @@ async function generateImageWithRetry(
   // trick ("output the design only, on white, not on a shirt") also handles listing photos that
   // show the shirt on a model.
   const editPrompt = `Use this reference image ONLY for its print quality, screen-print texture, color treatment and professional finish. Create a NEW, different design: ${prompt} Output the finished artwork by itself on a fully transparent background — not on a shirt, garment, model, or any filled background.`;
-  try {
-    const gen = useEdit ? generateGptImage2Edit(editPrompt, sourceImageUrl!) : generateGptImage2(prompt);
-    return await withTimeout(gen, GPT_IMAGE_TIMEOUT_MS, `${label} [gpt-image-2${useEdit ? " edit" : ""}]`);
-  } catch (err) {
-    console.warn(`[Pipeline] ${label} gpt-image-2${useEdit ? " edit" : ""} failed — Forge fallback:`, err);
-    return withTimeout(generateImage({ prompt }), IMAGE_GEN_TIMEOUT_MS, `${label} [forge fallback]`);
+  // ONE retry, ONLY on a RATE LIMIT (429), with an 8s backoff — run #840001 rendered just 1/5 winners,
+  // the classic concurrent-429 signature (5/5 in an isolated burst). Any other error falls straight
+  // through to Forge (bounded). Forge guarantees we never ship 0 images. Time-bounded for the cap.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const gen = useEdit ? generateGptImage2Edit(editPrompt, sourceImageUrl!) : generateGptImage2(prompt);
+      return await withTimeout(gen, GPT_IMAGE_TIMEOUT_MS, `${label} [gpt-image-2${useEdit ? " edit" : ""} #${attempt}]`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const rateLimited = /\b429\b|rate.?limit|too many requests/i.test(msg);
+      console.warn(`[Pipeline] ${label} gpt-image-2 attempt ${attempt} failed${rateLimited ? " (rate-limited)" : ""}: ${msg.slice(0, 160)}`);
+      if (rateLimited && attempt < 2) { await new Promise((r) => setTimeout(r, 8000)); continue; }
+      break;
+    }
   }
+  console.warn(`[Pipeline] ${label} falling back to Forge ImageService`);
+  return withTimeout(generateImage({ prompt }), IMAGE_GEN_TIMEOUT_MS, `${label} [forge fallback]`);
 }
 
 /** The niche DESIGN COUNCIL (PO 2026-06-13): the trained brain that vets each NEW concept against the
@@ -1307,38 +1317,46 @@ Fan phrase it's anchored to: ${concept.sourcePhrase ?? "not specified"}`;
     if (heroPrompt) allImageTasks.push({ concept: ps.concept, variation: "A", prompt: heroPrompt, sourceImageUrl: ps.sourceImageUrl });
   }
 
-  const imageResults = await Promise.allSettled(
-    allImageTasks.map(async (task) => {
-      try {
-        const img = await generateImageWithRetry(
-          task.prompt,
-          `Image ${task.variation} for concept ${task.concept.id}`,
-          task.sourceImageUrl,
-        );
-        const rawUrl = img.url ?? null;
-        // Immediately process the generated image into a production-ready transparent PNG.
-        // This runs AI background removal once at generation time so the compositor
-        // can composite directly without any background removal at render time.
-        if (rawUrl) {
-          try {
-            // Bounded (audit #8): the magenta-regen background-removal fires a 2nd gpt-image-2 call;
-            // wrap so a hang can't block stage 6. Non-fatal — the card falls back to the raw image.
-            await withTimeout(
-              processDesignForProduction(rawUrl, task.concept.id, task.variation, task.prompt),
-              PRODUCTION_PROCESS_TIMEOUT_MS,
-              `Production processing concept ${task.concept.id}`,
-            );
-          } catch (procErr) {
-            console.warn(`[Pipeline] Production processing failed for concept ${task.concept.id} variation ${task.variation}:`, procErr);
-          }
+  const runImageTask = async (task: typeof allImageTasks[number]) => {
+    try {
+      const img = await generateImageWithRetry(
+        task.prompt,
+        `Image ${task.variation} for concept ${task.concept.id}`,
+        task.sourceImageUrl,
+      );
+      const rawUrl = img.url ?? null;
+      // Immediately process the generated image into a production-ready transparent PNG.
+      // This runs AI background removal once at generation time so the compositor
+      // can composite directly without any background removal at render time.
+      if (rawUrl) {
+        try {
+          // Bounded (audit #8): the magenta-regen background-removal fires a 2nd gpt-image-2 call;
+          // wrap so a hang can't block stage 6. Non-fatal — the card falls back to the raw image.
+          await withTimeout(
+            processDesignForProduction(rawUrl, task.concept.id, task.variation, task.prompt),
+            PRODUCTION_PROCESS_TIMEOUT_MS,
+            `Production processing concept ${task.concept.id}`,
+          );
+        } catch (procErr) {
+          console.warn(`[Pipeline] Production processing failed for concept ${task.concept.id} variation ${task.variation}:`, procErr);
         }
-        return { ...task, imageUrl: rawUrl, error: null };
-      } catch (err) {
-        console.warn(`[Pipeline] Image ${task.variation} failed for concept ${task.concept.id}:`, err);
-        return { ...task, imageUrl: null, error: err };
       }
-    })
-  );
+      return { ...task, imageUrl: rawUrl, error: null };
+    } catch (err) {
+      console.warn(`[Pipeline] Image ${task.variation} failed for concept ${task.concept.id}:`, err);
+      return { ...task, imageUrl: null, error: err };
+    }
+  };
+
+  // Throttle to IMG_CONCURRENCY at a time (PO 2026-06-13) — firing all 5 gpt-image-2 calls at once
+  // rate-limited 4/5 on run #840001 (5/5 in an isolated burst). Small batches stay under the image
+  // API's concurrency limit; combined with the 429-backoff retry in generateImageWithRetry.
+  const IMG_CONCURRENCY = 2;
+  const imageResults: PromiseSettledResult<Awaited<ReturnType<typeof runImageTask>>>[] = [];
+  for (let i = 0; i < allImageTasks.length; i += IMG_CONCURRENCY) {
+    const batch = allImageTasks.slice(i, i + IMG_CONCURRENCY);
+    imageResults.push(...(await Promise.allSettled(batch.map(runImageTask))));
+  }
 
   // ── Step 5: Group results by concept and save to DB ──────────────────
   const conceptImageMap = new Map<number, { promptA?: string; promptB?: string; promptC?: string; urlA?: string | null; urlB?: string | null; urlC?: string | null }>();
