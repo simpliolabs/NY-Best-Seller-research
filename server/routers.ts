@@ -287,23 +287,29 @@ export const appRouter = router({
      *  Forge call returned null but errors are only console.warn'd. This isolates each image path
      *  and surfaces the EXACT error. Remove after the image-gen bug is fixed. */
     diagnoseImageGen: protectedProcedure
-      .input(z.object({ sourceImageUrl: z.string().optional() }))
+      .input(z.object({ sourceImageUrl: z.string().optional(), prompt: z.string().optional() }))
       .mutation(async ({ input }) => {
         const { generateGptImage2, generateGptImage2Edit, generateImage } = await import("./_core/imageGeneration");
         const testPrompt = "A bold vintage distressed t-shirt graphic, large serif text reading PICKLEBALL, isolated design, limited palette.";
+        const p = input.prompt || testPrompt; // pass a REAL council prompt to replicate the scan's exact call
         const cap = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 500);
-        const out: Record<string, unknown> = { openaiKeySet: !!process.env.OPENAI_API_KEY, forgeUrlSet: !!process.env.BUILT_IN_FORGE_API_URL };
-        try { const r = await generateGptImage2(testPrompt); out.gptText = { ok: true, url: r.url }; }
+        // Replicate the scan's per-image wrapper EXACTLY: withTimeout(90s).
+        const withTO = <T,>(pr: Promise<T>, ms: number) => Promise.race([pr, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`Timeout after ${ms}ms`)), ms))]);
+        const out: Record<string, unknown> = { openaiKeySet: !!process.env.OPENAI_API_KEY, forgeUrlSet: !!process.env.BUILT_IN_FORGE_API_URL, promptChars: p.length };
+        try { const r = await generateGptImage2(p); out.gptText = { ok: true, url: r.url }; }
         catch (e) { out.gptText = { ok: false, error: cap(e) }; }
+        // The scan path: generateGptImage2(realPrompt) wrapped in withTimeout(90s) — does the REAL prompt time out?
+        try { const r = await withTO(generateGptImage2(p), 90_000); out.gptText_90sWrapped = { ok: true, url: r.url }; }
+        catch (e) { out.gptText_90sWrapped = { ok: false, error: cap(e) }; }
         if (input.sourceImageUrl) {
           try { const r = await generateGptImage2Edit(testPrompt, input.sourceImageUrl); out.gptEdit = { ok: true, url: r.url }; }
           catch (e) { out.gptEdit = { ok: false, error: cap(e) }; }
         }
-        try { const r = await generateImage({ prompt: testPrompt }); out.forge = { ok: true, url: r.url }; }
+        try { const r = await generateImage({ prompt: p }); out.forge = { ok: true, url: r.url }; }
         catch (e) { out.forge = { ok: false, error: cap(e) }; }
-        // PARALLEL BURST — replicate the scan's 5-at-once concurrency to confirm/deny rate-limiting.
-        const burst = await Promise.allSettled(Array.from({ length: 5 }, () => generateGptImage2(testPrompt)));
-        out.parallelBurst5 = {
+        // PARALLEL BURST of the REAL prompt, each wrapped in the scan's 90s timeout — the true replica.
+        const burst = await Promise.allSettled(Array.from({ length: 5 }, () => withTO(generateGptImage2(p), 90_000)));
+        out.parallelBurst5_90sWrapped = {
           ok: burst.filter((r) => r.status === "fulfilled").length,
           failed: burst.filter((r) => r.status === "rejected").length,
           errors: burst.filter((r): r is PromiseRejectedResult => r.status === "rejected").map((r) => cap(r.reason)).slice(0, 5),
