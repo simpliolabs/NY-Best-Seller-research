@@ -243,6 +243,15 @@ export async function updateRunImagesGenerated(
     .where(eq(botRuns.id, runId));
 }
 
+/** Clear a run's stale errorLog + restore completed status before a fresh regen, so a prior failure's
+ *  message never lingers in the UI as a false "RUN FAILED" (PO 2026-06-15). Safe: regen only runs on
+ *  already-completed runs. */
+export async function clearRunErrorAndComplete(runId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(botRuns).set({ errorLog: null, status: "completed" }).where(eq(botRuns.id, runId));
+}
+
 export async function updateRunBooksProcessed(
   runId: number,
   count: number

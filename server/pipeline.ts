@@ -35,6 +35,7 @@ import {
   updateConceptImages,
   updateConceptScore,
   updateRunImagesGenerated,
+  clearRunErrorAndComplete,
   updateRunBooksProcessed,
   getRunById,
   getPreviousCompletedRunId,
@@ -1019,6 +1020,7 @@ async function generateImageWithRetry(
   label: string,
   sourceImageUrl?: string | null, // hybrid: when the winner's signal carries a real bestseller image,
                                   // EDIT it (NH mechanism) instead of text-to-image
+  timeoutMultiplier = 1, // the serial retry pass passes >1 so genuinely-slow renders (heavy lane styles) get room
 ): Promise<{ url?: string | null }> {
   const useEdit = !!sourceImageUrl && /^https?:\/\//.test(sourceImageUrl);
   // In edit mode, anchor on the bestseller's print realism but output a NEW flat design — the NH's
@@ -1032,7 +1034,7 @@ async function generateImageWithRetry(
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       const gen = useEdit ? generateGptImage2Edit(editPrompt, sourceImageUrl!) : generateGptImage2(prompt);
-      return await withTimeout(gen, GPT_IMAGE_TIMEOUT_MS, `${label} [gpt-image-2${useEdit ? " edit" : ""} #${attempt}]`);
+      return await withTimeout(gen, GPT_IMAGE_TIMEOUT_MS * timeoutMultiplier, `${label} [gpt-image-2${useEdit ? " edit" : ""} #${attempt}]`);
     } catch (err) {
       lastGptError = err instanceof Error ? err.message : String(err);
       const rateLimited = /\b429\b|rate.?limit|too many requests/i.test(lastGptError);
@@ -1043,7 +1045,7 @@ async function generateImageWithRetry(
   }
   console.warn(`[Pipeline] ${label} falling back to Forge ImageService`);
   try {
-    return await withTimeout(generateImage({ prompt }), IMAGE_GEN_TIMEOUT_MS, `${label} [forge fallback]`);
+    return await withTimeout(generateImage({ prompt }), IMAGE_GEN_TIMEOUT_MS * timeoutMultiplier, `${label} [forge fallback]`);
   } catch (forgeErr) {
     // TEMP (2026-06-13): surface BOTH failures so stage 6 can persist why an image was lost.
     const fmsg = forgeErr instanceof Error ? forgeErr.message : String(forgeErr);
@@ -1453,12 +1455,13 @@ Stage-4 suggested style hint (a guess only — override if the references sugges
     if (heroPrompt) allImageTasks.push({ concept: ps.concept, variation: "A", prompt: heroPrompt, sourceImageUrl: ps.sourceImageUrl });
   }
 
-  const runImageTask = async (task: typeof allImageTasks[number]) => {
+  const runImageTask = async (task: typeof allImageTasks[number], timeoutMultiplier = 1) => {
     try {
       const img = await generateImageWithRetry(
         task.prompt,
         `Image ${task.variation} for concept ${task.concept.id}`,
         task.sourceImageUrl,
+        timeoutMultiplier,
       );
       const rawUrl = img.url ?? null;
       // Production-ready transparent PNG (background removal) is DEFERRED out of the scan (PO
@@ -1479,7 +1482,7 @@ Stage-4 suggested style hint (a guess only — override if the references sugges
   const imageResults: PromiseSettledResult<Awaited<ReturnType<typeof runImageTask>>>[] = [];
   for (let i = 0; i < allImageTasks.length; i += IMG_CONCURRENCY) {
     const batch = allImageTasks.slice(i, i + IMG_CONCURRENCY);
-    imageResults.push(...(await Promise.allSettled(batch.map(runImageTask))));
+    imageResults.push(...(await Promise.allSettled(batch.map((c) => runImageTask(c)))));
   }
 
   // Normalize (runImageTask always resolves with {imageUrl, error} — it catches internally).
@@ -1493,9 +1496,9 @@ Stage-4 suggested style hint (a guess only — override if the references sugges
   // its prior design (immutability guard below); a partial run is NEVER a whole-run failure.
   const failed = results.filter((res) => !res.imageUrl);
   if (failed.length) {
-    console.warn(`[Pipeline/Stage6] ${failed.length}/${allImageTasks.length} image(s) failed first pass — retrying serially`);
+    console.warn(`[Pipeline/Stage6] ${failed.length}/${allImageTasks.length} image(s) failed first pass — retrying serially with an extended timeout`);
     for (const res of failed) {
-      const retry = await runImageTask(res);
+      const retry = await runImageTask(res, 1.6); // 1.6× budget (gpt ~144s, forge ~96s) — heavy lane renders just need more time
       if (retry.imageUrl) { res.imageUrl = retry.imageUrl; res.prompt = retry.prompt; res.error = null; }
     }
     const stillFailed = results.filter((res) => !res.imageUrl).length;
@@ -2581,6 +2584,8 @@ async function resumePipeline(runId: number, fromStage: number): Promise<void> {
  */
 export async function regenerateImagesForRun(runId: number, force = false): Promise<number> {
   console.log(`[Pipeline] Regenerating images for run #${runId}${force ? " (FORCE — all winners)" : ""}...`);
+  // Clear any stale errorLog from a prior (pre-fix) failed regen so it can't linger as a false "RUN FAILED".
+  await clearRunErrorAndComplete(runId);
 
   // Check if scoring needs to be re-run (all concepts have NULL trendScore)
   const concepts = await getConceptsByRunId(runId);
