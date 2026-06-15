@@ -54,7 +54,7 @@ export default function Listings() {
   // winnersOnly:false — Niche-Hunter concepts are all created isWinner:false (db.ts createConceptFromPattern),
   // so winnersOnly:true filtered the listings dropdown to EMPTY. Any concept with a design image is listable.
   const conceptsQuery = trpc.library.list.useQuery(
-    { limit: 100, offset: 0, winnersOnly: false, workspaceId },
+    { limit: 200, offset: 0, workspaceId, sortBy: "hasImages", sortDir: "desc" },
     { enabled: !!workspaceId && showCreateForm }
   );
 
@@ -127,7 +127,7 @@ export default function Listings() {
   const conceptsWithImages = useMemo(() => {
     if (!conceptsQuery.data?.concepts) return [];
     return conceptsQuery.data.concepts.filter(
-      (c) => c.imageUrlA || c.imageUrlB || c.imageUrlC
+      (c) => c.imageUrlA || c.imageUrlB || c.imageUrlC || c.productionUrlA || c.productionUrlB || c.productionUrlC
     );
   }, [conceptsQuery.data]);
 
