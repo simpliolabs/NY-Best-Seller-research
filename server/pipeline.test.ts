@@ -41,10 +41,10 @@ describe("withTimeout utility", () => {
 });
 
 describe("pipeline configuration constants", () => {
-  it("winner count defaults to 5 but is driven by pipelineConfig.winnersToGenerate; ONE hero image each (scans-to-1)", async () => {
+  it("winner count defaults to 10 but is driven by pipelineConfig.winnersToGenerate; ONE hero image each (scans-to-1)", async () => {
     const fs = await import("fs");
     const source = fs.readFileSync("server/pipeline.ts", "utf8");
-    expect(source).toContain("const DEFAULT_WINNERS_TO_GENERATE = 5;");
+    expect(source).toContain("const DEFAULT_WINNERS_TO_GENERATE = 10;");
     // The count is resolved per-run from the workspace setting (1–20), not hardcoded
     expect(source).toContain("async function resolveWinnerCount(runId: number)");
     expect(source).toContain("ws?.pipelineConfig?.winnersToGenerate");

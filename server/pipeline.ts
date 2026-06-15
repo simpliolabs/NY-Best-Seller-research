@@ -56,7 +56,7 @@ const NYT_LISTS = [
 ];
 const TOP_N_BOOKS = 6;
 const HIGH_SCORE_THRESHOLD = 210; // 70% of 300
-const DEFAULT_WINNERS_TO_GENERATE = 5; // fallback winner count when a workspace hasn't set pipelineConfig.winnersToGenerate (1–20, surfaced in Settings)
+const DEFAULT_WINNERS_TO_GENERATE = 10; // default designs/scan (PO 2026-06-15 "MORE"); overridable 1–20 via pipelineConfig.winnersToGenerate in Settings
 const IMAGES_PER_WINNER = 1; // scans-to-1 (PO 2026-06-11): ONE hero image per winner (was 3)
 const IMAGE_GEN_TIMEOUT_MS = 60_000; // 60s timeout per image generation call
 // Wall-clock budget scales with the winner count: more winners = more council + gpt-image-2 render time.
