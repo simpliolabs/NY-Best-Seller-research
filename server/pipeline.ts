@@ -1037,21 +1037,38 @@ You are given a NICHE KNOWLEDGE BASE. Its ON-BRAND MASCOTS are the ONLY recogniz
 STEP 1 — VET (answer honestly):
 1. canWork — can this become a genuinely sellable design for this niche?
 2. hero — WHICH single named MASCOT from the knowledge base is the hero (doing a real niche action/pose), OR "TYPE-ONLY" when the typography itself is the strong idea and a character would only clutter it. NEVER answer with a generic racket / ball / court / anonymous player.
-3. needsText — does it need the headline/pun to read as this niche, or does the mascot carry it alone?
-4. viral — would a fan stop scrolling and BUY this? "high" | "med" | "low".
+3. style — WHICH single art style best fits this concept, chosen from the workspace's approved styles list (given below). If the concept already arrived with a suggested style and it genuinely fits, keep it; if a different listed style is clearly better, pick that instead. Use the STYLE PLAYBOOK below to know what each style looks like.
+4. needsText — does it need the headline/pun to read as this niche, or does the mascot carry it alone?
+5. viral — would a fan stop scrolling and BUY this? "high" | "med" | "low".
 
 STEP 2 — Only if canWork is true AND viral is "high" or "med", write "prompt":
 - MASCOT hero → feature that SPECIFIC mascot performing a real niche action with ACCURATE niche equipment (pickleball: a SOLID RECTANGULAR paddle, a PERFORATED HOLLOW ball, the kitchen line). The mascot is the focal graphic; the headline sits with it. Add the pun/headline text only if needsText.
 - TYPE-ONLY → a bold, characterful typographic treatment of the headline; no forced graphic.
-
-═══ ART STYLE — NON-NEGOTIABLE. Write this style, in concrete detail, into EVERY prompt: ═══
-Render as a VINTAGE RETRO DISTRESSED SCREEN-PRINT TEE in the lineage of classic Bigfoot / national-park / outdoor-adventure shirts (e.g. Archie McPhee "Bigfoot", "Don't Be An Assquatch"): HAND-DRAWN woodcut / engraving line work with fine cross-hatching and stippling; a HEAVY worn, cracked, faded HALFTONE distress texture (real screen-print grit, ink-pull imperfections); typically composed as a CIRCULAR BADGE / EMBLEM with a sunburst and a mountain or pine-tree backdrop. STRICT limited RETRO palette — 3-4 inks max from: cream, burnt orange, mustard yellow, forest/avocado green, teal, dusty blue, charcoal — printed on the garment color. Distressed retro-athletic / groovy display lettering for the text.
-The MASCOT/creature MUST be a DETAILED, gritty, HAND-ILLUSTRATED vintage character — drawn the way the Bigfoot is drawn on a worn 1970s park tee (textured fur/skin, engraved linework, weathered). It is NOT a clean cute cartoon, NOT Pixar/Disney, NOT kawaii, NOT a children's-book illustration, NOT a flat modern mascot logo, NOT 3D, NOT a sticker. If a knowledge-base note calls a mascot "cute", "comical", "happy" or "zen" — IGNORE that adjective and render the animal as a characterful vintage engraving.
-Isolated design, headline spelled VERBATIM, premium worn screen-print quality — it must look like a REAL collectible vintage tee a buyer would believe is a 1970s original.
-═══════════════════════════════════════════════════════════════════
+- Render the design in the EXACT chosen style — match its layout, line-work, palette and typography from the playbook. Do NOT mix styles (a Minimalist Line-Art concept must not have heavy halftone; a Bold Typographic must not be a circular badge).
+- Isolated design, headline spelled VERBATIM. ACCURATE niche equipment.
+- ABSOLUTE QUALITY BAR — every style: premium, sellable-on-Etsy commercial quality; NEVER cartoonish, kawaii, chibi, Pixar/Disney, childish, clip-art, sticker, 3D-render, or flat clean modern mascot-logo. If a knowledge-base note calls a mascot "cute"/"comical"/"happy"/"zen", render the animal with characterful craftsmanship appropriate to the chosen style — never as a cartoon.
 - If it fails the gate (canWork false or viral low), set "prompt" to "".
 
-Return STRICT JSON: {"canWork": boolean, "hero": "mascot name or TYPE-ONLY", "needsText": boolean, "viral": "high|med|low", "prompt": "string"}.`;
+═══ STYLE PLAYBOOK — what each style looks like (use the one you chose; do not mix) ═══
+- Vintage/Distressed: heavy worn cracked screen-print, fine halftone grit, ink-pull imperfections, faded retro palette (cream/burnt-orange/mustard/forest/charcoal). 1970s park-tee feel.
+- Vintage Engraving: hand-drawn woodcut/engraving line-work, cross-hatching + stippling, 1-2 inks, antique apothecary/scientific-plate look. Mascots rendered like a vintage Bigfoot tee or naturalist illustration.
+- Vintage Hand-Drawn Illustration: organic ink line art, slight imperfections, hand-drawn feel, muted vintage palette, illustrative not graphic.
+- Retro 70s-80s: groovy bubble/funk type, sunbursts, rainbow gradients within a limited 70s palette, warm browns/oranges/yellows, optimistic and graphic.
+- Retro Groovy: 70s psychedelic — wavy custom lettering, hippie palette, swirling forms, looser and more decorative than Retro 70s-80s.
+- Vintage 90's: 90s sports/streetwear — bold geometric blocks, color-block panels, varsity-meets-graffiti energy, primary palette + black.
+- Western Americana: rope/wood-cut decorative borders, hand-lettered Old-West/saloon serifs, dusty sepia + denim palette, cowboy/desert motifs.
+- Cabincore / Cottagecore: cozy folk-art, pine/forest/cabin/mushroom motifs, warm muted earth tones; Cabincore = rugged outdoors, Cottagecore = soft pastoral florals/herbs.
+- Halftone Screen-Print: clean punk/indie poster — bold flat shapes overlaid with prominent halftone dot patterns, high-contrast 2-color separations.
+- Bold Typographic: typography IS the design — chunky display lettering, modern type-forward, no/minimal illustration; high contrast, generous negative space (NOT a badge).
+- Minimalist Line-Art: a single confident thin black line drawing, clean white background, minimal type, gallery-poster minimalism (NOT distressed, NOT badged).
+- Photorealistic: photographic rendering — realistic textures, lifelike lighting; restrained type as a caption.
+- Dark Academia: oxblood/forest-green/cream palette, classical serifs and Latin-feel borders, books/owls/celestial motifs, scholarly elegance.
+- Collegiate/Varsity: classic varsity letterman — block/serif college type, arched headline + circular seal, school colors, athletic crest.
+- Streetwear/Y2K: brand-graphic energy — bold sans, glossy chrome/Y2K palette, modern hype-drop look.
+- Watercolor: soft hand-painted washes with bleeding edges, organic shapes, gentle muted palette, illustrative not graphic.
+- Militarycore: surplus / army-stencil — olive/khaki/black palette, stencil block lettering, weathered tag/patch look.
+
+Return STRICT JSON: {"canWork": boolean, "hero": "mascot name or TYPE-ONLY", "style": "EXACTLY one style name from the approved menu", "needsText": boolean, "viral": "high|med|low", "prompt": "string"}.`;
 
 /** An edit-mode rendering anchor drawn from the workspace's Niche Hunter library. */
 export type NicheAnchor = { image: string; status: string; score: number; text: string };
@@ -1159,6 +1176,7 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
   let nicheStyleDNA = "";
   let avoidDirectives = "";
   let nicheKB = ""; // the design council's character palette (mascots/gags/catchphrases)
+  let allowedStylesList: string[] = []; // the design council's style menu (the workspace's 18 approved styles)
   let anchorPool: NicheAnchor[] = [];
   try {
     const runRow = await getRunById(runId);
@@ -1226,7 +1244,12 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
       const transfer = (cm.transferableVisualConcepts ?? []).map((t: any) => t?.targetAdaptation).filter(Boolean);
       if (transfer.length) kb.push(`Transferable concepts: ${transfer.slice(0, 5).join("; ")}`);
       nicheKB = kb.join("\n");
-      console.log(`[Pipeline/Stage6] Council KB: ${mascots.length} mascots, ${gags.length} gags, ${phrases.length} catchphrases`);
+      // (5) STYLE MENU for the design council (PO 2026-06-14) — the workspace's 18 approved styles.
+      // The council PICKS one per concept; we no longer hard-code a single mandatory style.
+      const wsStyles = wsRow?.styleProfile?.allowedStyles;
+      const { DEFAULT_ALLOWED_STYLES } = await import("../shared/styleProfile");
+      allowedStylesList = (Array.isArray(wsStyles) && wsStyles.length ? wsStyles : DEFAULT_ALLOWED_STYLES).filter((s): s is string => typeof s === "string" && s.trim().length > 0);
+      console.log(`[Pipeline/Stage6] Council KB: ${mascots.length} mascots, ${gags.length} gags, ${phrases.length} catchphrases | styles: ${allowedStylesList.length}`);
     }
   } catch (e) {
     console.warn(`[Pipeline] niche library/KB sourcing unavailable (non-fatal):`, e);
@@ -1275,12 +1298,16 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
     const councilMsg = `NICHE KNOWLEDGE BASE (your only character palette):
 ${nicheKB || "(no mascots configured — fall back to a strong type-only design)"}
 
-PROVEN NICHE STYLE (render in exactly this): ${styleLine}
+APPROVED STYLE MENU — pick ONE (using the STYLE PLAYBOOK):
+${allowedStylesList.length ? allowedStylesList.join(" | ") : "Vintage/Distressed | Bold Typographic | Minimalist Line-Art"}
+
+NICHE STYLE CONTEXT (proven look from this niche's bestsellers — informs your style pick): ${styleLine}
 ${avoidDirectives ? `AVOID (learned from the buyer's past rejections): ${avoidDirectives}\n` : ""}THE NEW CONCEPT:
 Name: ${concept.conceptName}
 Headline (render VERBATIM): ${concept.headline ?? "none"}
 Subtext (verbatim): ${concept.subtext ?? "none"}
-Fan phrase it's anchored to: ${concept.sourcePhrase ?? "not specified"}`;
+Fan phrase it's anchored to: ${concept.sourcePhrase ?? "not specified"}
+Stage-4 suggested style for this concept: "${concept.style ?? "(none)"}" — keep it if it fits, otherwise pick a better-matching style from the menu above.`;
 
     try {
       const councilResult = await withTimeout(
@@ -1297,8 +1324,8 @@ Fan phrase it's anchored to: ${concept.sourcePhrase ?? "not specified"}`;
 
       const content = typeof councilResult.choices[0]?.message?.content === "string"
         ? councilResult.choices[0].message.content : "";
-      const verdict = JSON.parse(content) as { canWork?: boolean; hero?: string; viral?: string; prompt?: string };
-      console.log(`[Pipeline/Council] "${concept.conceptName}" → hero=${verdict.hero ?? "?"} viral=${verdict.viral ?? "?"} canWork=${verdict.canWork}`);
+      const verdict = JSON.parse(content) as { canWork?: boolean; hero?: string; style?: string; viral?: string; prompt?: string };
+      console.log(`[Pipeline/Council] "${concept.conceptName}" → hero=${verdict.hero ?? "?"} style=${verdict.style ?? "?"} viral=${verdict.viral ?? "?"} canWork=${verdict.canWork}`);
       // Gate: only a passing concept gets a prompt. (A failed gate yields an empty prompt → this
       // winner is skipped downstream, same as a failed prompt-gen.)
       const prompt = (verdict.canWork && verdict.viral !== "low" && verdict.prompt) ? verdict.prompt : "";
