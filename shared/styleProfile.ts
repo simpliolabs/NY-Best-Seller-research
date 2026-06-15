@@ -36,7 +36,6 @@ export const DEFAULT_ALLOWED_STYLES: string[] = [
   "Bold Typographic",
   "Minimalist Line-Art",
   "Vintage Engraving",
-  "Photorealistic",
   "Dark Academia",
   "Collegiate/Varsity",
   "Cottagecore",

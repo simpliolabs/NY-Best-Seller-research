@@ -1088,7 +1088,6 @@ STEP 2 — Only if canWork is true AND viral is "high" or "med", write "prompt":
 - Halftone Screen-Print: clean punk/indie poster — bold flat shapes overlaid with prominent halftone dot patterns, high-contrast 2-color separations.
 - Bold Typographic: typography IS the design — chunky display lettering, modern type-forward, no/minimal illustration; high contrast, generous negative space (NOT a badge).
 - Minimalist Line-Art: a single confident thin black line drawing, clean white background, minimal type, gallery-poster minimalism (NOT distressed, NOT badged).
-- Photorealistic: photographic rendering — realistic textures, lifelike lighting; restrained type as a caption.
 - Dark Academia: oxblood/forest-green/cream palette, classical serifs and Latin-feel borders, books/owls/celestial motifs, scholarly elegance.
 - Collegiate/Varsity: classic varsity letterman — block/serif college type, arched headline + circular seal, school colors, athletic crest.
 - Streetwear/Y2K: brand-graphic energy — bold sans, glossy chrome/Y2K palette, modern hype-drop look.
@@ -1303,7 +1302,11 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
       // The council PICKS one per concept; we no longer hard-code a single mandatory style.
       const wsStyles = wsRow?.styleProfile?.allowedStyles;
       const { DEFAULT_ALLOWED_STYLES } = await import("../shared/styleProfile");
-      allowedStylesList = (Array.isArray(wsStyles) && wsStyles.length ? wsStyles : DEFAULT_ALLOWED_STYLES).filter((s): s is string => typeof s === "string" && s.trim().length > 0);
+      // Non-printable styles never make sellable t-shirt graphics (PO 2026-06-15: a Photorealistic lane
+      // rendered a literal octopus PHOTO). Exclude them even if a workspace's saved allowlist still has one.
+      const NON_PRINTABLE_STYLES = new Set(["Photorealistic"]);
+      allowedStylesList = (Array.isArray(wsStyles) && wsStyles.length ? wsStyles : DEFAULT_ALLOWED_STYLES)
+        .filter((s): s is string => typeof s === "string" && s.trim().length > 0 && !NON_PRINTABLE_STYLES.has(s));
       console.log(`[Pipeline/Stage6] Council KB: ${mascots.length} mascots, ${gags.length} gags, ${phrases.length} catchphrases | styles: ${allowedStylesList.length} | visionRefs: ${approvedVisionRefs.length}`);
     }
   } catch (e) {
