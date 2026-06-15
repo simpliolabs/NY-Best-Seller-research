@@ -1037,7 +1037,7 @@ You are given a NICHE KNOWLEDGE BASE. Its ON-BRAND MASCOTS are the ONLY recogniz
 STEP 1 — VET (answer honestly):
 1. canWork — can this become a genuinely sellable design for this niche?
 2. hero — WHICH single named MASCOT from the knowledge base is the hero (doing a real niche action/pose), OR "TYPE-ONLY" when the typography itself is the strong idea and a character would only clutter it. NEVER answer with a generic racket / ball / court / anonymous player.
-3. style — WHICH single art style best fits this concept, chosen from the workspace's approved styles list (given below). If the concept already arrived with a suggested style and it genuinely fits, keep it; if a different listed style is clearly better, pick that instead. Use the STYLE PLAYBOOK below to know what each style looks like.
+3. style — WHICH single art style name from the workspace's approved styles list best matches the APPROVED REFERENCES shown to you. The buyer's approved-reference IMAGES are the ground truth — pick the style name from the menu that most faithfully describes what you see across them. Use the STYLE PLAYBOOK only to map images → name; do not pick a style the references don't visibly support. Only override the reference style when the SPECIFIC concept genuinely demands it (e.g. a pure type pun → Bold Typographic).
 4. needsText — does it need the headline/pun to read as this niche, or does the mascot carry it alone?
 5. viral — would a fan stop scrolling and BUY this? "high" | "med" | "low".
 
@@ -1173,10 +1173,10 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
   // designs/real bestsellers, (2) learn the STYLE from approved patterns, (3) AVOID what was
   // dismissed (rejection tags → directives). Re-pulling Etsy (bestsellerPool/coverUrl) is only the
   // cold-start fallback when the library has no usable anchor.
-  let nicheStyleDNA = "";
   let avoidDirectives = "";
   let nicheKB = ""; // the design council's character palette (mascots/gags/catchphrases)
   let allowedStylesList: string[] = []; // the design council's style menu (the workspace's 18 approved styles)
+  let approvedVisionRefs: Array<{ url: string; title: string }> = []; // VISION-grounded council (PO 2026-06-14): actual approved-design images for the council to SEE
   let anchorPool: NicheAnchor[] = [];
   try {
     const runRow = await getRunById(runId);
@@ -1186,17 +1186,17 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
       const live = all.filter((p) => p.status !== "dismissed");
       const dismissed = all.filter((p) => p.status === "dismissed");
 
-      // (1) STYLE — prefer the patterns YOU approved
-      const stylePool = (approved.length ? approved : live).filter((p) => p.sourceStyleJson);
-      const bits = new Set<string>();
-      for (const p of stylePool.slice(0, 4)) {
-        const s = p.sourceStyleJson as Record<string, unknown>;
-        for (const k of ["technique", "lineWeight", "shadingMethod", "textureDetail", "textStyle", "designEra"]) {
-          const v = s?.[k];
-          if (typeof v === "string" && v && v.toUpperCase() !== "NONE") bits.add(v);
-        }
-      }
-      if (bits.size) nicheStyleDNA = Array.from(bits).join(", ");
+      // (1) VISION REFERENCES — the council SEES the buyer's hand-approved Etsy winners directly,
+      // instead of reasoning from text adjectives ("nicheStyleDNA"). PO 2026-06-14 architecture fix:
+      // closes the AI/rules asymmetry that caused 5 rounds of council prompt patching. Up to 6 refs,
+      // preferring the cleaner approved productionDesignUrl over the raw sourceImageUrl.
+      const approvedWithImg = (approved.length ? approved : live).filter((p) =>
+        (p.productionDesignUrl && /^https?:\/\//.test(p.productionDesignUrl)) ||
+        (p.sourceImageUrl && /^https?:\/\//.test(p.sourceImageUrl)));
+      approvedVisionRefs = approvedWithImg.slice(0, 6).map((p) => ({
+        url: (p.productionDesignUrl && /^https?:\/\//.test(p.productionDesignUrl) ? p.productionDesignUrl : p.sourceImageUrl) as string,
+        title: p.patternName ?? "Untitled",
+      }));
 
       // (2) AVOID — learn from what you dismissed (top rejection tags → positive directives)
       const TAG_DIRECTIVE: Record<string, string> = {
@@ -1249,12 +1249,11 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
       const wsStyles = wsRow?.styleProfile?.allowedStyles;
       const { DEFAULT_ALLOWED_STYLES } = await import("../shared/styleProfile");
       allowedStylesList = (Array.isArray(wsStyles) && wsStyles.length ? wsStyles : DEFAULT_ALLOWED_STYLES).filter((s): s is string => typeof s === "string" && s.trim().length > 0);
-      console.log(`[Pipeline/Stage6] Council KB: ${mascots.length} mascots, ${gags.length} gags, ${phrases.length} catchphrases | styles: ${allowedStylesList.length}`);
+      console.log(`[Pipeline/Stage6] Council KB: ${mascots.length} mascots, ${gags.length} gags, ${phrases.length} catchphrases | styles: ${allowedStylesList.length} | visionRefs: ${approvedVisionRefs.length}`);
     }
   } catch (e) {
     console.warn(`[Pipeline] niche library/KB sourcing unavailable (non-fatal):`, e);
   }
-  if (nicheStyleDNA) console.log(`[Pipeline/Stage6] Niche style DNA: ${nicheStyleDNA.slice(0, 200)}`);
 
   // The concept-generation stage sometimes labels styles "Cartoonish, slightly exaggerated" — the
   // PO explicitly rejects cartoonish output, so strip those words before they reach the image model.
@@ -1278,47 +1277,49 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
     // Style Intelligence: read computed directives from book row (set by Stage 5.5)
     const styleDirectives = book?.styleDirectives as import("../shared/styleProfile").StyleProfile | null | undefined;
 
-    // ONE focused prompt (PO 2026-06-12: the 400-600-word 10-layer essays produced cluttered,
-    // "terrible" designs — wood grain + eyes + lighting essays + micro-details all fighting).
-    // Same concise formula the PO approved on concepts.regenerateImage: headline verbatim, ONE
-    // focal graphic, the niche style line, a limited palette — nothing else.
-    const baseStyle = styleDirectives
-      ? `${styleDirectives.primaryAesthetic}. Typography: ${styleDirectives.typographyStyle}. Colors: ${styleDirectives.colorDirective} (max ${styleDirectives.maxColors}). Avoid: ${styleDirectives.avoidDirectives.join(", ") || "none"}.`
-      : `${concept.style}. ${wb?.illustratorStyle ?? book?.typographyStyle ?? ""} ${wb?.emotionalTone ?? book?.mood ?? ""}`.trim();
-    // Real-bestseller DNA FIRST (the model weights early text heaviest), then the sanitized concept style.
-    const styleLine = [
-      nicheStyleDNA && `Proven bestseller style from this niche — match it: ${nicheStyleDNA}`,
-      stripCartoon(baseStyle),
-    ].filter(Boolean).join(" — ");
+    // Sanitize the concept's own style label (Stage-4 sometimes writes "Cartoonish, slightly
+    // exaggerated"); the council sees this as a suggestion, not a binding directive.
+    const conceptStyleHint = stripCartoon(
+      styleDirectives
+        ? `${styleDirectives.primaryAesthetic} (typography ${styleDirectives.typographyStyle})`
+        : `${concept.style}. ${wb?.illustratorStyle ?? book?.typographyStyle ?? ""}`.trim()
+    );
 
-    // The DESIGN COUNCIL (PO 2026-06-13): vet this NEW idea with the gate questions, then decide the
-    // hero — a SPECIFIC on-brand mascot (not a generic racket/player) or type-only — and write the
-    // prompt. Rendered text-to-image so the chosen mascot actually appears (editing the library's
-    // racket/player bestsellers would bleed a racket back in, defeating the character).
-    const councilMsg = `NICHE KNOWLEDGE BASE (your only character palette):
+    // VISION-GROUNDED DESIGN COUNCIL (PO 2026-06-14): the council SEES the buyer's hand-approved
+    // Etsy winners as actual images and matches their visual taste, instead of reasoning from text
+    // adjectives. Architecture fix that ends the council/style patch chain — the right asymmetry:
+    // the LLM judges from real images, the code just feeds it.
+    const visionRefIntro = approvedVisionRefs.length
+      ? `Below are ${approvedVisionRefs.length} t-shirt designs the BUYER has explicitly APPROVED for this niche. Study them: their texture, composition (badge vs centered vs stacked text vs scene), line work, palette, typography, mood. THIS is the visual taste your output must match. Your style pick AND your rendered prompt must FAITHFULLY embody what you see in these references. Do NOT introduce a look they don't share.`
+      : `No approved-design references for this niche yet — fall back to the STYLE PLAYBOOK and the Stage-4 suggested style.`;
+
+    const userContent: import("./_core/llm").MessageContent[] = [
+      { type: "text", text: `${visionRefIntro}\n\nAPPROVED REFERENCES (in order):${approvedVisionRefs.map((r, i) => `\n  ${i + 1}. "${r.title}"`).join("")}` },
+      ...approvedVisionRefs.map((r): import("./_core/llm").MessageContent => ({ type: "image_url" as const, image_url: { url: r.url, detail: "low" as const } })),
+      { type: "text", text: `NICHE KNOWLEDGE BASE (your only character palette for mascot picks):
 ${nicheKB || "(no mascots configured — fall back to a strong type-only design)"}
 
-APPROVED STYLE MENU — pick ONE (using the STYLE PLAYBOOK):
+APPROVED STYLE MENU — pick EXACTLY ONE name (using the STYLE PLAYBOOK + the references above):
 ${allowedStylesList.length ? allowedStylesList.join(" | ") : "Vintage/Distressed | Bold Typographic | Minimalist Line-Art"}
 
-NICHE STYLE CONTEXT (proven look from this niche's bestsellers — informs your style pick): ${styleLine}
-${avoidDirectives ? `AVOID (learned from the buyer's past rejections): ${avoidDirectives}\n` : ""}THE NEW CONCEPT:
+${avoidDirectives ? `AVOID (learned from the buyer's past rejections): ${avoidDirectives}\n\n` : ""}THE NEW CONCEPT:
 Name: ${concept.conceptName}
 Headline (render VERBATIM): ${concept.headline ?? "none"}
 Subtext (verbatim): ${concept.subtext ?? "none"}
 Fan phrase it's anchored to: ${concept.sourcePhrase ?? "not specified"}
-Stage-4 suggested style for this concept: "${concept.style ?? "(none)"}" — keep it if it fits, otherwise pick a better-matching style from the menu above.`;
+Stage-4 suggested style hint (a guess only — override if the references suggest better): ${conceptStyleHint || "(none)"}` },
+    ];
 
     try {
       const councilResult = await withTimeout(
         invokeLLM({
           messages: [
             { role: "system", content: NICHE_COUNCIL_SYSTEM },
-            { role: "user", content: councilMsg },
+            { role: "user", content: userContent },
           ],
           response_format: { type: "json_object" },
         }),
-        30_000,
+        45_000,
         `Design council for winner concept ${concept.id}`
       );
 
