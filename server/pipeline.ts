@@ -56,10 +56,33 @@ const NYT_LISTS = [
 ];
 const TOP_N_BOOKS = 6;
 const HIGH_SCORE_THRESHOLD = 210; // 70% of 300
-const MAX_WINNER_CONCEPTS = 5; // Top 5 concepts GLOBALLY across all books get images
+const DEFAULT_WINNERS_TO_GENERATE = 5; // fallback winner count when a workspace hasn't set pipelineConfig.winnersToGenerate (1–20, surfaced in Settings)
 const IMAGES_PER_WINNER = 1; // scans-to-1 (PO 2026-06-11): ONE hero image per winner (was 3)
 const IMAGE_GEN_TIMEOUT_MS = 60_000; // 60s timeout per image generation call
-const OVERALL_PIPELINE_TIMEOUT_MS = 15 * 60 * 1000; // 15 min — premium gpt-image-2 gen is slower than Forge (run #720001 hit the old 7-min cap mid-stage-6)
+// Wall-clock budget scales with the winner count: more winners = more council + gpt-image-2 render time.
+// Floor at the proven 15-min/5-winner budget (run #720001 hit the old 7-min cap mid-stage-6); ceiling at
+// 25 min (Cloud Run background-task reaping risk beyond that).
+const MIN_PIPELINE_TIMEOUT_MS = 15 * 60 * 1000;
+const MAX_PIPELINE_TIMEOUT_MS = 25 * 60 * 1000;
+function pipelineTimeoutForWinners(winnerCount: number): number {
+  return Math.min(MAX_PIPELINE_TIMEOUT_MS, Math.max(MIN_PIPELINE_TIMEOUT_MS, 9 * 60 * 1000 + winnerCount * 50 * 1000));
+}
+
+/**
+ * How many top concepts get rendered this run. Honors the workspace's pipelineConfig.winnersToGenerate
+ * setting (1–20, surfaced in Settings); falls back to DEFAULT_WINNERS_TO_GENERATE for legacy / no-workspace
+ * runs or when the field is unset.
+ */
+async function resolveWinnerCount(runId: number): Promise<number> {
+  const run = await getRunById(runId);
+  if (!run?.workspaceId) return DEFAULT_WINNERS_TO_GENERATE;
+  const { getWorkspaceById } = await import("./workspaceDb");
+  const ws = await getWorkspaceById(run.workspaceId);
+  const n = ws?.pipelineConfig?.winnersToGenerate;
+  return typeof n === "number" && Number.isFinite(n)
+    ? Math.min(20, Math.max(1, Math.floor(n)))
+    : DEFAULT_WINNERS_TO_GENERATE;
+}
 
 // ─── Utility: Timeout wrapper ────────────────────────────────────────────
 
@@ -884,16 +907,18 @@ async function stageScoreAndValidate(
     throw err;
   }
 
-  // Etsy validation — TOP-5 WINNERS only (PO 2026-06-14). Previously hit the Etsy API for all 20
-  // concepts even though only the 5 winners show market data on their report card — 75% waste, and
-  // 20 throttled calls were a major source of stage-5 latency / Etsy quota burn.
+  // Etsy validation — TOP WINNERS only (PO 2026-06-14). Previously hit the Etsy API for all ~30
+  // concepts even though only the winners show market data on their report card — large waste, and
+  // dozens of throttled calls were a major source of stage-5 latency / Etsy quota burn. The count
+  // tracks pipelineConfig.winnersToGenerate so validation always matches the rendered winners.
   if (etsyApiKey) {
+    const winnerCount = await resolveWinnerCount(runId);
     const fresh = await getConceptsByRunId(runId); // pick up the trendScore just written above
-    const top5 = [...fresh]
+    const topWinners = [...fresh]
       .filter((c) => c.trendScore !== null && c.trendScore > 0)
       .sort((a, b) => (b.trendScore ?? 0) - (a.trendScore ?? 0))
-      .slice(0, MAX_WINNER_CONCEPTS);
-    await runEtsyValidation(top5, etsyApiKey);
+      .slice(0, winnerCount);
+    await runEtsyValidation(topWinners, etsyApiKey);
   } else {
     console.log("[Pipeline] Etsy API key not configured — skipping market validation");
   }
@@ -1098,6 +1123,8 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
   console.log(`[Pipeline/Stage6] START stageDesignExpansion for run ${runId}`);
   const concepts = await getConceptsByRunId(runId);
   console.log(`[Pipeline/Stage6] Fetched ${concepts.length} concepts from DB`);
+  const winnerCount = await resolveWinnerCount(runId);
+  console.log(`[Pipeline/Stage6] Rendering top ${winnerCount} winner(s) (pipelineConfig.winnersToGenerate)`);
 
   // ── Step 1: Rank ALL concepts globally by trendScore (descending) ────
   const ranked = [...concepts]
@@ -1107,18 +1134,18 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
 
   // Assign globalRank to every scored concept
   for (let i = 0; i < ranked.length; i++) {
-    const isWinner = i < MAX_WINNER_CONCEPTS;
+    const isWinner = i < winnerCount;
     await updateConceptImages(ranked[i].id, {
       globalRank: i + 1,
       isWinner,
     });
   }
 
-  // ── Step 2: Select top 5 winners for image generation ────────────────
+  // ── Step 2: Select the top winners for image generation ──────────────
   // Default: only winners that don't already have images (no accidental replacement).
   // force=true (PO 2026-06-12, "Regenerate All Images" button): regenerate every winner — safe now
   // because the prior design is snapshotted into generation history before the overwrite below.
-  const allWinners = ranked.slice(0, MAX_WINNER_CONCEPTS);
+  const allWinners = ranked.slice(0, winnerCount);
   const winners = force ? allWinners : allWinners.filter((c) => !c.imageUrlA);
 
   if (allWinners.length === 0) {
@@ -2065,11 +2092,12 @@ export async function runPipeline(opts: {
     }
   })();
 
-  // Wrap with overall timeout
+  // Wrap with overall timeout — scaled to the winner count (more winners = more render time).
+  const overallTimeoutMs = pipelineTimeoutForWinners(await resolveWinnerCount(runId));
   try {
     return await withTimeout(
       pipelinePromise,
-      OVERALL_PIPELINE_TIMEOUT_MS,
+      overallTimeoutMs,
       "Overall pipeline execution"
     );
   } catch (err: any) {
@@ -2077,10 +2105,10 @@ export async function runPipeline(opts: {
     const errorMsg = err?.message ?? String(err);
     if (errorMsg.includes("Timeout")) {
       try {
-        await failRun(runId, `Pipeline timed out after ${OVERALL_PIPELINE_TIMEOUT_MS / 1000}s: ${errorMsg}`);
+        await failRun(runId, `Pipeline timed out after ${overallTimeoutMs / 1000}s: ${errorMsg}`);
         await notifyOwner({
           title: `Design Bot Run #${runId} Timed Out`,
-          content: `Pipeline run #${runId} exceeded the ${OVERALL_PIPELINE_TIMEOUT_MS / 1000}s time limit and was automatically stopped.\n\nError: ${errorMsg}`,
+          content: `Pipeline run #${runId} exceeded the ${overallTimeoutMs / 1000}s time limit and was automatically stopped.\n\nError: ${errorMsg}`,
         });
       } catch {
         // Best effort

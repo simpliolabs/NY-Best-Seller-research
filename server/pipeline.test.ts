@@ -41,13 +41,16 @@ describe("withTimeout utility", () => {
 });
 
 describe("pipeline configuration constants", () => {
-  it("MAX_WINNER_CONCEPTS = 5 global winners, ONE hero image each (scans-to-1)", async () => {
+  it("winner count defaults to 5 but is driven by pipelineConfig.winnersToGenerate; ONE hero image each (scans-to-1)", async () => {
     const fs = await import("fs");
     const source = fs.readFileSync("server/pipeline.ts", "utf8");
-    expect(source).toContain("const MAX_WINNER_CONCEPTS = 5;");
+    expect(source).toContain("const DEFAULT_WINNERS_TO_GENERATE = 5;");
+    // The count is resolved per-run from the workspace setting (1–20), not hardcoded
+    expect(source).toContain("async function resolveWinnerCount(runId: number)");
+    expect(source).toContain("ws?.pipelineConfig?.winnersToGenerate");
     expect(source).toContain("const IMAGES_PER_WINNER = 1;");
-    // Verify global ranking logic exists
-    expect(source).toContain("const isWinner = i < MAX_WINNER_CONCEPTS;");
+    // Verify global ranking logic exists, gated on the resolved winner count
+    expect(source).toContain("const isWinner = i < winnerCount;");
     expect(source).toContain("globalRank: i + 1");
   });
 
@@ -63,10 +66,12 @@ describe("pipeline configuration constants", () => {
     expect(source).toContain("const TOP_N_BOOKS = 6;");
   });
 
-  it("OVERALL_PIPELINE_TIMEOUT_MS is 15 minutes", async () => {
+  it("pipeline timeout floors at 15 minutes and scales with the winner count", async () => {
     const fs = await import("fs");
     const source = fs.readFileSync("server/pipeline.ts", "utf8");
-    expect(source).toContain("const OVERALL_PIPELINE_TIMEOUT_MS = 15 * 60 * 1000;");
+    expect(source).toContain("const MIN_PIPELINE_TIMEOUT_MS = 15 * 60 * 1000;");
+    expect(source).toContain("const MAX_PIPELINE_TIMEOUT_MS = 25 * 60 * 1000;");
+    expect(source).toContain("function pipelineTimeoutForWinners(winnerCount: number)");
   });
 
   it("image generation uses parallel Promise.allSettled", async () => {
