@@ -134,14 +134,14 @@ export default function Dashboard() {
     marketValidations.map((mv: any) => [mv.conceptId, mv])
   );
 
-  // Global winners = concepts with isWinner flag, sorted by globalRank
+  // Global winners = concepts with isWinner flag, sorted by globalRank (exclude dismissed)
   const winners = [...concepts]
-    .filter((c: any) => c.isWinner)
+    .filter((c: any) => c.isWinner && !c.dismissedAt)
     .sort((a: any, b: any) => (a.globalRank ?? 999) - (b.globalRank ?? 999));
 
-  // Non-winner concepts sorted by score
+  // Non-winner concepts sorted by score (exclude dismissed)
   const otherConcepts = [...concepts]
-    .filter((c: any) => !c.isWinner && (c.trendScore ?? 0) > 0)
+    .filter((c: any) => !c.isWinner && !c.dismissedAt && (c.trendScore ?? 0) > 0)
     .sort((a: any, b: any) => (b.trendScore ?? 0) - (a.trendScore ?? 0));
 
   // Count images

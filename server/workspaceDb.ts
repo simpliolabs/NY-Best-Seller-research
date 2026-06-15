@@ -2,7 +2,7 @@
  * Workspace DB helpers — Phase A Foundation
  * Karpathy: simple functions, no class hierarchy, no typed credential interface yet.
  */
-import { eq, and, or } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { getDb } from "./db";
 import { workspaces, workspaceCredentials } from "../drizzle/schema";
 import type { Workspace, InsertWorkspace } from "../drizzle/schema";
@@ -28,13 +28,12 @@ export async function getWorkspacesByOwner(ownerId: string): Promise<Workspace[]
   return db.select().from(workspaces).where(eq(workspaces.ownerId, ownerId));
 }
 
-/** Get all workspaces visible to a user: those they own + the system-owned defaults. */
-export async function getWorkspacesForUser(userId: string): Promise<Workspace[]> {
+/** Get all workspaces visible to a user.
+ *  Option 3: all authenticated users see all workspaces (no ownership filter). */
+export async function getWorkspacesForUser(_userId: string): Promise<Workspace[]> {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(workspaces).where(
-    or(eq(workspaces.ownerId, userId), eq(workspaces.ownerId, "system"))
-  );
+  return db.select().from(workspaces);
 }
 
 export async function createWorkspace(

@@ -13,7 +13,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { Save, X, Plus, Loader2, RefreshCw, Trash2, ShoppingBag, CheckCircle2, Unplug, Palette, ExternalLink, Copy } from "lucide-react";
+import { Save, X, Plus, Loader2, RefreshCw, Trash2, ShoppingBag, CheckCircle2, Unplug, Palette, ExternalLink, Copy, Sliders } from "lucide-react";
+import { Slider } from "@/components/ui/slider";
 import { useLocation } from "wouter";
 import {
   AlertDialog,
@@ -44,6 +45,10 @@ export default function WorkspaceSettings() {
   const [icon, setIcon] = useState("");
   const [dirty, setDirty] = useState(false);
 
+  // Pipeline config state
+  const [winnersToGenerate, setWinnersToGenerate] = useState(10);
+  const [pipelineDirty, setPipelineDirty] = useState(false);
+
   // Sync state when workspace data loads
   useEffect(() => {
     if (workspace) {
@@ -52,7 +57,13 @@ export default function WorkspaceSettings() {
       if (workspace.nicheProfile) {
         setProfile(workspace.nicheProfile as unknown as NicheProfile);
       }
+      // Sync pipeline config
+      const pc = (workspace as any).pipelineConfig;
+      if (pc?.winnersToGenerate) {
+        setWinnersToGenerate(pc.winnersToGenerate);
+      }
       setDirty(false);
+      setPipelineDirty(false);
     }
   }, [workspace]);
 
@@ -184,6 +195,29 @@ export default function WorkspaceSettings() {
     updateMutation.mutate(payload as any);
   }
 
+  function handleSavePipeline() {
+    if (!activeWorkspace) return;
+    const pc = (workspace as any)?.pipelineConfig ?? {};
+    updateMutation.mutate(
+      {
+        id: activeWorkspace.id,
+        pipelineConfig: {
+          topicsPerScan: pc.topicsPerScan ?? 5,
+          conceptsPerTopic: pc.conceptsPerTopic ?? 3,
+          winnersToGenerate,
+          variationsPerWinner: pc.variationsPerWinner ?? 2,
+        },
+      } as any,
+      {
+        onSuccess: () => {
+          setPipelineDirty(false);
+          toast.success("Pipeline config saved");
+          utils.workspace.get.invalidate({ id: activeWorkspace.id });
+        },
+      }
+    );
+  }
+
   async function handleRegenerate() {
     if (!profile) return;
     try {
@@ -299,6 +333,62 @@ export default function WorkspaceSettings() {
           <div className="space-y-1">
             <label className="text-sm font-medium">Slug</label>
             <p className="text-sm text-muted-foreground font-mono">{workspace.slug}</p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Pipeline Config — Winners to Generate */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base flex items-center gap-2" style={{ fontFamily: "Syne, sans-serif" }}>
+              <Sliders className="h-4 w-4" />
+              Pipeline Config
+            </CardTitle>
+            {pipelineDirty && (
+              <Button
+                size="sm"
+                onClick={handleSavePipeline}
+                disabled={updateMutation.isPending}
+                style={{ backgroundColor: "#22C55E" }}
+                className="text-white hover:opacity-90"
+              >
+                {updateMutation.isPending ? (
+                  <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Save className="mr-2 h-3.5 w-3.5" />
+                )}
+                Save
+              </Button>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium">Winners to Generate per Scan</label>
+              <span className="text-sm font-mono font-semibold tabular-nums bg-muted px-2 py-0.5 rounded">
+                {winnersToGenerate}
+              </span>
+            </div>
+            <Slider
+              min={1}
+              max={20}
+              step={1}
+              value={[winnersToGenerate]}
+              onValueChange={([val]) => {
+                setWinnersToGenerate(val);
+                setPipelineDirty(true);
+              }}
+            />
+            <div className="flex justify-between text-[10px] text-muted-foreground">
+              <span>1 (minimal)</span>
+              <span>10 (default)</span>
+              <span>20 (max)</span>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              How many top-scoring concepts get full image rendering each scan. Higher = more images generated (costs more API credits).
+            </p>
           </div>
         </CardContent>
       </Card>

@@ -264,13 +264,17 @@ export default function BookDetail() {
   }
 
   // Separate winners from other concepts, then new refreshes
-  const winnerConcepts = [...concepts]
+  // Active (non-dismissed) concepts
+  const activeConcepts = concepts.filter((c: any) => !c.dismissedAt);
+  const dismissedConcepts = concepts.filter((c: any) => !!c.dismissedAt);
+
+  const winnerConcepts = [...activeConcepts]
     .filter((c: any) => c.isWinner)
     .sort((a: any, b: any) => (a.globalRank ?? 999) - (b.globalRank ?? 999));
-  const refreshConcepts = [...concepts]
+  const refreshConcepts = [...activeConcepts]
     .filter((c: any) => !c.isWinner && c.refreshSource === "book_refresh")
     .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  const otherConcepts = [...concepts]
+  const otherConcepts = [...activeConcepts]
     .filter((c: any) => !c.isWinner && c.refreshSource !== "book_refresh")
     .sort((a: any, b: any) => (b.trendScore ?? 0) - (a.trendScore ?? 0));
 
@@ -572,6 +576,8 @@ export default function BookDetail() {
                       showImages={true}
                       refreshSource={c.refreshSource}
                       signalTags={Array.isArray(c.signalTags) ? c.signalTags : []}
+                      dismissedAt={c.dismissedAt}
+                      rejectionTags={Array.isArray(c.rejectionTags) ? c.rejectionTags : []}
                       onDelete={(id) => deleteConceptMut.mutate({ conceptId: id })}
                       onGenerateImage={(id) => generateImageMut.mutate({ conceptId: id })}
                     />
@@ -627,6 +633,8 @@ export default function BookDetail() {
                       compact={true}
                       refreshSource={c.refreshSource}
                       signalTags={Array.isArray(c.signalTags) ? c.signalTags : []}
+                      dismissedAt={c.dismissedAt}
+                      rejectionTags={Array.isArray(c.rejectionTags) ? c.rejectionTags : []}
                       onDelete={(id) => deleteConceptMut.mutate({ conceptId: id })}
                       onGenerateImage={(id) => generateImageMut.mutate({ conceptId: id })}
                     />
@@ -678,6 +686,8 @@ export default function BookDetail() {
                       compact={true}
                       refreshSource={c.refreshSource}
                       signalTags={Array.isArray(c.signalTags) ? c.signalTags : []}
+                      dismissedAt={c.dismissedAt}
+                      rejectionTags={Array.isArray(c.rejectionTags) ? c.rejectionTags : []}
                       onDelete={(id) => deleteConceptMut.mutate({ conceptId: id })}
                       onGenerateImage={(id) => generateImageMut.mutate({ conceptId: id })}
                     />
@@ -685,6 +695,61 @@ export default function BookDetail() {
                 })}
               </div>
             </div>
+          )}
+
+          {/* Dismissed Concepts — collapsed by default, undo available */}
+          {dismissedConcepts.length > 0 && (
+            <Collapsible>
+              <CollapsibleTrigger className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors py-2">
+                <ChevronDown className="h-4 w-4" />
+                Dismissed ({dismissedConcepts.length})
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mt-3">
+                  {dismissedConcepts.map((c: any) => {
+                    const mv = mvByConceptId.get(c.id);
+                    return (
+                      <ConceptCard
+                        key={c.id}
+                        id={c.id}
+                        conceptName={c.conceptName}
+                        format={c.format}
+                        style={c.style}
+                        headline={c.headline}
+                        subtext={c.subtext}
+                        colorPalette={c.colorPalette}
+                        layoutDescription={c.layoutDescription}
+                        fontSuggestion={c.fontSuggestion}
+                        copyrightSafe={c.copyrightSafe}
+                        isFavorite={c.isFavorite}
+                        humorFramework={c.humorFramework}
+                        trendScore={c.trendScore}
+                        trendRationale={c.trendRationale}
+                        imageUrlA={c.imageUrlA}
+                        imageUrlB={c.imageUrlB}
+                        imageUrlC={c.imageUrlC}
+                        productionUrlA={c.productionUrlA}
+                        productionUrlB={c.productionUrlB}
+                        productionUrlC={c.productionUrlC}
+                        imagePromptA={c.imagePromptA}
+                        imagePromptB={c.imagePromptB}
+                        imagePromptC={c.imagePromptC}
+                        isWinner={c.isWinner}
+                        globalRank={c.globalRank}
+                        marketValidation={mv ?? null}
+                        showImages={false}
+                        compact={true}
+                        refreshSource={c.refreshSource}
+                        signalTags={Array.isArray(c.signalTags) ? c.signalTags : []}
+                        dismissedAt={c.dismissedAt}
+                        rejectionTags={Array.isArray(c.rejectionTags) ? c.rejectionTags : []}
+                        onDelete={(id) => deleteConceptMut.mutate({ conceptId: id })}
+                      />
+                    );
+                  })}
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
           )}
         </>
       )}

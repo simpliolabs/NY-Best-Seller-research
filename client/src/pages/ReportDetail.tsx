@@ -311,7 +311,7 @@ export default function ReportDetail() {
 
       {/* Winners Section */}
       {(() => {
-        const winners = concepts.filter((c: any) => c.isWinner).sort((a: any, b: any) => (a.globalRank ?? 999) - (b.globalRank ?? 999));
+        const winners = concepts.filter((c: any) => c.isWinner && !c.dismissedAt).sort((a: any, b: any) => (a.globalRank ?? 999) - (b.globalRank ?? 999));
         if (winners.length === 0) return null;
         return (
           <div>

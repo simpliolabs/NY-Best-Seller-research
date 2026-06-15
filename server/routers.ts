@@ -1034,7 +1034,8 @@ Font feel: ${concept.fontSuggestion ?? "not specified"}`;
   // ─── Health & Self-Healing ──────────────────────────────────────────
   health: router({
     status: publicProcedure.query(async () => {
-      return await checkHealth();
+      const health = await checkHealth();
+      return { ...health, buildCommit: "c8739cc", buildPipelineMd5: "0157efae829462802fe5875569a0a645" };
     }),
 
     healingLog: protectedProcedure

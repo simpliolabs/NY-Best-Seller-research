@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Heart, Trophy, Crown, ChevronDown, Camera, ChevronRight, ExternalLink, Trash2, Wand2, Loader2, Paintbrush, Shirt, Pencil } from "lucide-react";
+import { Heart, Trophy, Crown, ChevronDown, Camera, ChevronRight, ExternalLink, Trash2, Wand2, Loader2, Paintbrush, Shirt, Pencil, XCircle, RotateCcw } from "lucide-react";
 import { Link } from "wouter";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { ColorSwatch } from "./ColorSwatch";
@@ -12,6 +12,29 @@ import { ConceptDesignPanel } from "./ConceptDesignPanel";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { useState } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+
+// ─── Rejection tags (must match backend TAG_DIRECTIVE keys) ──────────────────
+
+const REJECTION_TAGS = [
+  { id: "too_dark", label: "Too dark / heavy" },
+  { id: "too_similar", label: "Too similar to the others" },
+  { id: "wrong_style", label: "Wrong / cartoonish style" },
+  { id: "off_brand", label: "Off-brand / off-niche" },
+  { id: "weak_humor", label: "Weak hook / not funny" },
+  { id: "bad_colors", label: "Bad colors" },
+  { id: "too_generic", label: "Too generic" },
+  { id: "poor_composition", label: "Weak composition" },
+  { id: "bad_subject", label: "Weak subject" },
+] as const;
+
+type RejectionTagId = (typeof REJECTION_TAGS)[number]["id"];
 
 interface MarketValidation {
   saturationLevel: string | null;
@@ -60,6 +83,8 @@ interface ConceptCardProps {
   compact?: boolean;
   refreshSource?: string | null;
   signalTags?: string[] | null;
+  dismissedAt?: string | Date | null;
+  rejectionTags?: string[] | null;
   onDelete?: (id: number) => void;
   onGenerateImage?: (id: number) => void;
 }
@@ -101,6 +126,8 @@ export function ConceptCard({
   compact = false,
   refreshSource,
   signalTags,
+  dismissedAt,
+  rejectionTags,
   onDelete,
   onGenerateImage,
 }: ConceptCardProps) {
@@ -112,7 +139,9 @@ export function ConceptCard({
   const [isGenerating, setIsGenerating] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(conceptName);
+  const [dismissDialogOpen, setDismissDialogOpen] = useState(false);
   const utils = trpc.useUtils();
+
   const renameMutation = trpc.concepts.rename.useMutation({
     onSuccess: () => { toast.success("Renamed"); utils.books.getById.invalidate(); setIsRenaming(false); },
     onError: (err: any) => toast.error(err.message),
@@ -129,15 +158,44 @@ export function ConceptCard({
     },
   });
 
+  const dismissMutation = trpc.concepts.dismiss.useMutation({
+    onSuccess: (data) => {
+      toast.success(data.message || "Design dismissed");
+      utils.books.getById.invalidate();
+      utils.reports.getLatest.invalidate();
+      utils.reports.getByRunId.invalidate();
+      utils.library.list.invalidate();
+      utils.favorites.list.invalidate();
+      setDismissDialogOpen(false);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const undismissMutation = trpc.concepts.undismiss.useMutation({
+    onSuccess: (data) => {
+      toast.success(data.message || "Dismiss undone");
+      utils.books.getById.invalidate();
+      utils.reports.getLatest.invalidate();
+      utils.reports.getByRunId.invalidate();
+      utils.library.list.invalidate();
+      utils.favorites.list.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
   // Prefer accepted/production design over raw generated image
   const displayUrlA = productionUrlA || imageUrlA;
   const displayUrlB = productionUrlB || imageUrlB;
   const displayUrlC = productionUrlC || imageUrlC;
   const imageCount = [displayUrlA, displayUrlB, displayUrlC].filter(Boolean).length;
 
-  const winnerBorder = isWinner
-    ? "border-amber-400 bg-gradient-to-br from-amber-50/60 to-yellow-50/30 shadow-lg ring-2 ring-amber-300/40"
-    : "border-border hover:border-primary/30";
+  const isDismissed = !!dismissedAt;
+
+  const winnerBorder = isDismissed
+    ? "border-red-300/50 bg-red-50/20 opacity-70"
+    : isWinner
+      ? "border-amber-400 bg-gradient-to-br from-amber-50/60 to-yellow-50/30 shadow-lg ring-2 ring-amber-300/40"
+      : "border-border hover:border-primary/30";
 
   // For compact cards, show details only when expanded
   const showDetails = !compact || expanded;
@@ -155,8 +213,14 @@ export function ConceptCard({
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-2">
           <div className="space-y-1.5 min-w-0">
+            {/* Dismissed badge */}
+            {isDismissed && (
+              <Badge variant="outline" className="text-[10px] border-red-400 text-red-500 mb-1">
+                Dismissed
+              </Badge>
+            )}
             {/* Winner badge — large gold treatment */}
-            {isWinner && (
+            {isWinner && !isDismissed && (
               <div className="flex items-center gap-2 mb-1">
                 <div className="flex items-center gap-1.5 bg-gradient-to-r from-amber-400 to-yellow-500 text-white px-3 py-1 rounded-full shadow-sm">
                   {globalRank === 1 ? (
@@ -176,7 +240,7 @@ export function ConceptCard({
                 )}
               </div>
             )}
-            {!isWinner && globalRank && (
+            {!isWinner && !isDismissed && globalRank && (
               <Badge variant="outline" className="text-[10px] text-muted-foreground mb-1">
                 #{globalRank}
               </Badge>
@@ -234,7 +298,7 @@ export function ConceptCard({
             )}
           </div>
           <div className="flex items-center gap-1 shrink-0">
-            {(displayUrlA || displayUrlB || displayUrlC) && (
+            {!isDismissed && (displayUrlA || displayUrlB || displayUrlC) && (
               <>
                 <Link
                   href={`/${slug}/design-studio?conceptId=${id}`}
@@ -254,7 +318,7 @@ export function ConceptCard({
                 </Link>
               </>
             )}
-            {onGenerateImage && !imageUrlA && !imageUrlB && !imageUrlC && (
+            {!isDismissed && onGenerateImage && !imageUrlA && !imageUrlB && !imageUrlC && (
               <Button
                 variant="ghost"
                 size="icon"
@@ -270,19 +334,46 @@ export function ConceptCard({
                 {isGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
               </Button>
             )}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              onClick={() => toggleMutation.mutate({ conceptId: id })}
-              disabled={toggleMutation.isPending}
-            >
-              <Heart
-                className={`h-4 w-4 transition-colors ${
-                  isFavorite ? "fill-red-500 text-red-500" : "text-muted-foreground"
-                }`}
-              />
-            </Button>
+            {!isDismissed && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={() => toggleMutation.mutate({ conceptId: id })}
+                disabled={toggleMutation.isPending}
+              >
+                <Heart
+                  className={`h-4 w-4 transition-colors ${
+                    isFavorite ? "fill-red-500 text-red-500" : "text-muted-foreground"
+                  }`}
+                />
+              </Button>
+            )}
+            {/* Dismiss button — opens reason-chip dialog */}
+            {!isDismissed && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground hover:text-red-500"
+                onClick={() => setDismissDialogOpen(true)}
+                title="Dismiss design"
+              >
+                <XCircle className="h-4 w-4" />
+              </Button>
+            )}
+            {/* Undo dismiss */}
+            {isDismissed && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs gap-1"
+                onClick={() => undismissMutation.mutate({ conceptId: id })}
+                disabled={undismissMutation.isPending}
+              >
+                {undismissMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
+                Undo dismiss
+              </Button>
+            )}
             {onDelete && (
               <Button
                 variant="ghost"
@@ -302,6 +393,26 @@ export function ConceptCard({
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
+        {/* Rejection tags display (when dismissed) */}
+        {isDismissed && rejectionTags && rejectionTags.length > 0 && (
+          <div>
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Why you dismissed</p>
+            <div className="flex flex-wrap gap-1">
+              {rejectionTags.map((tag) => {
+                const label = REJECTION_TAGS.find((t) => t.id === tag)?.label ?? tag;
+                return (
+                  <span
+                    key={tag}
+                    className="text-[10px] px-1.5 py-0.5 rounded border border-red-500/40 text-red-400 bg-red-500/10"
+                  >
+                    {label}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Tags row — always visible */}
         <div className="flex flex-wrap gap-1.5">
           <Badge variant="secondary" className="text-xs">{format}</Badge>
@@ -341,7 +452,7 @@ export function ConceptCard({
         )}
 
         {/* Why It Won — expandable section for winners */}
-        {isWinner && topScore && (
+        {isWinner && !isDismissed && topScore && (
           <div className="border border-amber-200 rounded-lg overflow-hidden">
             <button
               onClick={() => setWhyExpanded(!whyExpanded)}
@@ -361,7 +472,7 @@ export function ConceptCard({
                   </p>
                 )}
                 {trendRationale && (
-                  <p className="text-xs text-muted-foreground italic mt-1">{trendRationale}</p>
+                  <p className="text-xs text-foreground/60 italic">{trendRationale}</p>
                 )}
               </div>
             )}
@@ -399,7 +510,7 @@ export function ConceptCard({
         )}
 
         {/* Live design panel — single slot A + history strip */}
-        {(showImages || (compact && expanded)) && displayUrlA && (
+        {!isDismissed && (showImages || (compact && expanded)) && displayUrlA && (
           <ConceptDesignPanel
             conceptId={id}
             conceptName={conceptName}
@@ -409,6 +520,13 @@ export function ConceptCard({
             productionUrlA={productionUrlA ?? null}
             currentStyle={style}
           />
+        )}
+
+        {/* Helper text for dismiss */}
+        {isDismissed && (
+          <p className="text-[11px] text-muted-foreground italic">
+            Dismiss removes this design from your winners AND teaches the next scan to avoid it — just like the Niche Hunter.
+          </p>
         )}
 
         {/* Expand/Collapse button for compact cards */}
@@ -428,6 +546,94 @@ export function ConceptCard({
           </Button>
         )}
       </CardContent>
+
+      {/* Dismiss Dialog */}
+      <DismissConceptDialog
+        open={dismissDialogOpen}
+        onClose={() => setDismissDialogOpen(false)}
+        onConfirm={(tags) => dismissMutation.mutate({ conceptId: id, tags })}
+        isPending={dismissMutation.isPending}
+        conceptName={conceptName}
+      />
     </Card>
+  );
+}
+
+// ─── Dismiss Dialog ───────────────────────────────────────────────────────────
+
+function DismissConceptDialog({
+  open,
+  onClose,
+  onConfirm,
+  isPending,
+  conceptName,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onConfirm: (tags: string[]) => void;
+  isPending: boolean;
+  conceptName: string;
+}) {
+  const [selectedTags, setSelectedTags] = useState<RejectionTagId[]>([]);
+
+  const toggleTag = (tag: RejectionTagId) => {
+    setSelectedTags((prev) =>
+      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
+    );
+  };
+
+  const handleConfirm = () => {
+    onConfirm(selectedTags);
+    setSelectedTags([]);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) { onClose(); setSelectedTags([]); } }}>
+      <DialogContent className="max-w-sm" onClick={(e) => e.stopPropagation()}>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <XCircle className="h-4 w-4 text-red-400" />
+            Dismiss Design
+          </DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-4">
+          <p className="text-sm text-muted-foreground">
+            Dismissing <span className="font-medium text-foreground">"{conceptName}"</span> removes it from your winners and teaches the next scan to avoid similar designs.
+          </p>
+          <div>
+            <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">Why are you dismissing it?</p>
+            <div className="flex flex-wrap gap-1.5">
+              {REJECTION_TAGS.map((tag) => (
+                <button
+                  key={tag.id}
+                  onClick={() => toggleTag(tag.id)}
+                  className={`text-xs px-2 py-1 rounded-full border transition-colors ${
+                    selectedTags.includes(tag.id)
+                      ? "border-red-500 text-red-400 bg-red-500/15"
+                      : "border-border text-muted-foreground hover:border-red-500/50"
+                  }`}
+                >
+                  {tag.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <DialogFooter className="gap-2">
+          <Button variant="outline" size="sm" onClick={onClose} disabled={isPending}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            variant="destructive"
+            onClick={handleConfirm}
+            disabled={isPending}
+          >
+            {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <XCircle className="h-3.5 w-3.5 mr-1.5" />}
+            Dismiss
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
