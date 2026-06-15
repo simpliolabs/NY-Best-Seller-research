@@ -896,8 +896,10 @@ export async function getAllConcepts(opts: {
       orderClause = direction(designConcepts.globalRank);
       break;
     case "hasImages":
-      // Images first, then by score descending as tiebreaker
-      orderClause = sql`CASE WHEN ${designConcepts.imageUrlA} IS NOT NULL THEN 0 ELSE 1 END ASC, ${designConcepts.trendScore} DESC`;
+      // Images first, then by score descending as tiebreaker. Production-aware (PO 2026-06-15 bug #6):
+      // niche-hunter designs live in productionUrlA with imageUrlA null, so they must count as "has image"
+      // or they sink below the Listings/Mockups window and can't be turned into a listing.
+      orderClause = sql`CASE WHEN (${designConcepts.imageUrlA} IS NOT NULL OR ${designConcepts.productionUrlA} IS NOT NULL) THEN 0 ELSE 1 END ASC, ${designConcepts.trendScore} DESC`;
       break;
     case "date":
     default:
