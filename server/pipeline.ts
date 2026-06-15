@@ -35,7 +35,6 @@ import {
   updateConceptImages,
   updateConceptScore,
   updateRunImagesGenerated,
-  setRunImageDebug,
   updateRunBooksProcessed,
   getRunById,
   getPreviousCompletedRunId,
@@ -1483,13 +1482,24 @@ Stage-4 suggested style hint (a guess only — override if the references sugges
     imageResults.push(...(await Promise.allSettled(batch.map(runImageTask))));
   }
 
-  // TEMP diagnostic (2026-06-13): persist per-image failure reasons (each "gpt[...] forge[...]") to
-  // errorLog so a completed-but-partial scan reveals WHY images failed, without Cloud Run log access.
-  const imgFailures = imageResults
-    .map((r) => (r.status === "fulfilled" ? (r.value.error instanceof Error ? r.value.error.message : r.value.error ? String(r.value.error) : null) : String(r.reason)))
-    .filter((e): e is string => !!e);
-  if (imgFailures.length) {
-    try { await setRunImageDebug(runId, `IMG ${imgFailures.length}/${allImageTasks.length} failed :: ${imgFailures.join(" :: ")}`); } catch { /* non-fatal */ }
+  // Normalize (runImageTask always resolves with {imageUrl, error} — it catches internally).
+  const results = imageResults
+    .map((r) => (r.status === "fulfilled" ? r.value : null))
+    .filter((v): v is NonNullable<typeof v> => !!v);
+
+  // Self-healing retry (PO 2026-06-15): under load a few renders double-time-out (gpt-image-2 90s +
+  // Forge 60s). Retry the failures ONCE, serially (concurrency 1), to give the slow API room — turns a
+  // transient 3/10 into ~10/10 instead of permanently dropping those designs. A still-failed image keeps
+  // its prior design (immutability guard below); a partial run is NEVER a whole-run failure.
+  const failed = results.filter((res) => !res.imageUrl);
+  if (failed.length) {
+    console.warn(`[Pipeline/Stage6] ${failed.length}/${allImageTasks.length} image(s) failed first pass — retrying serially`);
+    for (const res of failed) {
+      const retry = await runImageTask(res);
+      if (retry.imageUrl) { res.imageUrl = retry.imageUrl; res.prompt = retry.prompt; res.error = null; }
+    }
+    const stillFailed = results.filter((res) => !res.imageUrl).length;
+    if (stillFailed) console.warn(`[Pipeline/Stage6] ${stillFailed}/${allImageTasks.length} still failed after retry — keeping the prior design for those`);
   }
 
   // ── Step 5: Group results by concept and save to DB ──────────────────
@@ -1497,10 +1507,7 @@ Stage-4 suggested style hint (a guess only — override if the references sugges
 
   let imagesGenerated = 0;
 
-  for (const result of imageResults) {
-    if (result.status !== "fulfilled") continue;
-    const { concept, variation, prompt, imageUrl } = result.value;
-
+  for (const { concept, variation, prompt, imageUrl } of results) {
     if (imageUrl) imagesGenerated++;
 
     const existing = conceptImageMap.get(concept.id) ?? {};
