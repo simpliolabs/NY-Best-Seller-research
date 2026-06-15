@@ -44,6 +44,8 @@ import {
   insertConcept,
   updateConceptStyle,
   updateConceptName,
+  dismissDesignConcept,
+  undismissDesignConcept,
 } from "./db";
 import { runPipeline, recoverStaleRuns, regenerateImagesForRun } from "./pipeline";
 import { processConceptProductionImages, processDesignForProduction } from "./productionImageProcessor";
@@ -952,6 +954,30 @@ Font feel: ${concept.fontSuggestion ?? "not specified"}`;
       .input(z.object({ conceptId: z.number() }))
       .query(async ({ input }) => {
         return getRevisionsByConceptVariation(input.conceptId, HISTORY_KEY);
+      }),
+
+    /** Dismiss a scan design (PO 2026-06-15) — "like a delete" that ALSO teaches the council. Records
+     *  the buyer's reason tags; the NEXT scan's avoidDirectives learns from them (Niche-Hunter parity).
+     *  The design drops out of regeneration. Reversible via undismiss. Tags should be TAG_DIRECTIVE
+     *  keys (too_dark | too_similar | wrong_style | bad_colors | off_brand | weak_humor | too_generic |
+     *  poor_composition | bad_subject) so they map to a concrete avoid-directive. */
+    dismiss: protectedProcedure
+      .input(z.object({
+        conceptId: z.number(),
+        tags: z.array(z.string().min(1).max(40)).max(8).default([]),
+      }))
+      .mutation(async ({ input }) => {
+        const concept = await getConceptById(input.conceptId);
+        if (!concept) return { success: false, message: "Concept not found." };
+        await dismissDesignConcept(input.conceptId, input.tags);
+        return { success: true, message: "Design dismissed — the next scan's council will learn from it." };
+      }),
+
+    undismiss: protectedProcedure
+      .input(z.object({ conceptId: z.number() }))
+      .mutation(async ({ input }) => {
+        await undismissDesignConcept(input.conceptId);
+        return { success: true, message: "Dismiss undone." };
       }),
 
     exportProduction: protectedProcedure

@@ -44,6 +44,7 @@ import {
   updateRunHeartbeat,
   updateConceptSignalTags,
   getConceptsByBookId,
+  getDismissedConceptTagsByWorkspace,
 } from "./db";
 import type { InsertBook, InsertDesignConcept } from "../drizzle/schema";
 import { scrapeAllForums, computeForumScore, extractCrossSourceSignals, type ForumSignals, type CrossSourceSignal } from "./forumScraper";
@@ -1146,7 +1147,8 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
   // force=true (PO 2026-06-12, "Regenerate All Images" button): regenerate every winner — safe now
   // because the prior design is snapshotted into generation history before the overwrite below.
   const allWinners = ranked.slice(0, winnerCount);
-  const winners = force ? allWinners : allWinners.filter((c) => !c.imageUrlA);
+  // Dismissed designs (PO 2026-06-15 "Dismiss") drop out of (re)generation entirely.
+  const winners = (force ? allWinners : allWinners.filter((c) => !c.imageUrlA)).filter((c) => !c.dismissedAt);
 
   if (allWinners.length === 0) {
     console.log(`[Pipeline/Stage6] No scored concepts — skipping image generation (elapsed: ${Date.now() - stageStart}ms)`);
@@ -1255,9 +1257,14 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
         bad_colors: "a deliberate, harmonious limited palette",
         too_generic: "a distinctive, non-generic idea",
         wrong_style: "the niche's proven art style",
+        too_dark: "varied, lighter palettes — do NOT default every design to a dark background",
+        too_similar: "a look clearly distinct from the rest of the set (different style + palette)",
       };
       const tagCounts: Record<string, number> = {};
       for (const p of dismissed) for (const t of ((p.rejectionTags as string[]) ?? [])) tagCounts[t] = (tagCounts[t] ?? 0) + 1;
+      // Also learn from dismissed SCAN designs (PO 2026-06-15) — the buyer's "Dismiss" on a generated
+      // winner feeds the SAME avoidDirectives, exactly like a dismissed niche pattern (NH parity).
+      for (const t of await getDismissedConceptTagsByWorkspace(runRow.workspaceId)) tagCounts[t] = (tagCounts[t] ?? 0) + 1;
       const topTags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([t]) => TAG_DIRECTIVE[t]).filter(Boolean);
       if (topTags.length) avoidDirectives = topTags.join("; ");
 

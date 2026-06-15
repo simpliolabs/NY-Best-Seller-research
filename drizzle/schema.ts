@@ -217,6 +217,10 @@ export const designConcepts = mysqlTable("design_concepts", {
    *  NEVER touch the product group's per-colour calibration (template.garmentBbox), which the studio
    *  used to overwrite (the "Product Group changes not persistent" bug). */
   printPlacements: json("printPlacements").$type<Record<string, { x: number; y: number; width: number; height: number }>>(),
+  /** Dismiss → signal (PO 2026-06-15): when set, the buyer rejected this scan design. Its rejectionTags
+   *  feed the NEXT scan's council avoidDirectives, exactly like a dismissed trend_pattern. Reversible. */
+  dismissedAt: timestamp("dismissedAt"),
+  rejectionTags: json("rejectionTags").$type<string[]>(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 

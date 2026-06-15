@@ -1,4 +1,4 @@
-import { eq, desc, asc, and, sql, inArray } from "drizzle-orm";
+import { eq, desc, asc, and, sql, inArray, isNotNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
@@ -537,6 +537,34 @@ export async function updateConceptImages(
   await db.update(designConcepts).set(data).where(eq(designConcepts.id, conceptId));
 }
 
+/** Dismiss → signal (PO 2026-06-15): mark a scan design as buyer-rejected. Its rejectionTags feed the
+ *  NEXT scan's council avoidDirectives, exactly like a dismissed trend_pattern. Reversible. */
+export async function dismissDesignConcept(conceptId: number, rejectionTags: string[]): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(designConcepts).set({ dismissedAt: new Date(), rejectionTags }).where(eq(designConcepts.id, conceptId));
+}
+
+/** Undo a dismiss (clear the flag + tags). */
+export async function undismissDesignConcept(conceptId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(designConcepts).set({ dismissedAt: null, rejectionTags: null }).where(eq(designConcepts.id, conceptId));
+}
+
+/** All rejectionTags from this workspace's dismissed scan designs (across runs) — feeds the council's
+ *  avoidDirectives so the scan learns from buyer dismissals, NH-style (PO 2026-06-15). */
+export async function getDismissedConceptTagsByWorkspace(workspaceId: string): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({ tags: designConcepts.rejectionTags })
+    .from(designConcepts)
+    .innerJoin(botRuns, eq(designConcepts.runId, botRuns.id))
+    .where(and(eq(botRuns.workspaceId, workspaceId), isNotNull(designConcepts.dismissedAt)));
+  return rows.flatMap((r) => (r.tags as string[] | null) ?? []);
+}
+
 export async function updateConceptScore(
   conceptId: number,
   trendScore: number
@@ -620,6 +648,8 @@ export async function getFavorites(filters?: {
       productionUrlB: designConcepts.productionUrlB,
       productionUrlC: designConcepts.productionUrlC,
       printPlacements: designConcepts.printPlacements,
+      dismissedAt: designConcepts.dismissedAt,
+      rejectionTags: designConcepts.rejectionTags,
       createdAt: designConcepts.createdAt,
       bookTitle: books.title,
       bookAuthor: books.author,
