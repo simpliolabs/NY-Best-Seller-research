@@ -1187,16 +1187,36 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
       const dismissed = all.filter((p) => p.status === "dismissed");
 
       // (1) VISION REFERENCES — the council SEES the buyer's hand-approved Etsy winners directly,
-      // instead of reasoning from text adjectives ("nicheStyleDNA"). PO 2026-06-14 architecture fix:
-      // closes the AI/rules asymmetry that caused 5 rounds of council prompt patching. Up to 6 refs,
-      // preferring the cleaner approved productionDesignUrl over the raw sourceImageUrl.
-      const approvedWithImg = (approved.length ? approved : live).filter((p) =>
-        (p.productionDesignUrl && /^https?:\/\//.test(p.productionDesignUrl)) ||
-        (p.sourceImageUrl && /^https?:\/\//.test(p.sourceImageUrl)));
+      // instead of reasoning from text adjectives. PO 2026-06-14 architecture fix. APPROVED ONLY:
+      // we must never present un-approved competitor scrapes to the LLM as "buyer-approved" (audit B1)
+      // — when nothing is approved, approvedVisionRefs stays empty and the text fallback kicks in.
+      // Sort by approvedAt desc so the buyer's MOST RECENT approvals always make the top-6 cut, which
+      // is what closes the learning loop (audit M2). productionDesignUrl (clean approved design)
+      // preferred over the raw sourceImageUrl.
+      const approvedWithImg = approved
+        .filter((p) =>
+          (p.productionDesignUrl && /^https?:\/\//.test(p.productionDesignUrl)) ||
+          (p.sourceImageUrl && /^https?:\/\//.test(p.sourceImageUrl)))
+        .sort((a, b) => (b.approvedAt?.getTime() ?? b.createdAt?.getTime() ?? 0) - (a.approvedAt?.getTime() ?? a.createdAt?.getTime() ?? 0));
       approvedVisionRefs = approvedWithImg.slice(0, 6).map((p) => ({
         url: (p.productionDesignUrl && /^https?:\/\//.test(p.productionDesignUrl) ? p.productionDesignUrl : p.sourceImageUrl) as string,
         title: p.patternName ?? "Untitled",
       }));
+      // B2(a): drop dead/expired ref URLs ONCE before the run — a single 404 spread into all 5
+      // concurrent council calls would error every one → 0 images (the shared-input correlation trap).
+      if (approvedVisionRefs.length) {
+        const checked = await Promise.all(approvedVisionRefs.map(async (r) => {
+          try {
+            const resp = await withTimeout(fetch(r.url, { method: "HEAD" }), 8000, `ref check ${r.title}`);
+            return resp.ok && (resp.headers.get("content-type") ?? "").startsWith("image/") ? r : null;
+          } catch { return null; }
+        }));
+        const live2 = checked.filter((r): r is { url: string; title: string } => !!r);
+        if (live2.length !== approvedVisionRefs.length) {
+          console.warn(`[Pipeline/Stage6] Vision refs: ${approvedVisionRefs.length - live2.length} dead URL(s) dropped, ${live2.length} usable`);
+        }
+        approvedVisionRefs = live2;
+      }
 
       // (2) AVOID — learn from what you dismissed (top rejection tags → positive directives)
       const TAG_DIRECTIVE: Record<string, string> = {
@@ -1261,7 +1281,7 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
     s.replace(/cartoon\w*|kawaii|chibi|childish|playful-humorous|slightly exaggerated illustrations?|mascot-style/gi, "")
       .replace(/\s{2,}/g, " ").replace(/(?:,\s*){2,}/g, ", ").replace(/^[\s,./]+|[\s,./]+$/g, "");
 
-  const promptTasks = winners.map(async (concept, idx): Promise<PromptSet | null> => {
+  const runCouncilForWinner = async (concept: typeof winners[0], idx: number): Promise<PromptSet | null> => {
     const book = concept.bookId ? bookMapForImages.get(concept.bookId) : null;
     const wb = book?.worldBible as {
       illustratorStyle?: string;
@@ -1310,22 +1330,47 @@ Fan phrase it's anchored to: ${concept.sourcePhrase ?? "not specified"}
 Stage-4 suggested style hint (a guess only — override if the references suggest better): ${conceptStyleHint || "(none)"}` },
     ];
 
-    try {
-      const councilResult = await withTimeout(
+    const runCouncil = async (parts: import("./_core/llm").MessageContent[]): Promise<string> => {
+      const res = await withTimeout(
         invokeLLM({
           messages: [
             { role: "system", content: NICHE_COUNCIL_SYSTEM },
-            { role: "user", content: userContent },
+            { role: "user", content: parts },
           ],
           response_format: { type: "json_object" },
         }),
-        45_000,
+        75_000, // audit M1: room for one internal multimodal retry (abort isn't threaded; keep generous)
         `Design council for winner concept ${concept.id}`
       );
+      return typeof res.choices[0]?.message?.content === "string" ? res.choices[0].message.content : "";
+    };
 
-      const content = typeof councilResult.choices[0]?.message?.content === "string"
-        ? councilResult.choices[0].message.content : "";
-      const verdict = JSON.parse(content) as { canWork?: boolean; hero?: string; style?: string; viral?: string; prompt?: string };
+    try {
+      let content: string;
+      try {
+        content = await runCouncil(userContent);
+      } catch (visionErr) {
+        // audit B2(b): if the vision call fails AND we sent images, retry ONCE text-only — a bad/slow
+        // reference image must never cost us the whole design (the shared-input 0-image trap).
+        if (approvedVisionRefs.length) {
+          console.warn(`[Pipeline] Council vision call failed for concept ${concept.id}, retrying text-only:`, visionErr instanceof Error ? visionErr.message : visionErr);
+          content = await runCouncil(userContent.filter((c) => typeof c === "string" || c.type !== "image_url"));
+        } else {
+          throw visionErr;
+        }
+      }
+      // audit m1: gemini occasionally wraps the JSON in a ```json fence or adds a preamble — strip to
+      // the JSON object before parsing, and log the raw on failure so a dropped winner is never silent.
+      const stripped = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+      const jStart = stripped.indexOf("{"), jEnd = stripped.lastIndexOf("}");
+      const jsonStr = jStart >= 0 && jEnd > jStart ? stripped.slice(jStart, jEnd + 1) : stripped;
+      let verdict: { canWork?: boolean; hero?: string; style?: string; viral?: string; prompt?: string };
+      try {
+        verdict = JSON.parse(jsonStr);
+      } catch {
+        console.warn(`[Pipeline] Council JSON parse failed for concept ${concept.id}: ${content.slice(0, 200)}`);
+        return null;
+      }
       console.log(`[Pipeline/Council] "${concept.conceptName}" → hero=${verdict.hero ?? "?"} style=${verdict.style ?? "?"} viral=${verdict.viral ?? "?"} canWork=${verdict.canWork}`);
       // Gate: only a passing concept gets a prompt. (A failed gate yields an empty prompt → this
       // winner is skipped downstream, same as a failed prompt-gen.)
@@ -1335,17 +1380,23 @@ Stage-4 suggested style hint (a guess only — override if the references sugges
         promptA: prompt,
         promptB: "",
         promptC: "",
-        // Council designs are generated FRESH (text-to-image) so the chosen mascot renders — no edit
-        // anchor (which would bleed the library bestseller's racket/player subject).
+        // Council designs are generated FRESH (text-to-image) so the chosen mascot renders.
         sourceImageUrl: null,
       };
     } catch (err) {
-      console.warn(`[Pipeline] Design council failed for winner concept ${concept.id}:`, err);
+      console.warn(`[Pipeline] Design council failed for concept ${concept.id}:`, err);
       return null;
     }
-  });
+  };
 
-  const promptResults = await Promise.allSettled(promptTasks);
+  // audit M1: throttle council calls to COUNCIL_CONCURRENCY — 5 concurrent 6-image vision calls means
+  // ~30 simultaneous image fetches by the gateway; batch them like the image-gen loop.
+  const COUNCIL_CONCURRENCY = 2;
+  const promptResults: PromiseSettledResult<PromptSet | null>[] = [];
+  for (let i = 0; i < winners.length; i += COUNCIL_CONCURRENCY) {
+    const batch = winners.slice(i, i + COUNCIL_CONCURRENCY);
+    promptResults.push(...(await Promise.allSettled(batch.map((c, j) => runCouncilForWinner(c, i + j)))));
+  }
   const validPromptSets = promptResults
     .map((r) => (r.status === "fulfilled" ? r.value : null))
     .filter((r): r is PromptSet => r !== null && (r.promptA.length > 0 || r.promptB.length > 0 || r.promptC.length > 0));
