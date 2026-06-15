@@ -1062,7 +1062,7 @@ You are given a NICHE KNOWLEDGE BASE. Its ON-BRAND MASCOTS are the ONLY recogniz
 STEP 1 — VET (answer honestly):
 1. canWork — can this become a genuinely sellable design for this niche?
 2. hero — WHICH single named MASCOT from the knowledge base is the hero (doing a real niche action/pose), OR "TYPE-ONLY" when the typography itself is the strong idea and a character would only clutter it. NEVER answer with a generic racket / ball / court / anonymous player.
-3. style — WHICH single art style name from the workspace's approved styles list best matches the APPROVED REFERENCES shown to you. The buyer's approved-reference IMAGES are the ground truth — pick the style name from the menu that most faithfully describes what you see across them. Use the STYLE PLAYBOOK only to map images → name; do not pick a style the references don't visibly support. Only override the reference style when the SPECIFIC concept genuinely demands it (e.g. a pure type pun → Bold Typographic).
+3. style — use the ASSIGNED STYLE LANE given in the user message. Each winning design is deliberately assigned ONE approved style so the batch of winners spans a RANGE of styles (and palettes) instead of all looking alike. Render in that assigned style. Only pick a DIFFERENT approved style if the assigned one genuinely cannot carry THIS specific concept — and if you deviate, choose another distinct approved style, never default back to a dark distressed look. The approved-reference IMAGES define the CRAFT and QUALITY BAR and the niche's character treatment, NOT a single look to clone.
 4. needsText — does it need the headline/pun to read as this niche, or does the mascot carry it alone?
 5. viral — would a fan stop scrolling and BUY this? "high" | "med" | "low".
 
@@ -1332,13 +1332,19 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
         : `${concept.style}. ${wb?.illustratorStyle ?? book?.typographyStyle ?? ""}`.trim()
     );
 
-    // VISION-GROUNDED DESIGN COUNCIL (PO 2026-06-14): the council SEES the buyer's hand-approved
-    // Etsy winners as actual images and matches their visual taste, instead of reasoning from text
-    // adjectives. Architecture fix that ends the council/style patch chain — the right asymmetry:
-    // the LLM judges from real images, the code just feeds it.
+    // PORTFOLIO VARIETY (PO 2026-06-15): the council styles each winner independently against the SAME
+    // approved refs, so it converged on the buyer's modal look (8/10 dark vintage-distressed). Assign each
+    // winner a different APPROVED style so the batch spans a range of styles AND palettes (each playbook
+    // style carries its own palette). Soft lane — the council may veto per concept; the refs become the
+    // CRAFT/QUALITY bar, not a single look to clone.
+    const styleLanes = allowedStylesList.length ? allowedStylesList : ["Vintage/Distressed", "Bold Typographic", "Minimalist Line-Art"];
+    const assignedStyle = styleLanes[idx % styleLanes.length];
+
+    // VISION-GROUNDED DESIGN COUNCIL (PO 2026-06-14): the council SEES the buyer's hand-approved Etsy
+    // winners as actual images and matches their CRAFT, instead of reasoning from text adjectives.
     const visionRefIntro = approvedVisionRefs.length
-      ? `Below are ${approvedVisionRefs.length} t-shirt designs the BUYER has explicitly APPROVED for this niche. Study them: their texture, composition (badge vs centered vs stacked text vs scene), line work, palette, typography, mood. THIS is the visual taste your output must match. Your style pick AND your rendered prompt must FAITHFULLY embody what you see in these references. Do NOT introduce a look they don't share.`
-      : `No approved-design references for this niche yet — fall back to the STYLE PLAYBOOK and the Stage-4 suggested style.`;
+      ? `Below are ${approvedVisionRefs.length} t-shirt designs the BUYER has explicitly APPROVED for this niche. Study their CRAFT: texture, line work, typography quality, niche-character treatment, and premium sellable mood. This is the QUALITY BAR and the niche authenticity your output must match. They are NOT a single look to clone — this design uses its ASSIGNED STYLE LANE (below), and across the batch the winners deliberately span DIFFERENT approved styles so the collection has range in both style and palette. Match the craftsmanship; render in your assigned style.`
+      : `No approved-design references for this niche yet — fall back to the STYLE PLAYBOOK and your assigned style lane.`;
 
     const userContent: import("./_core/llm").MessageContent[] = [
       { type: "text", text: `${visionRefIntro}\n\nAPPROVED REFERENCES (in order):${approvedVisionRefs.map((r, i) => `\n  ${i + 1}. "${r.title}"`).join("")}` },
@@ -1346,8 +1352,8 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
       { type: "text", text: `NICHE KNOWLEDGE BASE (your only character palette for mascot picks):
 ${nicheKB || "(no mascots configured — fall back to a strong type-only design)"}
 
-APPROVED STYLE MENU — pick EXACTLY ONE name (using the STYLE PLAYBOOK + the references above):
-${allowedStylesList.length ? allowedStylesList.join(" | ") : "Vintage/Distressed | Bold Typographic | Minimalist Line-Art"}
+YOUR ASSIGNED STYLE LANE for this design (#${idx + 1} of ${winners.length}): ${assignedStyle}
+Render THIS design in "${assignedStyle}" and its native palette per the STYLE PLAYBOOK — do NOT force a dark background. Only switch to a different APPROVED style if "${assignedStyle}" genuinely cannot carry this concept; if you do, pick a distinct approved style and never collapse back to a dark distressed look. Full approved menu (for that fallback only): ${allowedStylesList.length ? allowedStylesList.join(" | ") : "Vintage/Distressed | Bold Typographic | Minimalist Line-Art"}
 
 ${avoidDirectives ? `AVOID (learned from the buyer's past rejections): ${avoidDirectives}\n\n` : ""}THE NEW CONCEPT:
 Name: ${concept.conceptName}
