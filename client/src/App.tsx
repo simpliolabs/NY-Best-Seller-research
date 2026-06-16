@@ -1,5 +1,5 @@
 /** Build identity — forces unique bundle hash per deploy */
-export const __BUILD_VERSION__ = "per-version-dismiss-v1";
+export const __BUILD_VERSION__ = "grid-default-v1";
 
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";

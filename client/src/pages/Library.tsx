@@ -25,7 +25,7 @@ export default function Library() {
   const [selectedFramework, setSelectedFramework] = useState("");
   const [sortBy, setSortBy] = useState<"date" | "score" | "rank" | "hasImages">("date");
   const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
-  const [viewMode, setViewMode] = useState<ViewMode>("byBook");
+  const [viewMode, setViewMode] = useState<ViewMode>("grid");
 
   // Lightbox state
   const [lightboxOpen, setLightboxOpen] = useState(false);
