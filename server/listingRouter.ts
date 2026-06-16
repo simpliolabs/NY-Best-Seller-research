@@ -172,6 +172,15 @@ export const listingRouter = router({
       }));
     }),
 
+  /** Concepts that actually HAVE mockups — the listable set (PO 2026-06-16: the picker showed all ~100s,
+   *  most un-listable; you create listings FROM mockups). Winners first. Powers the Listings concept picker. */
+  eligibleConcepts: protectedProcedure
+    .input(z.object({ workspaceId: z.string() }))
+    .query(async ({ input }) => {
+      const { getConceptsWithMockupsByWorkspace } = await import("./db");
+      return getConceptsWithMockupsByWorkspace(input.workspaceId);
+    }),
+
   /** TEMP diagnostic (PO 2026-06-12): does the live Shopify token have inventory/location access?
    *  Read-only — just lists locations. If this 403s, the reconnect didn't grant the new scopes; if it
    *  returns a location id, the scopes are fine and the inventory WRITE calls are the bug. */

@@ -7,6 +7,7 @@ import {
   books,
   designConcepts,
   designRevisions,
+  mockupRenders,
   nicheResearch,
   marketValidation,
   type InsertBotRun,
@@ -578,6 +579,34 @@ export async function getDismissedRevisionTagsByWorkspace(workspaceId: string): 
     .innerJoin(botRuns, eq(designConcepts.runId, botRuns.id))
     .where(and(eq(botRuns.workspaceId, workspaceId), isNotNull(designRevisions.dismissedAt)));
   return rows.flatMap((r) => (r.tags as string[] | null) ?? []);
+}
+
+/** Concepts in a workspace that have at least one mockup render — i.e. the LISTABLE set (you create
+ *  listings FROM mockups). Winners first, then by score. Feeds the Listings concept picker so it shows
+ *  the handful that are actually ready, not all ~100s (PO 2026-06-16). */
+export async function getConceptsWithMockupsByWorkspace(workspaceId: string) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      id: designConcepts.id,
+      conceptName: designConcepts.conceptName,
+      isWinner: designConcepts.isWinner,
+      trendScore: designConcepts.trendScore,
+      imageUrlA: designConcepts.imageUrlA,
+      imageUrlB: designConcepts.imageUrlB,
+      imageUrlC: designConcepts.imageUrlC,
+      productionUrlA: designConcepts.productionUrlA,
+      productionUrlB: designConcepts.productionUrlB,
+      productionUrlC: designConcepts.productionUrlC,
+      mockupCount: sql<number>`count(distinct ${mockupRenders.id})`,
+    })
+    .from(designConcepts)
+    .innerJoin(mockupRenders, eq(mockupRenders.conceptId, designConcepts.id))
+    .innerJoin(botRuns, eq(designConcepts.runId, botRuns.id))
+    .where(eq(botRuns.workspaceId, workspaceId))
+    .groupBy(designConcepts.id)
+    .orderBy(desc(designConcepts.isWinner), desc(designConcepts.trendScore));
 }
 
 export async function updateConceptScore(
