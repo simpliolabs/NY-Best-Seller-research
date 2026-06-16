@@ -963,6 +963,9 @@ export default function NicheHunter() {
     onSuccess: () => {
       toast.success("Renamed");
       utils.nicheHunter.getPatterns.invalidate({ workspaceId }, { refetchType: "none" });
+      // Refresh open Mockups/Listings pickers so they pick up the new name
+      utils.listing.eligibleConcepts.invalidate();
+      utils.library.list.invalidate();
     },
     onError: (err) => toast.error(err.message),
   });

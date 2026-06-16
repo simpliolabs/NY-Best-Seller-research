@@ -234,7 +234,7 @@ export default function BookDetail() {
         <Skeleton className="h-8 w-32" />
         <Skeleton className="h-48" />
         <Skeleton className="h-48" />
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           <Skeleton className="h-64" />
           <Skeleton className="h-64" />
           <Skeleton className="h-64" />
@@ -538,7 +538,7 @@ export default function BookDetail() {
                   {isNicheWorkspace ? `Winning Concepts — generated from this signal (${winnerConcepts.length})` : `Winning Concepts (${winnerConcepts.length})`}
                 </h2>
               </div>
-              <div className="space-y-4">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start auto-rows-min">
                 {winnerConcepts.map((c: any) => {
                   const mv = mvByConceptId.get(c.id);
                   return (
@@ -597,7 +597,7 @@ export default function BookDetail() {
                 </h2>
                 <Badge className="bg-blue-100 text-blue-700 border-blue-300 text-xs">New</Badge>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 items-start auto-rows-min">
                 {refreshConcepts.map((c: any) => {
                   const mv = mvByConceptId.get(c.id);
                   return (
@@ -647,10 +647,12 @@ export default function BookDetail() {
           {/* Other Concepts */}
           {otherConcepts.length > 0 && (
             <div>
-              <h2 className="text-lg font-semibold mb-3 text-foreground">
-                {isNicheWorkspace ? `Other Concepts from this signal (${otherConcepts.length})` : `Other Concepts (${otherConcepts.length})`}
-              </h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              <div className="flex items-center gap-2 mb-4">
+                <h2 className="text-lg font-bold text-foreground">
+                  {isNicheWorkspace ? `Other Concepts from this signal (${otherConcepts.length})` : `Other Concepts (${otherConcepts.length})`}
+                </h2>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 items-start auto-rows-min">
                 {otherConcepts.map((c: any) => {
                   const mv = mvByConceptId.get(c.id);
                   return (
@@ -705,7 +707,7 @@ export default function BookDetail() {
                 Dismissed ({dismissedConcepts.length})
               </CollapsibleTrigger>
               <CollapsibleContent>
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mt-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 items-start auto-rows-min mt-3">
                   {dismissedConcepts.map((c: any) => {
                     const mv = mvByConceptId.get(c.id);
                     return (
