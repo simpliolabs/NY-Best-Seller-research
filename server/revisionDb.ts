@@ -131,6 +131,29 @@ export async function markRevisionAccepted(revisionId: string): Promise<void> {
     .where(eq(designRevisions.id, revisionId));
 }
 
+/** Dismiss a specific generation history entry (per-version dismiss) */
+export async function dismissGeneration(
+  revisionId: string,
+  tags: string[]
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db
+    .update(designRevisions)
+    .set({ dismissedAt: new Date(), rejectionTags: tags })
+    .where(eq(designRevisions.id, revisionId));
+}
+
+/** Undismiss a specific generation history entry */
+export async function undismissGeneration(revisionId: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db
+    .update(designRevisions)
+    .set({ dismissedAt: null, rejectionTags: null })
+    .where(eq(designRevisions.id, revisionId));
+}
+
 /** Delete all revisions for a concept+variation (revert to original) */
 export async function deleteRevisionsByConceptVariation(
   conceptId: number,

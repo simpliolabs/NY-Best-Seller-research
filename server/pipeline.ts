@@ -1265,6 +1265,9 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
       // Also learn from dismissed SCAN designs (PO 2026-06-15) — the buyer's "Dismiss" on a generated
       // winner feeds the SAME avoidDirectives, exactly like a dismissed niche pattern (NH parity).
       for (const t of await getDismissedConceptTagsByWorkspace(runRow.workspaceId)) tagCounts[t] = (tagCounts[t] ?? 0) + 1;
+      // Also learn from per-version dismissals (individual generation history entries)
+      const { getDismissedRevisionTagsByWorkspace } = await import("./db");
+      for (const t of await getDismissedRevisionTagsByWorkspace(runRow.workspaceId)) tagCounts[t] = (tagCounts[t] ?? 0) + 1;
       const topTags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([t]) => TAG_DIRECTIVE[t]).filter(Boolean);
       if (topTags.length) avoidDirectives = topTags.join("; ");
 

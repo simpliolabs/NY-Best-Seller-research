@@ -980,6 +980,24 @@ Font feel: ${concept.fontSuggestion ?? "not specified"}`;
         return { success: true, message: "Dismiss undone." };
       }),
 
+    /** Dismiss a specific generation history entry (per-version dismiss). Feeds rejection tags
+     *  into the avoid-signal without dismissing the whole concept. */
+    dismissGeneration: protectedProcedure
+      .input(z.object({ revisionId: z.string(), tags: z.array(z.string()) }))
+      .mutation(async ({ input }) => {
+        const { dismissGeneration } = await import("./revisionDb");
+        await dismissGeneration(input.revisionId, input.tags);
+        return { success: true, message: "Version dismissed — style signal recorded." };
+      }),
+
+    undismissGeneration: protectedProcedure
+      .input(z.object({ revisionId: z.string() }))
+      .mutation(async ({ input }) => {
+        const { undismissGeneration } = await import("./revisionDb");
+        await undismissGeneration(input.revisionId);
+        return { success: true, message: "Version restored." };
+      }),
+
     exportProduction: protectedProcedure
       .input(z.object({
         conceptId: z.number(),
@@ -1035,7 +1053,7 @@ Font feel: ${concept.fontSuggestion ?? "not specified"}`;
   health: router({
     status: publicProcedure.query(async () => {
       const health = await checkHealth();
-      return { ...health, buildCommit: "dismiss-version-cards-v1", buildPipelineMd5: "0157efae829462802fe5875569a0a645" };
+      return { ...health, buildCommit: "per-version-dismiss-v1", buildPipelineMd5: "0157efae829462802fe5875569a0a645" };
     }),
 
     healingLog: protectedProcedure

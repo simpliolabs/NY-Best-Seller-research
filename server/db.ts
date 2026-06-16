@@ -6,6 +6,7 @@ import {
   botRuns,
   books,
   designConcepts,
+  designRevisions,
   nicheResearch,
   marketValidation,
   type InsertBotRun,
@@ -563,6 +564,19 @@ export async function getDismissedConceptTagsByWorkspace(workspaceId: string): P
     .from(designConcepts)
     .innerJoin(botRuns, eq(designConcepts.runId, botRuns.id))
     .where(and(eq(botRuns.workspaceId, workspaceId), isNotNull(designConcepts.dismissedAt)));
+  return rows.flatMap((r) => (r.tags as string[] | null) ?? []);
+}
+
+/** Aggregate rejection tags from dismissed generation history entries (per-version dismissals) */
+export async function getDismissedRevisionTagsByWorkspace(workspaceId: string): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({ tags: designRevisions.rejectionTags })
+    .from(designRevisions)
+    .innerJoin(designConcepts, eq(designRevisions.conceptId, designConcepts.id))
+    .innerJoin(botRuns, eq(designConcepts.runId, botRuns.id))
+    .where(and(eq(botRuns.workspaceId, workspaceId), isNotNull(designRevisions.dismissedAt)));
   return rows.flatMap((r) => (r.tags as string[] | null) ?? []);
 }
 
