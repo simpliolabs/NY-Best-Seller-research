@@ -445,6 +445,16 @@ export function ConceptDesignPanel({
                     >
                       <Shirt className="h-3.5 w-3.5" />
                     </Button>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      className="h-7 w-7 flex-1 text-muted-foreground hover:text-red-500 hover:border-red-300"
+                      title="Dismiss this version"
+                      disabled={dismissMutation.isPending}
+                      onClick={() => setShowDismissChips(true)}
+                    >
+                      <XCircle className="h-3.5 w-3.5" />
+                    </Button>
                   </div>
                 </div>
               </div>

@@ -1035,7 +1035,7 @@ Font feel: ${concept.fontSuggestion ?? "not specified"}`;
   health: router({
     status: publicProcedure.query(async () => {
       const health = await checkHealth();
-      return { ...health, buildCommit: "dismiss-panel-v2", buildPipelineMd5: "0157efae829462802fe5875569a0a645" };
+      return { ...health, buildCommit: "dismiss-version-cards-v1", buildPipelineMd5: "0157efae829462802fe5875569a0a645" };
     }),
 
     healingLog: protectedProcedure
