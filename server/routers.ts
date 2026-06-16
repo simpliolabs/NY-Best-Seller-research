@@ -998,6 +998,33 @@ Font feel: ${concept.fontSuggestion ?? "not specified"}`;
         return { success: true, message: "Version restored." };
       }),
 
+    /** Dismiss the CURRENT LIVE DESIGN only (generation-level). Snapshots the live design into
+     *  history (if not already there), then marks that revision row as dismissed with tags.
+     *  The concept itself stays active — only this specific design is dismissed. */
+    dismissCurrentDesign: protectedProcedure
+      .input(z.object({
+        conceptId: z.number(),
+        tags: z.array(z.string().min(1).max(40)).max(8).default([]),
+      }))
+      .mutation(async ({ input }) => {
+        const concept = await getConceptById(input.conceptId);
+        if (!concept) return { success: false, message: "Concept not found." };
+        if (!concept.imageUrlA) return { success: false, message: "No live design to dismiss." };
+
+        // Snapshot the current live design into history (dedupes if already there)
+        await snapshotGenerationToHistory(input.conceptId, concept.imageUrlA, concept.style);
+
+        // Find the revision row for this URL and dismiss it
+        const hist = await getRevisionsByConceptVariation(input.conceptId, HISTORY_KEY);
+        const targetRow = hist.find((r) => r.resultImageUrl === concept.imageUrlA);
+        if (targetRow) {
+          const { dismissGeneration } = await import("./revisionDb");
+          await dismissGeneration(targetRow.id, input.tags);
+        }
+
+        return { success: true, message: "Design dismissed — concept stays active, style signal recorded." };
+      }),
+
     exportProduction: protectedProcedure
       .input(z.object({
         conceptId: z.number(),

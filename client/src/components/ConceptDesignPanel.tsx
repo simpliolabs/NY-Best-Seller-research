@@ -75,16 +75,31 @@ export function ConceptDesignPanel({
   const utils = trpc.useUtils();
 
   // ─── Dismiss state ──────────────────────────────────────────────────────────
-  const [showDismissChips, setShowDismissChips] = useState(false);
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [showDesignDismissChips, setShowDesignDismissChips] = useState(false);
+  const [showConceptDismissChips, setShowConceptDismissChips] = useState(false);
+  const [designTags, setDesignTags] = useState<string[]>([]);
+  const [conceptTags, setConceptTags] = useState<string[]>([]);
   const isDismissed = !!dismissedAt;
 
-  // Concept-level dismiss (for the live design)
-  const dismissMutation = trpc.concepts.dismiss.useMutation({
+  // Design-level dismiss (current live design only — concept stays active)
+  const dismissDesignMutation = trpc.concepts.dismissCurrentDesign.useMutation({
+    onSuccess: (data) => {
+      toast.success(data.message || "Design dismissed — concept stays active.");
+      setShowDesignDismissChips(false);
+      setDesignTags([]);
+      utils.books.getById.invalidate();
+      utils.library.list.invalidate();
+      utils.concepts.getGenerationHistory.invalidate({ conceptId });
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  // Concept-level dismiss (entire concept removed from active views)
+  const dismissConceptMutation = trpc.concepts.dismiss.useMutation({
     onSuccess: () => {
-      toast.success("Design dismissed — it won't appear in future scans.");
-      setShowDismissChips(false);
-      setSelectedTags([]);
+      toast.success("Concept dismissed — removed from active views.");
+      setShowConceptDismissChips(false);
+      setConceptTags([]);
       utils.books.getById.invalidate();
       utils.library.list.invalidate();
       utils.reports.getLatest.invalidate();
@@ -94,7 +109,7 @@ export function ConceptDesignPanel({
 
   const undismissMutation = trpc.concepts.undismiss.useMutation({
     onSuccess: () => {
-      toast.success("Design restored to active winners.");
+      toast.success("Concept restored to active winners.");
       utils.books.getById.invalidate();
       utils.library.list.invalidate();
       utils.reports.getLatest.invalidate();
@@ -130,8 +145,14 @@ export function ConceptDesignPanel({
     );
   };
 
-  const toggleTag = (key: string) => {
-    setSelectedTags((prev) =>
+  const toggleDesignTag = (key: string) => {
+    setDesignTags((prev) =>
+      prev.includes(key) ? prev.filter((t) => t !== key) : [...prev, key]
+    );
+  };
+
+  const toggleConceptTag = (key: string) => {
+    setConceptTags((prev) =>
       prev.includes(key) ? prev.filter((t) => t !== key) : [...prev, key]
     );
   };
@@ -316,15 +337,26 @@ export function ConceptDesignPanel({
               Push to Shopify
             </Button>
             {!isDismissed ? (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 text-xs gap-1.5 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
-                onClick={() => setShowDismissChips(true)}
-              >
-                <XCircle className="h-3.5 w-3.5" />
-                Dismiss
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs gap-1.5 text-amber-600 hover:text-amber-700 hover:bg-amber-50 border-amber-200"
+                  onClick={() => { setShowDesignDismissChips(true); setShowConceptDismissChips(false); }}
+                >
+                  <XCircle className="h-3.5 w-3.5" />
+                  Dismiss Design
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs gap-1.5 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
+                  onClick={() => { setShowConceptDismissChips(true); setShowDesignDismissChips(false); }}
+                >
+                  <XCircle className="h-3.5 w-3.5" />
+                  Dismiss Concept
+                </Button>
+              </>
             ) : (
               <Button
                 variant="outline"
@@ -339,17 +371,61 @@ export function ConceptDesignPanel({
             )}
           </div>
 
-          {/* Dismiss reason chips */}
-          {showDismissChips && (
-            <div className="mt-3 p-3 rounded-lg border border-red-200 bg-red-50/50 space-y-2">
-              <p className="text-xs font-medium text-red-800">Why dismiss this design?</p>
+          {/* Dismiss DESIGN reason chips (generation-level) */}
+          {showDesignDismissChips && (
+            <div className="mt-3 p-3 rounded-lg border border-amber-200 bg-amber-50/50 space-y-2">
+              <p className="text-xs font-medium text-amber-800">Why dismiss this design?</p>
               <div className="flex flex-wrap gap-1.5">
                 {DISMISS_TAGS.map((tag) => (
                   <button
                     key={tag.key}
-                    onClick={() => toggleTag(tag.key)}
+                    onClick={() => toggleDesignTag(tag.key)}
                     className={`px-2 py-1 rounded-full text-[11px] font-medium border transition-colors ${
-                      selectedTags.includes(tag.key)
+                      designTags.includes(tag.key)
+                        ? "bg-amber-600 text-white border-amber-600"
+                        : "bg-white text-amber-700 border-amber-200 hover:border-amber-400"
+                    }`}
+                  >
+                    {tag.label}
+                  </button>
+                ))}
+              </div>
+              <div className="flex gap-2 pt-1">
+                <Button
+                  size="sm"
+                  className="h-7 text-xs bg-amber-600 hover:bg-amber-700 text-white"
+                  disabled={designTags.length === 0 || dismissDesignMutation.isPending}
+                  onClick={() => dismissDesignMutation.mutate({ conceptId, tags: designTags })}
+                >
+                  {dismissDesignMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+                  Confirm dismiss design
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-xs"
+                  onClick={() => { setShowDesignDismissChips(false); setDesignTags([]); }}
+                >
+                  Cancel
+                </Button>
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                Dismisses only this design image — the concept stays active and you can regenerate a new one.
+              </p>
+            </div>
+          )}
+
+          {/* Dismiss CONCEPT reason chips (concept-level) */}
+          {showConceptDismissChips && (
+            <div className="mt-3 p-3 rounded-lg border border-red-200 bg-red-50/50 space-y-2">
+              <p className="text-xs font-medium text-red-800">Why dismiss this entire concept?</p>
+              <div className="flex flex-wrap gap-1.5">
+                {DISMISS_TAGS.map((tag) => (
+                  <button
+                    key={tag.key}
+                    onClick={() => toggleConceptTag(tag.key)}
+                    className={`px-2 py-1 rounded-full text-[11px] font-medium border transition-colors ${
+                      conceptTags.includes(tag.key)
                         ? "bg-red-600 text-white border-red-600"
                         : "bg-white text-red-700 border-red-200 hover:border-red-400"
                     }`}
@@ -363,23 +439,23 @@ export function ConceptDesignPanel({
                   size="sm"
                   variant="destructive"
                   className="h-7 text-xs"
-                  disabled={selectedTags.length === 0 || dismissMutation.isPending}
-                  onClick={() => dismissMutation.mutate({ conceptId, tags: selectedTags })}
+                  disabled={conceptTags.length === 0 || dismissConceptMutation.isPending}
+                  onClick={() => dismissConceptMutation.mutate({ conceptId, tags: conceptTags })}
                 >
-                  {dismissMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
-                  Confirm dismiss
+                  {dismissConceptMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+                  Confirm dismiss concept
                 </Button>
                 <Button
                   size="sm"
                   variant="ghost"
                   className="h-7 text-xs"
-                  onClick={() => { setShowDismissChips(false); setSelectedTags([]); }}
+                  onClick={() => { setShowConceptDismissChips(false); setConceptTags([]); }}
                 >
                   Cancel
                 </Button>
               </div>
               <p className="text-[10px] text-muted-foreground">
-                Dismiss removes this design from your winners AND teaches the next scan to avoid it — just like the Niche Hunter.
+                Removes the entire concept from active views AND teaches the next scan to avoid it.
               </p>
             </div>
           )}
