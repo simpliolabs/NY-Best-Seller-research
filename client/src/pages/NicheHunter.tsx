@@ -16,6 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogFooter,
+  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -355,31 +356,45 @@ function PatternCard({
             )}
             {/* Primary: transparent production design on checkerboard */}
             {pattern.productionDesignUrl ? (
-              <div
-                className="rounded-md overflow-hidden border border-border w-full"
-                style={{
-                  backgroundImage: 'linear-gradient(45deg, #e0e0e0 25%, transparent 25%), linear-gradient(-45deg, #e0e0e0 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e0e0e0 75%), linear-gradient(-45deg, transparent 75%, #e0e0e0 75%)',
-                  backgroundSize: '16px 16px',
-                  backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0px',
-                  backgroundColor: '#f5f5f5',
-                }}
-              >
-                <img
-                  src={pattern.productionDesignUrl}
-                  alt={pattern.patternName}
-                  className="w-full h-auto block"
-                  style={{ display: 'block', width: '100%', height: 'auto' }}
-                />
-              </div>
+              <Dialog>
+                <DialogTrigger asChild>
+                  <div
+                    className="rounded-md overflow-hidden border border-border w-full cursor-zoom-in"
+                    style={{
+                      backgroundImage: 'linear-gradient(45deg, #e0e0e0 25%, transparent 25%), linear-gradient(-45deg, #e0e0e0 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e0e0e0 75%), linear-gradient(-45deg, transparent 75%, #e0e0e0 75%)',
+                      backgroundSize: '16px 16px',
+                      backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0px',
+                      backgroundColor: '#f5f5f5',
+                    }}
+                  >
+                    <img
+                      src={pattern.productionDesignUrl}
+                      alt={pattern.patternName}
+                      className="w-full h-auto block"
+                      style={{ display: 'block', width: '100%', height: 'auto' }}
+                    />
+                  </div>
+                </DialogTrigger>
+                <DialogContent className="max-w-4xl p-2 bg-card">
+                  <img src={pattern.productionDesignUrl} alt={pattern.patternName} className="w-full rounded-lg" />
+                </DialogContent>
+              </Dialog>
             ) : (
-              <div className="rounded-md overflow-hidden border border-border bg-muted w-full">
-                <img
-                  src={pattern.previewImageUrl!}
-                  alt={pattern.patternName}
-                  className="w-full h-auto block"
-                  style={{ display: 'block', width: '100%', height: 'auto' }}
-                />
-              </div>
+              <Dialog>
+                <DialogTrigger asChild>
+                  <div className="rounded-md overflow-hidden border border-border bg-muted w-full cursor-zoom-in">
+                    <img
+                      src={pattern.previewImageUrl!}
+                      alt={pattern.patternName}
+                      className="w-full h-auto block"
+                      style={{ display: 'block', width: '100%', height: 'auto' }}
+                    />
+                  </div>
+                </DialogTrigger>
+                <DialogContent className="max-w-4xl p-2 bg-card">
+                  <img src={pattern.previewImageUrl!} alt={pattern.patternName} className="w-full rounded-lg" />
+                </DialogContent>
+              </Dialog>
             )}
             {/* On-Tee Preview thumbnail removed per PO 2026-06-08 — not needed.
                 Per-shirt previews live on the Mockups page; the niche-hunter card

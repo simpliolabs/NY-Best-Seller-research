@@ -24,10 +24,15 @@ import {
 } from "@/components/ui/dialog";
 import { PrintZoneEditor } from "@/components/PrintZoneEditor";
 import type { PrintZoneCoords } from "@/components/PrintZoneEditor";
+import { MockupLightbox } from "@/components/MockupLightbox";
 import { toast } from "sonner";
+import { Input } from "@/components/ui/input";
 import { Loader2, Image as ImageIcon, Shirt, RefreshCw, Trash2, AlertTriangle, Move, Check, X } from "lucide-react";
 
+
 export default function Mockups() {
+  const [zoomMockupUrl, setZoomMockupUrl] = useState<string | null>(null);
+  const [conceptSearch, setConceptSearch] = useState("");
   const { activeWorkspace } = useWorkspace();
   const workspaceId = activeWorkspace?.id ?? "";
 
@@ -115,13 +120,23 @@ export default function Mockups() {
   const setPlacement = trpc.mockup.setConceptPlacement.useMutation();
   const utils = trpc.useUtils();
 
-  // Filter concepts that have at least one image
   const conceptsWithImages = useMemo(() => {
     if (!conceptsQuery.data?.concepts) return [];
     return conceptsQuery.data.concepts.filter(
       (c) => c.imageUrlA || c.imageUrlB || c.imageUrlC
     );
   }, [conceptsQuery.data]);
+
+  // Filtered concepts for search box
+  const filteredConcepts = useMemo(() => {
+    const q = conceptSearch.trim().toLowerCase();
+    if (!q) return conceptsWithImages;
+    return conceptsWithImages.filter((c) =>
+      (c.conceptName ?? "").toLowerCase().includes(q) ||
+      ((c as any).signal ?? "").toString().toLowerCase().includes(q) ||
+      ((c as any).style ?? "").toString().toLowerCase().includes(q)
+    );
+  }, [conceptsWithImages, conceptSearch]);
 
   // Sync URL param once concepts load
   useEffect(() => {
@@ -185,12 +200,18 @@ export default function Mockups() {
               <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                 Concept
               </label>
+              <Input
+                value={conceptSearch}
+                onChange={(e) => setConceptSearch(e.target.value)}
+                placeholder="Search concepts…"
+                className="mb-1.5 h-8 text-sm"
+              />
               <Select value={selectedConceptId} onValueChange={(v) => { setSelectedConceptId(v); setSelectedVariation(""); }}>
                 <SelectTrigger className="w-full">
                   <SelectValue placeholder="Select concept…" className="truncate" />
                 </SelectTrigger>
                 <SelectContent>
-                  {conceptsWithImages.map((c) => (
+                  {filteredConcepts.map((c) => (
                     <SelectItem key={c.id} value={String(c.id)}>
                       {c.conceptName}
                     </SelectItem>
@@ -380,8 +401,9 @@ export default function Mockups() {
                   <img
                     src={mockup.compositeUrl}
                     alt={`Mockup ${mockup.variationKey}`}
-                    className="w-full aspect-square object-contain"
+                    className="w-full aspect-square object-contain cursor-zoom-in"
                     loading="lazy"
+                    onClick={() => setZoomMockupUrl(mockup.compositeUrl)}
                   />
                   <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/60 to-transparent p-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-between">
                     <span className="text-xs text-white font-medium">
@@ -482,6 +504,7 @@ export default function Mockups() {
           )}
         </DialogContent>
       </Dialog>
+      <MockupLightbox src={zoomMockupUrl} onClose={() => setZoomMockupUrl(null)} />
     </div>
   );
 }

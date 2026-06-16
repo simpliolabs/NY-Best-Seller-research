@@ -24,6 +24,11 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  Dialog,
+  DialogContent,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 
 interface RevisionPanelProps {
   conceptId: number;
@@ -154,13 +159,20 @@ export function RevisionPanel({
               <Badge className="text-xs bg-green-100 text-green-800">Current</Badge>
             )}
           </div>
-          <div className="relative aspect-square rounded-lg border overflow-hidden bg-muted/30">
-            <img
-              src={originalImageUrl}
-              alt={`${conceptName} — Original ${variationKey}`}
-              className="w-full h-full object-contain"
-            />
-          </div>
+          <Dialog>
+            <DialogTrigger asChild>
+              <div className="relative aspect-square rounded-lg border overflow-hidden bg-muted/30 cursor-zoom-in">
+                <img
+                  src={originalImageUrl}
+                  alt={`${conceptName} — Original ${variationKey}`}
+                  className="w-full h-full object-contain"
+                />
+              </div>
+            </DialogTrigger>
+            <DialogContent className="max-w-4xl p-2 bg-card">
+              <img src={originalImageUrl} alt={`${conceptName} — Original ${variationKey}`} className="w-full rounded-lg" />
+            </DialogContent>
+          </Dialog>
         </div>
 
         {/* Latest revision (or placeholder) */}
@@ -181,11 +193,18 @@ export function RevisionPanel({
           </div>
           <div className="relative aspect-square rounded-lg border overflow-hidden bg-muted/30">
             {latestRevision ? (
-              <img
-                src={latestRevision.resultImageUrl}
-                alt={`${conceptName} — Revision ${latestRevision.iterationNumber}`}
-                className="w-full h-full object-contain"
-              />
+              <Dialog>
+                <DialogTrigger asChild>
+                  <img
+                    src={latestRevision.resultImageUrl}
+                    alt={`${conceptName} — Revision ${latestRevision.iterationNumber}`}
+                    className="w-full h-full object-contain cursor-zoom-in"
+                  />
+                </DialogTrigger>
+                <DialogContent className="max-w-4xl p-2 bg-card">
+                  <img src={latestRevision.resultImageUrl} alt={`${conceptName} — Revision ${latestRevision.iterationNumber}`} className="w-full rounded-lg" />
+                </DialogContent>
+              </Dialog>
             ) : (
               <div className="w-full h-full flex items-center justify-center text-muted-foreground">
                 <div className="text-center space-y-2">

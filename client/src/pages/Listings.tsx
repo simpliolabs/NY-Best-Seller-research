@@ -19,6 +19,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Store,
   Plus,
   Trash2,
@@ -30,6 +36,7 @@ import {
   DollarSign,
   Upload,
   ExternalLink,
+  Eye,
 } from "lucide-react";
 
 export default function Listings() {
@@ -38,6 +45,7 @@ export default function Listings() {
   const utils = trpc.useUtils();
 
   // ─── Create form state ─────────────────────────────────────────────
+  const [conceptSearch, setConceptSearch] = useState("");
   const [selectedConceptId, setSelectedConceptId] = useState<string>("");
   const [selectedGroupId, setSelectedGroupId] = useState<string>("");
   const [selectedMockups, setSelectedMockups] = useState<string[]>([]);
@@ -131,6 +139,16 @@ export default function Listings() {
     );
   }, [conceptsQuery.data]);
 
+  const filteredConcepts = useMemo(() => {
+    const q = conceptSearch.trim().toLowerCase();
+    if (!q) return conceptsWithImages;
+    return conceptsWithImages.filter((c) =>
+      (c.conceptName ?? "").toLowerCase().includes(q) ||
+      ((c as any).signal ?? "").toString().toLowerCase().includes(q) ||
+      ((c as any).style ?? "").toString().toLowerCase().includes(q)
+    );
+  }, [conceptsWithImages, conceptSearch]);
+
   function resetForm() {
     setSelectedConceptId("");
     setSelectedGroupId("");
@@ -214,12 +232,18 @@ export default function Listings() {
                 <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                   Concept
                 </label>
+                <Input
+                  value={conceptSearch}
+                  onChange={(e) => setConceptSearch(e.target.value)}
+                  placeholder="Search concepts…"
+                  className="mb-1.5 h-8 text-sm"
+                />
                 <Select value={selectedConceptId} onValueChange={(v) => { setSelectedConceptId(v); setSelectedMockups([]); }}>
                   <SelectTrigger>
                     <SelectValue placeholder="Select concept…" />
                   </SelectTrigger>
                   <SelectContent>
-                    {conceptsWithImages.map((c) => (
+                    {filteredConcepts.map((c) => (
                       <SelectItem key={c.id} value={String(c.id)}>
                         {c.conceptName}
                       </SelectItem>
@@ -414,6 +438,24 @@ function ListingCard({
 
   const mockupCount = Array.isArray(listing.mockupRenderIds) ? listing.mockupRenderIds.length : 0;
 
+  // Preview modal state + gated queries
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const renderIds = Array.isArray(listing.mockupRenderIds) ? listing.mockupRenderIds : [];
+  const previewMockups = trpc.mockup.getMockups.useQuery(
+    { conceptId: listing.conceptId },
+    { enabled: previewOpen }
+  );
+  const previewConcept = trpc.concepts.getById.useQuery(
+    { conceptId: listing.conceptId },
+    { enabled: previewOpen }
+  );
+  const selectedRenders = (previewMockups.data ?? []).filter((r: any) => renderIds.includes(r.id));
+  const designImg =
+    previewConcept.data?.imageUrlA ||
+    previewConcept.data?.imageUrlB ||
+    previewConcept.data?.imageUrlC ||
+    null;
+
   return (
     <Card className="overflow-hidden">
       <CardContent className="p-4 space-y-3">
@@ -466,6 +508,17 @@ function ListingCard({
 
         {/* Actions */}
         <div className="flex items-center gap-2 pt-1">
+          {/* Preview button — all statuses */}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setPreviewOpen(true)}
+            className="text-xs"
+            title="Preview listing details"
+          >
+            <Eye className="h-3 w-3 mr-1" />
+            Preview
+          </Button>
           {!listing.description && listing.status === "draft" && (
             <>
               <Button
@@ -535,6 +588,72 @@ function ListingCard({
             <Trash2 className="h-3 w-3" />
           </Button>
         </div>
+        {/* Preview Dialog */}
+        <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                {listing.title}
+                <Badge className={`text-[10px] ml-1 ${statusColors[listing.status] ?? ""}`}>{listing.status}</Badge>
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 pt-2">
+              {/* Price */}
+              <p className="text-sm text-muted-foreground flex items-center gap-1">
+                <DollarSign className="h-4 w-4" />
+                {listing.price}
+              </p>
+              {/* Design image */}
+              {designImg && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">Design</p>
+                  <img src={designImg} alt={listing.title} className="max-h-48 object-contain rounded border" />
+                </div>
+              )}
+              {/* Selected mockups */}
+              {selectedRenders.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">Mockups ({selectedRenders.length})</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    {selectedRenders.map((r: any) => (
+                      <img key={r.id} src={r.compositeUrl} alt={`Mockup ${r.variationKey}`} className="w-full aspect-square object-contain rounded border" />
+                    ))}
+                  </div>
+                </div>
+              )}
+              {/* Description */}
+              {listing.description && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">Description</p>
+                  <p className="text-sm">{listing.description}</p>
+                </div>
+              )}
+              {/* Tags */}
+              {listing.tags && listing.tags.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">Tags ({listing.tags.length})</p>
+                  <div className="flex flex-wrap gap-1">
+                    {listing.tags.map((tag: string, i: number) => (
+                      <span key={i} className="text-[10px] bg-muted px-1.5 py-0.5 rounded">{tag}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {/* In-modal Publish for ready listings */}
+              {listing.status === "ready" && (
+                <Button
+                  onClick={() => { onPublish(); setPreviewOpen(false); }}
+                  disabled={isPublishing || !isShopifyConnected}
+                  title={!isShopifyConnected ? "Connect your Shopify store in Workspace Settings first" : "Publish to Shopify as draft product"}
+                  className="w-full bg-green-600 hover:bg-green-700 text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {isPublishing ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Upload className="h-4 w-4 mr-2" />}
+                  Publish to Shopify
+                </Button>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
       </CardContent>
     </Card>
   );
