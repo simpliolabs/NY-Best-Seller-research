@@ -61,18 +61,23 @@ Keep EVERYTHING ELSE pixel-for-pixel identical to the attached image:
 Do NOT redraw, restyle, recolour, resize, reposition, or add/remove ANYTHING the instruction did not explicitly name. Change only what the instruction asks; leave all else exactly as in the attached image.`;
   }
 
-  // Non-square (canvas-changing) revision — extend the canvas to the requested aspect, fill the new
-  // space consistent with the existing artwork, and preserve the existing subject + text faithfully.
-  return `You are extending the attached design image into a NEW ${aspect} canvas. Apply this change exactly as written:
+  // Non-square (canvas-changing) revision — the ONLY thing changing is the CANVAS dimensions. The
+  // artwork itself is preserved pixel-for-pixel, same as the 1:1 surgical branch. The aspect change
+  // is never licence to redraw, restyle, or "reinterpret" any existing element. Without this strong
+  // universal-preservation clause, the PO has to manually append "keep all elements the same besides
+  // that" to every non-square revision (PO 2026-06-16).
+  return `You are making a SURGICAL canvas change to the attached design image. The ONLY change is the canvas aspect — everything else is preserved pixel-for-pixel. Apply this change, exactly as written, and nothing more:
 
 "${instruction}"
 
-Rules:
-- Keep the existing SUBJECT, TEXT, and STYLE pixel-faithful — every letter at the same font, weight, and colour; the character/illustration identical in pose, proportions, and palette.
-- Extend the BACKGROUND into the new aspect consistently with what is already there (same stripes, colours, pattern, texture). New background space must look like a natural continuation of the existing background — not a different style.
-- Do NOT crop or cut off any existing element. Reposition the subject within the new canvas if needed so nothing is clipped.
-- Do NOT restyle, recolour, or simplify any existing element. Only fill the new canvas space.
-- Final output canvas: ${aspect}. Transparent background where the existing design is transparent.`;
+The new canvas is ${aspect}. Keep EVERYTHING in the attached image pixel-for-pixel identical:
+- every existing element (subject, character, illustration, text, decoration, background pattern) at the SAME size, position, pose, proportions, font, weight, colour, and palette as the attached image — do NOT redraw, restyle, recolour, resize, reposition, simplify, or reinterpret any of it;
+- every letter and word exactly as written, never cropped, never resized;
+- the existing background art (stripes, colours, pattern, texture) unchanged where it already exists.
+
+The ONLY new pixels you may paint are in the EXTRA canvas space created by the new aspect ratio, and those new pixels must be a seamless continuation of the existing background (same stripes, colours, pattern, texture) — never a different style, never new subjects or decorations the instruction did not explicitly name. Do NOT crop or cut off any existing element; reposition the existing artwork within the new canvas only as needed so nothing is clipped. Transparent background where the existing design is transparent.
+
+Do NOT add, remove, redraw, or change ANYTHING the instruction did not explicitly name. Change only the canvas; leave all artwork exactly as in the attached image.`;
 }
 
 /** Generate a design revision using GPT Image with the original as reference */
@@ -137,9 +142,31 @@ export async function generateRevision(
       .png()
       .toBuffer();
   } else {
-    // Non-square: pass the reference as-is. gpt-image-1 will render at targetSize and the prompt
-    // tells it to extend the existing artwork into the new canvas.
-    refPng = await sharp(refRaw).ensureAlpha().png().toBuffer();
+    // PAD-TO-TARGET-ASPECT (PO 2026-06-16, bug fix on the 9:16 YEE HAW miss): the previous version
+    // passed the square reference AS-IS and asked gpt-image-1 for a 1024x1536 / 1536x1024 output. The
+    // canvas mismatch let the model recompose — it redrew the llama larger, clipped YEE HAW, dropped
+    // the sparkle. Mirror the 1:1 trick instead: contain-fit the reference into the target dimensions
+    // and pad the remainder with TRANSPARENT margins so the existing pixels physically stay put. The
+    // model can ONLY paint into the transparent space (the new canvas room created by the aspect).
+    const refMeta = await sharp(refRaw).metadata();
+    const sw = refMeta.width ?? 0, sh = refMeta.height ?? 0;
+    if (!sw || !sh) throw new Error("reference image has no dimensions");
+    const [tw, th] = targetSize === "1024x1536" ? [1024, 1536] : [1536, 1024];
+    const scale = Math.min(tw / sw, th / sh);
+    const rw = Math.round(sw * scale), rh = Math.round(sh * scale);
+    const padX = tw - rw, padY = th - rh;
+    refPng = await sharp(refRaw)
+      .ensureAlpha()
+      .resize(rw, rh, { fit: "fill" })
+      .extend({
+        top: Math.floor(padY / 2),
+        bottom: Math.ceil(padY / 2),
+        left: Math.floor(padX / 2),
+        right: Math.ceil(padX / 2),
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      })
+      .png()
+      .toBuffer();
   }
   const edited = await callImageEdit(refPng, "design.png", prompt, {
     transparent: true, // The reference design is a TRANSPARENT png. Ask gpt-image-1 for a transparent

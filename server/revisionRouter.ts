@@ -117,15 +117,19 @@ export const revisionRouter = router({
         });
       }
 
-      // Check if there are existing revisions — use the latest revision's image as reference
+      // CHAIN-ANCHOR (PO 2026-06-16): chain only off ACCEPTED revisions. Anything unaccepted is a
+      // discarded experiment — the next submit goes back to the canonical original (imageUrlA). This
+      // matches the user's mental model: "if I don't Accept, it doesn't count" — and stops the drift
+      // cascade where one bad output poisons every subsequent edit. Pre-aspect-picker, this code
+      // chained off the latest revision regardless of accepted state.
       const existingRevisions = await getRevisionsByConceptVariation(
         input.conceptId,
         input.variationKey
       );
-      const actualReference =
-        existingRevisions.length > 0
-          ? existingRevisions[0].resultImageUrl
-          : referenceImageUrl;
+      const acceptedRevision = existingRevisions.find((r) => r.accepted);
+      const actualReference = acceptedRevision
+        ? acceptedRevision.resultImageUrl
+        : referenceImageUrl;
 
       const result = await generateRevision(
         input.conceptId,
@@ -174,14 +178,15 @@ export const revisionRouter = router({
           message: `No image exists for variation ${input.variationKey}`,
         });
       }
+      // CHAIN-ANCHOR (PO 2026-06-16): same accepted-only rule as submitRevision above.
       const existingRevisions = await getRevisionsByConceptVariation(
         input.conceptId,
         input.variationKey
       );
-      const actualReference =
-        existingRevisions.length > 0
-          ? existingRevisions[0].resultImageUrl
-          : referenceImageUrl;
+      const acceptedRevision = existingRevisions.find((r) => r.accepted);
+      const actualReference = acceptedRevision
+        ? acceptedRevision.resultImageUrl
+        : referenceImageUrl;
 
       const result = await trimAndCleanRevision(
         input.conceptId,
