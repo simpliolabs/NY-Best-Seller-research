@@ -517,7 +517,7 @@ async function trimToContent(imageBuf: Buffer): Promise<Buffer> {
  *  effect is consistent across shirts — a smooth flat-lay's faint folds get boosted to a visible
  *  range and a heavily-wrinkled shirt's strong folds get compressed, instead of the effect riding
  *  the raw fabric (which made it invisible on smooth product mockups). */
-const FABRIC_WARP_STRENGTH = 0.35;
+const FABRIC_WARP_STRENGTH = 0.18; // dropped 0.35 -> 0.18 (PO 2026-06-16): clean designs were rendering visibly distressed/faded on shirts (YEE HAW llama). Lower strength = print reads clean; still sinks subtly into broad folds.
 const WARP_GAIN = 6.0;    // shading gain on the NORMALIZED fold detail
 const WARP_AMP = 45;      // max displacement (px) at strength 1.0 (follows broad folds)
 const WARP_TARGET = 18;   // local-contrast normalization target (RMS of fold detail, 0-255)
@@ -577,7 +577,7 @@ export async function warpDesignOntoFabric(
         if (a <= 0.01) continue;
         const detail = (at(gray, sx, sy) - at(low, sx, sy)) * norm;
         let shade = 1 + strength * WARP_GAIN * (detail / 255);
-        shade = Math.max(0.2, Math.min(1.85, shade));
+        shade = Math.max(0.78, Math.min(1.18, shade)); // tightened from [0.2, 1.85] (PO 2026-06-16): caps how dark/light any pixel can swing, so folds shade gently instead of bleaching/dirtying the print
         const o = (sy * W + sx) * CH;
         for (let c = 0; c < 3; c++) {
           const v = Math.max(0, Math.min(255, design[k + c] * shade));
