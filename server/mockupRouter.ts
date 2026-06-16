@@ -65,7 +65,11 @@ export const mockupRouter = router({
       // is content-cropped + centered, so it fills the print zone correctly. processDesignForProduction
       // caches its result to productionUrl* (updateConceptProductionUrl), so this runs at most once
       // per variation; on failure we fall back to the raw image (degraded, but never blocks).
-      let designUrl: string | null | undefined = concept[productionUrlKey];
+      // Manual uploads (PO 2026-06-15 bug #1): always RE-DERIVE locally — never trust a cached
+      // productionUrl the old AI-regen path may have filled with regenerated/wrong art, and never
+      // re-run the gpt-image-2 regen. This self-heals manual designs broken by the prior path.
+      const isManual = concept.format === "Manual";
+      let designUrl: string | null | undefined = isManual ? null : concept[productionUrlKey];
       let isProductionReady = !!designUrl;
       if (designUrl) {
         console.log(`[Mockup] Using production (transparent) URL for concept ${input.conceptId} variation ${input.variationKey}`);
@@ -76,8 +80,8 @@ export const mockupRouter = router({
         }
         try {
           const promptDesc = concept[imagePromptKey] || `${concept.conceptName || "design"} in ${concept.style || "graphic tee"} style`;
-          console.log(`[Mockup] No productionUrl${input.variationKey} for concept ${input.conceptId} — auto-processing the raw design into a clean transparent cutout…`);
-          designUrl = await processDesignForProduction(rawUrl, input.conceptId, input.variationKey, promptDesc);
+          console.log(`[Mockup] ${isManual ? "Manual upload" : `No productionUrl${input.variationKey}`} for concept ${input.conceptId} — processing the design into a clean transparent cutout…`);
+          designUrl = await processDesignForProduction(rawUrl, input.conceptId, input.variationKey, promptDesc, isManual);
           isProductionReady = true;
           console.log(`[Mockup] Auto-process complete → ${designUrl}`);
         } catch (err) {
@@ -143,6 +147,7 @@ export const mockupRouter = router({
       // the group's per-colour calibration — it's scoped to THIS concept and never mutates the group.
       const conceptPlacement = (concept.printPlacements as Record<string, { x: number; y: number; width: number; height: number }> | null)?.[input.productGroupId] ?? null;
       const renders = [];
+      let failedCount = 0;
       for (const template of templates) {
         try {
           // Concept placement > per-template box > group zone > DEFAULT (resolvePrintZone is total).
@@ -167,7 +172,9 @@ export const mockupRouter = router({
           });
           renders.push(render);
         } catch (err) {
-          // Log but continue — don't fail the whole batch for one template
+          // Log but continue — don't fail the whole batch for one template. Count it (PO 2026-06-15
+          // bug #1) so the UI can say "3 of 5 templates failed" instead of silently making fewer.
+          failedCount++;
           console.error(`[Mockup] Failed to composite template ${template.id}:`, err);
         }
       }
@@ -205,13 +212,13 @@ export const mockupRouter = router({
             ? qualityCheck.choices[0].message.content : "{}";
           const qa = JSON.parse(qaContent);
           // Attach QA result to response
-          return { success: true, mockupCount: renders.length, renders, qualityCheck: qa, usedDefaultZone: !hasGroupZone, productionReady: isProductionReady };
+          return { success: true, mockupCount: renders.length, renders, qualityCheck: qa, usedDefaultZone: !hasGroupZone, productionReady: isProductionReady, failedCount };
         } catch (qaErr) {
           console.warn("[Mockup QA] Vision check failed (non-blocking):", qaErr);
         }
       }
 
-      return { success: true, mockupCount: renders.length, renders, qualityCheck: null, usedDefaultZone: !hasGroupZone, productionReady: isProductionReady };
+      return { success: true, mockupCount: renders.length, renders, qualityCheck: null, usedDefaultZone: !hasGroupZone, productionReady: isProductionReady, failedCount };
     }),
 
   /** Get all mockup renders for a concept (all variations) */

@@ -157,7 +157,8 @@ export async function processDesignForProduction(
   imageUrl: string,
   conceptId: number,
   variation: "A" | "B" | "C",
-  promptDescription?: string
+  promptDescription?: string,
+  isManual = false,
 ): Promise<string> {
   console.log(`[ProdProcessor v2] Processing concept ${conceptId} variation ${variation}...`);
 
@@ -186,6 +187,14 @@ export async function processDesignForProduction(
     // Already transparent — just crop to content bounds
     console.log(`[ProdProcessor v2] Image already transparent (${(transparentRatio * 100).toFixed(1)}%), cropping only`);
     transparentPng = await cropToContent(srcBuf);
+  } else if (isManual) {
+    // Manual upload (PO 2026-06-15 bug #1): a FINISHED user design on a literal background. Remove the
+    // bg LOCALLY (white → flood-fill, colored → AI-extraction fallback) — NEVER regenerate via
+    // gpt-image-2, which replaces the user's own art and throws without OPENAI_API_KEY (the upload errors).
+    console.log(`[ProdProcessor v2] Manual upload — local background removal, no AI regeneration`);
+    const { removeBackground } = await import("./mockupCompositor");
+    const removed = await removeBackground(srcBuf);
+    transparentPng = await cropToContent(removed);
   } else {
     // Generate standalone design on magenta BG, then chromakey
     const description = promptDescription || "the design shown in the reference image";
