@@ -510,7 +510,7 @@ export function ConceptCard({
         )}
 
         {/* Live design panel — single slot A + history strip */}
-        {!isDismissed && (showImages || (compact && expanded)) && displayUrlA && (
+        {(showImages || (compact && expanded)) && displayUrlA && (
           <ConceptDesignPanel
             conceptId={id}
             conceptName={conceptName}
@@ -519,6 +519,8 @@ export function ConceptCard({
             imageUrlA={imageUrlA ?? null}
             productionUrlA={productionUrlA ?? null}
             currentStyle={style}
+            dismissedAt={dismissedAt}
+            rejectionTags={rejectionTags}
           />
         )}
 

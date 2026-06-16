@@ -5,7 +5,7 @@ import { ImageLightbox } from "@/components/ImageLightbox";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { LayoutGrid, List, ChevronDown, ChevronRight, BookOpen, Zap, ExternalLink, Trash2, Paintbrush, Wand2, Shirt, Loader2, Upload, Pencil } from "lucide-react";
+import { LayoutGrid, List, ChevronDown, ChevronRight, BookOpen, Zap, ExternalLink, Trash2, Paintbrush, Wand2, Shirt, Loader2, Upload, Pencil, XCircle, Undo2 } from "lucide-react";
 import { Link } from "wouter";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { toast } from "sonner";
@@ -516,6 +516,24 @@ function ConceptCard({ concept, onOpenLightbox, onDeleted }: { concept: any; onO
     onError: (err: any) => toast.error(err.message),
   });
 
+  const dismissMutation = trpc.concepts.dismiss.useMutation({
+    onSuccess: () => {
+      toast.success("Design dismissed");
+      utils.library.list.invalidate();
+    },
+    onError: (err: any) => toast.error(err.message),
+  });
+
+  const undismissMutation = trpc.concepts.undismiss.useMutation({
+    onSuccess: () => {
+      toast.success("Design restored");
+      utils.library.list.invalidate();
+    },
+    onError: (err: any) => toast.error(err.message),
+  });
+
+  const isDismissed = !!concept.dismissedAt;
+
   return (
     <Card
       className="overflow-hidden group hover:shadow-lg transition-shadow cursor-pointer flex flex-col"
@@ -657,6 +675,33 @@ function ConceptCard({ concept, onOpenLightbox, onDeleted }: { concept: any; onO
                 title="Generate images for this concept"
               >
                 {generateImageMut.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
+              </button>
+            )}
+            {!isDismissed ? (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (confirm("Dismiss this design? It will be hidden from winners and teach the next scan to avoid it.")) {
+                    dismissMutation.mutate({ conceptId: concept.id, tags: ["too_generic"] });
+                  }
+                }}
+                disabled={dismissMutation.isPending}
+                className="p-1 rounded hover:bg-red-100 text-muted-foreground hover:text-red-600 transition-colors"
+                title="Dismiss design"
+              >
+                <XCircle className="h-3.5 w-3.5" />
+              </button>
+            ) : (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  undismissMutation.mutate({ conceptId: concept.id });
+                }}
+                disabled={undismissMutation.isPending}
+                className="p-1 rounded hover:bg-emerald-100 text-red-500 hover:text-emerald-600 transition-colors"
+                title="Undo dismiss"
+              >
+                <Undo2 className="h-3.5 w-3.5" />
               </button>
             )}
           </div>

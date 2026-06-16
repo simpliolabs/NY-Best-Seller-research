@@ -25,7 +25,21 @@ import {
   History,
   RotateCcw,
   Image as ImageIcon,
+  XCircle,
+  Undo2,
 } from "lucide-react";
+
+const DISMISS_TAGS = [
+  { key: "too_dark", label: "Too dark / heavy" },
+  { key: "too_similar", label: "Too similar to the others" },
+  { key: "wrong_style", label: "Wrong / cartoonish style" },
+  { key: "off_brand", label: "Off-brand / off-niche" },
+  { key: "weak_humor", label: "Weak hook / not funny" },
+  { key: "bad_colors", label: "Bad colors" },
+  { key: "too_generic", label: "Too generic" },
+  { key: "poor_composition", label: "Weak composition" },
+  { key: "bad_subject", label: "Weak subject" },
+] as const;
 
 interface ConceptDesignPanelProps {
   conceptId: number;
@@ -35,6 +49,8 @@ interface ConceptDesignPanelProps {
   imageUrlA: string | null;
   productionUrlA: string | null;
   currentStyle: string | null;
+  dismissedAt?: string | number | Date | null;
+  rejectionTags?: string[] | null;
 }
 
 export function ConceptDesignPanel({
@@ -45,6 +61,8 @@ export function ConceptDesignPanel({
   imageUrlA,
   productionUrlA,
   currentStyle,
+  dismissedAt,
+  rejectionTags,
 }: ConceptDesignPanelProps) {
   const { activeWorkspace } = useWorkspace();
   const slug = activeWorkspace?.slug ?? "";
@@ -55,6 +73,39 @@ export function ConceptDesignPanel({
   const [regenStyle, setRegenStyle] = useState(currentStyle || "Vintage/Distressed");
 
   const utils = trpc.useUtils();
+
+  // ─── Dismiss state ──────────────────────────────────────────────────────────
+  const [showDismissChips, setShowDismissChips] = useState(false);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const isDismissed = !!dismissedAt;
+
+  const dismissMutation = trpc.concepts.dismiss.useMutation({
+    onSuccess: () => {
+      toast.success("Design dismissed — it won't appear in future scans.");
+      setShowDismissChips(false);
+      setSelectedTags([]);
+      utils.books.getById.invalidate();
+      utils.library.list.invalidate();
+      utils.reports.getLatest.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const undismissMutation = trpc.concepts.undismiss.useMutation({
+    onSuccess: () => {
+      toast.success("Design restored to active winners.");
+      utils.books.getById.invalidate();
+      utils.library.list.invalidate();
+      utils.reports.getLatest.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const toggleTag = (key: string) => {
+    setSelectedTags((prev) =>
+      prev.includes(key) ? prev.filter((t) => t !== key) : [...prev, key]
+    );
+  };
 
   // ─── Mutations ───────────────────────────────────────────────────────────────
   const regenerateMutation = trpc.concepts.regenerateImage.useMutation({
@@ -231,7 +282,86 @@ export function ConceptDesignPanel({
               <ShoppingBag className="h-3.5 w-3.5" />
               Push to Shopify
             </Button>
+            {!isDismissed ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs gap-1.5 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
+                onClick={() => setShowDismissChips(true)}
+              >
+                <XCircle className="h-3.5 w-3.5" />
+                Dismiss
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs gap-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 border-emerald-200"
+                disabled={undismissMutation.isPending}
+                onClick={() => undismissMutation.mutate({ conceptId })}
+              >
+                <Undo2 className="h-3.5 w-3.5" />
+                Undo dismiss
+              </Button>
+            )}
           </div>
+
+          {/* Dismiss reason chips */}
+          {showDismissChips && (
+            <div className="mt-3 p-3 rounded-lg border border-red-200 bg-red-50/50 space-y-2">
+              <p className="text-xs font-medium text-red-800">Why dismiss this design?</p>
+              <div className="flex flex-wrap gap-1.5">
+                {DISMISS_TAGS.map((tag) => (
+                  <button
+                    key={tag.key}
+                    onClick={() => toggleTag(tag.key)}
+                    className={`px-2 py-1 rounded-full text-[11px] font-medium border transition-colors ${
+                      selectedTags.includes(tag.key)
+                        ? "bg-red-600 text-white border-red-600"
+                        : "bg-white text-red-700 border-red-200 hover:border-red-400"
+                    }`}
+                  >
+                    {tag.label}
+                  </button>
+                ))}
+              </div>
+              <div className="flex gap-2 pt-1">
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="h-7 text-xs"
+                  disabled={selectedTags.length === 0 || dismissMutation.isPending}
+                  onClick={() => dismissMutation.mutate({ conceptId, tags: selectedTags })}
+                >
+                  {dismissMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+                  Confirm dismiss
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-xs"
+                  onClick={() => { setShowDismissChips(false); setSelectedTags([]); }}
+                >
+                  Cancel
+                </Button>
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                Dismiss removes this design from your winners AND teaches the next scan to avoid it — just like the Niche Hunter.
+              </p>
+            </div>
+          )}
+
+          {/* Dismissed badge */}
+          {isDismissed && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <Badge variant="destructive" className="text-[10px]">Dismissed</Badge>
+              {rejectionTags?.map((tag) => (
+                <Badge key={tag} variant="outline" className="text-[10px] border-red-200 text-red-600">
+                  {DISMISS_TAGS.find((t) => t.key === tag)?.label || tag}
+                </Badge>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

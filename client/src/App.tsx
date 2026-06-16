@@ -1,5 +1,5 @@
 /** Build identity — forces unique bundle hash per deploy */
-export const __BUILD_VERSION__ = "54a0c3c-mockup-regen";
+export const __BUILD_VERSION__ = "dismiss-panel-v2";
 
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
