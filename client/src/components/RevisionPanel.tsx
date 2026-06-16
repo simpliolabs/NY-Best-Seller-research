@@ -44,6 +44,7 @@ export function RevisionPanel({
   conceptName,
 }: RevisionPanelProps) {
   const [instruction, setInstruction] = useState("");
+  const [aspectRatio, setAspectRatio] = useState<"1:1" | "3:4" | "4:3" | "9:16" | "16:9">("1:1");
   const [showHistory, setShowHistory] = useState(false);
 
   const utils = trpc.useUtils();
@@ -67,6 +68,7 @@ export function RevisionPanel({
     onSuccess: (data) => {
       toast.success("Revision generated!");
       setInstruction("");
+      setAspectRatio("1:1");
       utils.revision.getHistory.invalidate({ conceptId, variationKey });
     },
     onError: (err) => {
@@ -233,6 +235,35 @@ export function RevisionPanel({
         </div>
       </div>
 
+      {/* Aspect Ratio Picker */}
+      <div className="space-y-1.5">
+        <div className="flex flex-wrap gap-1.5">
+          {([
+            { value: "1:1" as const, label: "1:1 Square", icon: "\u25A1" },
+            { value: "3:4" as const, label: "3:4 Portrait", icon: "\u25AF" },
+            { value: "9:16" as const, label: "9:16 Tall", icon: "\u2503" },
+            { value: "4:3" as const, label: "4:3 Landscape", icon: "\u25AD" },
+            { value: "16:9" as const, label: "16:9 Wide", icon: "\u2501" },
+          ]).map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => setAspectRatio(opt.value)}
+              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+                aspectRatio === opt.value
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-secondary/50 text-muted-foreground border-border hover:bg-secondary"
+              }`}
+            >
+              <span className="text-sm leading-none">{opt.icon}</span>
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          Pick a non-square aspect to extend the canvas (e.g. &ldquo;add space at the top&rdquo;). 1:1 keeps surgical edits safe.
+        </p>
+      </div>
+
       {/* Revision instruction input */}
       <div className="space-y-2">
         <Textarea
@@ -249,6 +280,7 @@ export function RevisionPanel({
                 conceptId,
                 variationKey,
                 instruction,
+                aspectRatio,
               })
             }
             disabled={!instruction.trim() || submitMutation.isPending || trimAndCleanMutation.isPending}
