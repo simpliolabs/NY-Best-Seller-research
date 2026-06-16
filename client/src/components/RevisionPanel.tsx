@@ -264,6 +264,11 @@ export function RevisionPanel({
         </p>
       </div>
 
+      {/* Chain source banner */}
+      <div className="flex items-center gap-2 text-xs text-muted-foreground rounded-md border bg-muted/40 px-2 py-1.5">
+        <span>Next revision will edit: <strong>{acceptedRevision ? `Revision #${acceptedRevision.iterationNumber} (Accepted)` : "Original"}</strong></span>
+      </div>
+
       {/* Revision instruction input */}
       <div className="space-y-2">
         <Textarea
