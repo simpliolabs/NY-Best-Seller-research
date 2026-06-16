@@ -79,6 +79,7 @@ export function ConceptDesignPanel({
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const isDismissed = !!dismissedAt;
 
+  // Concept-level dismiss (for the live design)
   const dismissMutation = trpc.concepts.dismiss.useMutation({
     onSuccess: () => {
       toast.success("Design dismissed — it won't appear in future scans.");
@@ -100,6 +101,34 @@ export function ConceptDesignPanel({
     },
     onError: (err) => toast.error(err.message),
   });
+
+  // Per-version dismiss (for individual history entries)
+  const [dismissingVersionId, setDismissingVersionId] = useState<string | null>(null);
+  const [versionTags, setVersionTags] = useState<string[]>([]);
+
+  const dismissGenerationMutation = trpc.concepts.dismissGeneration.useMutation({
+    onSuccess: () => {
+      toast.success("Version dismissed — style signal recorded.");
+      setDismissingVersionId(null);
+      setVersionTags([]);
+      utils.concepts.getGenerationHistory.invalidate({ conceptId });
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const undismissGenerationMutation = trpc.concepts.undismissGeneration.useMutation({
+    onSuccess: () => {
+      toast.success("Version restored.");
+      utils.concepts.getGenerationHistory.invalidate({ conceptId });
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const toggleVersionTag = (key: string) => {
+    setVersionTags((prev) =>
+      prev.includes(key) ? prev.filter((t) => t !== key) : [...prev, key]
+    );
+  };
 
   const toggleTag = (key: string) => {
     setSelectedTags((prev) =>
@@ -135,11 +164,15 @@ export function ConceptDesignPanel({
   const { data: historyRaw, isLoading: historyLoading } =
     trpc.concepts.getGenerationHistory.useQuery({ conceptId });
 
-  // Filter out the currently-live design from history
+  // Filter out the currently-live design from history, split active vs dismissed
   const displayUrl = productionUrlA || imageUrlA;
   const history = useMemo(() => {
     if (!historyRaw) return [];
-    return historyRaw.filter((row) => row.resultImageUrl !== imageUrlA);
+    return historyRaw.filter((row) => row.resultImageUrl !== imageUrlA && !row.dismissedAt);
+  }, [historyRaw, imageUrlA]);
+  const dismissedHistory = useMemo(() => {
+    if (!historyRaw) return [];
+    return historyRaw.filter((row) => row.resultImageUrl !== imageUrlA && !!row.dismissedAt);
   }, [historyRaw, imageUrlA]);
 
   // ─── Action handlers ─────────────────────────────────────────────────────────
@@ -450,16 +483,96 @@ export function ConceptDesignPanel({
                       size="icon"
                       className="h-7 w-7 flex-1 text-muted-foreground hover:text-red-500 hover:border-red-300"
                       title="Dismiss this version"
-                      disabled={dismissMutation.isPending}
-                      onClick={() => setShowDismissChips(true)}
+                      disabled={dismissGenerationMutation.isPending}
+                      onClick={() => { setDismissingVersionId(row.id); setVersionTags([]); }}
                     >
                       <XCircle className="h-3.5 w-3.5" />
                     </Button>
                   </div>
+                  {/* Per-version dismiss chip selector */}
+                  {dismissingVersionId === row.id && (
+                    <div className="mt-1.5 p-2 bg-red-50 dark:bg-red-950/30 rounded-md space-y-2">
+                      <p className="text-[10px] text-red-700 dark:text-red-300 font-medium">Why dismiss this version?</p>
+                      <div className="flex flex-wrap gap-1">
+                        {DISMISS_TAGS.map((t) => (
+                          <button
+                            key={t.key}
+                            onClick={() => toggleVersionTag(t.key)}
+                            className={`text-[10px] px-1.5 py-0.5 rounded-full border transition-colors ${
+                              versionTags.includes(t.key)
+                                ? "bg-red-100 border-red-300 text-red-800 dark:bg-red-900/50 dark:border-red-700 dark:text-red-200"
+                                : "bg-background border-border text-muted-foreground hover:border-red-300"
+                            }`}
+                          >
+                            {t.label}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="flex gap-1">
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          className="h-6 text-[10px] px-2"
+                          disabled={versionTags.length === 0 || dismissGenerationMutation.isPending}
+                          onClick={() => dismissGenerationMutation.mutate({ revisionId: row.id, tags: versionTags })}
+                        >
+                          {dismissGenerationMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Confirm"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 text-[10px] px-2"
+                          onClick={() => setDismissingVersionId(null)}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
           </div>
+        )}
+
+        {/* Dismissed versions (collapsed) */}
+        {dismissedHistory.length > 0 && (
+          <details className="mt-3">
+            <summary className="text-[11px] text-muted-foreground cursor-pointer hover:text-foreground">
+              Dismissed versions ({dismissedHistory.length})
+            </summary>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5 mt-2">
+              {dismissedHistory.map((row) => (
+                <div
+                  key={row.id}
+                  className="rounded-lg border border-red-200 dark:border-red-900/50 overflow-hidden bg-red-50/50 dark:bg-red-950/20 opacity-60"
+                >
+                  <div className="aspect-square bg-muted/30 relative">
+                    <img
+                      src={row.resultImageUrl}
+                      alt="Dismissed version"
+                      className="w-full h-full object-cover grayscale"
+                      loading="lazy"
+                    />
+                  </div>
+                  <div className="p-2 space-y-1">
+                    <p className="text-[10px] text-muted-foreground truncate">
+                      {relativeTime(row.createdAt)}
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-6 text-[10px] w-full"
+                      disabled={undismissGenerationMutation.isPending}
+                      onClick={() => undismissGenerationMutation.mutate({ revisionId: row.id })}
+                    >
+                      <Undo2 className="h-3 w-3 mr-1" /> Undo dismiss
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </details>
         )}
       </div>
     </div>

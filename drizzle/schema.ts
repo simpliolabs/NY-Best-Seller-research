@@ -579,10 +579,11 @@ export const designRevisions = mysqlTable("design_revisions", {
   instruction: text("instruction"),
   referenceImageUrl: text("referenceImageUrl"),
   resultImageUrl: text("resultImageUrl").notNull(),
-  accepted: boolean("accepted").notNull().default(false),
+    accepted: boolean("accepted").notNull().default(false),
+  dismissedAt: timestamp("dismissedAt"),
+  rejectionTags: json("rejectionTags").$type<string[]>(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
-
 export type DesignRevision = typeof designRevisions.$inferSelect;
 export type InsertDesignRevision = typeof designRevisions.$inferInsert;
 
