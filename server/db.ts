@@ -449,6 +449,15 @@ export async function updateConceptName(conceptId: number, name: string): Promis
   await db.update(designConcepts).set({ conceptName: name }).where(eq(designConcepts.id, conceptId));
 }
 
+/** Rename the design_concepts row(s) created from a Niche-Hunter pattern (PO 2026-06-16): the niche
+ *  rename only wrote trend_patterns.patternName, so the Mockups/Listings pickers (which read
+ *  conceptName) kept the long original Etsy title. Propagate the rename to the linked concept too. */
+export async function updateConceptNameByNichePatternId(nichePatternId: string, name: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(designConcepts).set({ conceptName: name }).where(eq(designConcepts.nichePatternId, nichePatternId));
+}
+
 export async function insertConcept(concept: InsertDesignConcept): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");

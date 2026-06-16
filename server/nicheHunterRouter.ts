@@ -33,7 +33,7 @@ import {
 import { runNicheHunterScan } from "./nicheHunter";
 import { processPatternProduction } from "./patternProductionProcessor";
 import { getWorkspaceById } from "./workspaceDb";
-import { createConceptFromPattern } from "./db";
+import { createConceptFromPattern, updateConceptNameByNichePatternId } from "./db";
 import { computeSignalWeights } from "./signalWeights";
 
 // Approval tag options (shown as chips in UI)
@@ -234,6 +234,9 @@ export const nicheHunterRouter = router({
     .input(z.object({ patternId: z.string(), name: z.string().min(1).max(120) }))
     .mutation(async ({ input }) => {
       await updateTrendPatternName(input.patternId, input.name.trim());
+      // Propagate to the linked design concept so the Mockups/Listings pickers show the new short name,
+      // not the stale long Etsy title (PO 2026-06-16).
+      await updateConceptNameByNichePatternId(input.patternId, input.name.trim());
       return { success: true };
     }),
 

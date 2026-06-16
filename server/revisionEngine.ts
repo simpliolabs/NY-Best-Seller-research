@@ -8,7 +8,8 @@ import { callImageEdit } from "./patternProductionProcessor";
 import { removeBackground } from "./mockupCompositor";
 import { storagePut } from "./storage";
 import { nanoid } from "nanoid";
-import { insertRevision, getNextIterationNumber } from "./revisionDb";
+import { insertRevision, getNextIterationNumber, snapshotGenerationToHistory } from "./revisionDb";
+import { getConceptById } from "./db";
 
 /** Build the revision prompt from instruction + concept metadata */
 export function buildRevisionPrompt(
@@ -57,6 +58,12 @@ export async function generateRevision(
     subtext?: string | null;
   }
 ): Promise<{ revisionId: string; imageUrl: string }> {
+  // Snapshot the CURRENT design into generation history BEFORE this edit replaces it. The Design Studio
+  // edit path was the one overwrite path that skipped this, so "YEE DINK"→"YEE HAW" lost the original
+  // (PO 2026-06-16, data loss). URL-deduped (revisionDb.ts), so repeat edits never stack the same design.
+  const priorConcept = await getConceptById(conceptId);
+  if (priorConcept?.imageUrlA) await snapshotGenerationToHistory(conceptId, priorConcept.imageUrlA, priorConcept.style);
+
   // 1. Build the faithful-edit prompt (apply ONLY the instruction; keep everything else identical).
   const prompt = buildRevisionPrompt(instruction, conceptMeta, variationKey);
 
@@ -198,6 +205,10 @@ export async function trimAndCleanRevision(
   variationKey: string,
   referenceImageUrl: string,
 ): Promise<{ revisionId: string; imageUrl: string }> {
+  // Snapshot the current design before this trim/clean replaces it (PO 2026-06-16 data-loss fix).
+  const priorConcept = await getConceptById(conceptId);
+  if (priorConcept?.imageUrlA) await snapshotGenerationToHistory(conceptId, priorConcept.imageUrlA, priorConcept.style);
+
   const res = await fetch(referenceImageUrl);
   if (!res.ok) throw new Error(`Failed to download reference image: ${referenceImageUrl} (${res.status})`);
   const raw = Buffer.from(await res.arrayBuffer());

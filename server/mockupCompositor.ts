@@ -521,7 +521,7 @@ const FABRIC_WARP_STRENGTH = 0.35;
 const WARP_GAIN = 6.0;    // shading gain on the NORMALIZED fold detail
 const WARP_AMP = 45;      // max displacement (px) at strength 1.0 (follows broad folds)
 const WARP_TARGET = 18;   // local-contrast normalization target (RMS of fold detail, 0-255)
-const WARP_FLOOR = 4;     // min RMS before normalizing — caps amplification of near-flat noise
+const WARP_FLOOR = 10;    // min RMS before normalizing — raised (PO 2026-06-16) so a smooth flat-lay can't amplify its weave/JPEG noise into vintage speckle
 
 /**
  * Composite a TRANSPARENT design onto a garment photo so it CONTOURS to the fabric folds instead
@@ -545,7 +545,7 @@ export async function warpDesignOntoFabric(
 ): Promise<Buffer> {
   const { data: shirt, info } = await sharp(mockupBuf).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   const W = info.width, H = info.height, CH = info.channels;
-  const gray = await sharp(mockupBuf).grayscale().blur(1.5).raw().toBuffer(); // fabric detail (light denoise)
+  const gray = await sharp(mockupBuf).grayscale().blur(8).raw().toBuffer();   // BROAD folds only (PO 2026-06-16: blur 1.5 multiplied the shirt's high-freq weave/JPEG noise onto the design = vintage speckle)
   const low = await sharp(mockupBuf).grayscale().blur(30).raw().toBuffer();   // local mean brightness
   const at = (buf: Buffer, x: number, y: number) =>
     buf[Math.max(0, Math.min(H - 1, y)) * W + Math.max(0, Math.min(W - 1, x))];
@@ -562,7 +562,7 @@ export async function warpDesignOntoFabric(
       s2 += d * d;
     }
     const rms = Math.sqrt(s2 / (dw * dh)) || 1;
-    const norm = WARP_TARGET / Math.max(rms, WARP_FLOOR);
+    const norm = Math.min(1.0, WARP_TARGET / Math.max(rms, WARP_FLOOR)); // cap at 1.0 (PO 2026-06-16): a smooth shirt can only ATTENUATE its noise, never amplify it
     const amp = strength * WARP_AMP;
     for (let j = 0; j < dh; j++) {
       for (let i = 0; i < dw; i++) {
