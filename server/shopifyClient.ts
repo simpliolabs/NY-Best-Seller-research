@@ -528,20 +528,41 @@ export async function addProductImageByUrl(
   imageUrl: string,
   position?: number,
   variantIds?: number[],
-  alt?: string
+  alt?: string,
+  /** SEO-friendly filename override (PO 2026-06-16, e.g. "llama-shirt-blue.webp"). When provided we
+   *  fetch the image bytes and upload via `attachment` so Shopify uses THIS filename in the storefront
+   *  URL instead of the opaque cloudfront basename. Omitted = original src-based pass-through. */
+  filename?: string,
 ): Promise<ShopifyProductImage> {
-  const data = await shopifyFetch<{ image: ShopifyProductImage }>(
-    creds,
-    "POST",
-    `products/${productId}/images.json`,
-    {
+  let body: Record<string, unknown>;
+  if (filename) {
+    const resp = await fetch(imageUrl);
+    if (!resp.ok) throw new Error(`Image fetch failed for filename rename: ${resp.status}`);
+    const attachment = Buffer.from(await resp.arrayBuffer()).toString("base64");
+    body = {
+      image: {
+        attachment,
+        filename,
+        ...(position !== undefined ? { position } : {}),
+        ...(variantIds && variantIds.length ? { variant_ids: variantIds } : {}),
+        ...(alt ? { alt } : {}),
+      },
+    };
+  } else {
+    body = {
       image: {
         src: imageUrl,
         ...(position !== undefined ? { position } : {}),
         ...(variantIds && variantIds.length ? { variant_ids: variantIds } : {}),
         ...(alt ? { alt } : {}),
       },
-    }
+    };
+  }
+  const data = await shopifyFetch<{ image: ShopifyProductImage }>(
+    creds,
+    "POST",
+    `products/${productId}/images.json`,
+    body,
   );
   return data.image;
 }

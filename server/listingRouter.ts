@@ -373,13 +373,25 @@ export const listingRouter = router({
       // Upload each colour's mockup image, LINK it to that colour's variants (#2) so each variant
       // shows its own colour, and set a descriptive per-colour ALT text (SEO/accessibility).
       const productTypeLabel = (group as any)?.productType ?? "T-Shirt";
+      // SEO-friendly Shopify filenames (PO 2026-06-16): "{listing-title}-{product-type}-{color}.{ext}"
+      // e.g. "love-pickleball-t-shirt-blue.webp" instead of the opaque cloudfront timestamp basename.
+      // Shopify auto-suffixes collisions ("-1", "-2") if multiple renders happen to share a slug.
+      const slugify = (s: string) => (s || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 60);
+      const titleSlug = slugify(listing.title);
+      const productSlug = slugify(String(productTypeLabel));
       for (let i = 0; i < selectedRenders.length; i++) {
         const render = selectedRenders[i]!;
         const color = colorByTemplate.get(render.templateId);
         const variantIds = (product.variants ?? []).filter((v) => v.option2 === color).map((v) => v.id);
         const alt = `May include ${listing.title} ${color ? `in ${color.toLowerCase()} ` : ""}${String(productTypeLabel).toLowerCase()} with ${concept?.conceptName ?? "graphic"} design`;
+        const ext = (render.compositeUrl.match(/\.([a-z0-9]+)(?:\?|$)/i)?.[1] ?? "webp").toLowerCase();
+        const filename = [titleSlug, productSlug, slugify(color ?? "")].filter(Boolean).join("-") + "." + ext;
         try {
-          await addProductImageByUrl(creds, product.id, render.compositeUrl, i + 1, variantIds, alt);
+          await addProductImageByUrl(creds, product.id, render.compositeUrl, i + 1, variantIds, alt, filename);
         } catch (imgErr) {
           console.warn(`[publishToShopify] Image upload failed for render ${render.id}:`, imgErr);
         }
