@@ -18,6 +18,11 @@ const FLOOD_FILL_TOLERANCE = 40;
 // Hue test for the magenta key: red AND blue both this far above green. Brightness-independent, so it
 // catches the render's VARIABLE magenta (flat ~210,80,150 corner vs brighter ~244,92,212 mesh holes).
 const MAGENTA_MARGIN = 25;
+// Magenta is r≈b (both ≫ g). This guard keeps the global key from eating red/orange (r≫b) or purple
+// (b≫r) ART. Empirically a no-op on the real magenta net (PO's "KITCHEN IS LAVA" sample: all 37,448
+// keyed px measured |r-b|<=20), but it shrinks the key's blast radius on designs with intentional
+// red/skin/purple (PO 2026-06-16, bug #3 — verified against the real design before shipping).
+const MAGENTA_RB_BALANCE = 60;
 
 /**
  * Remove the background from an image using corner-sampled flood-fill chromakey.
@@ -91,7 +96,7 @@ export async function chromakeyFromCorners(imageBuf: Buffer): Promise<Buffer> {
     const idx = pos * channels;
     if (output[idx + 3] === 0) continue;
     const r = output[idx], g = output[idx + 1], b = output[idx + 2];
-    if (r > g + MAGENTA_MARGIN && b > g + MAGENTA_MARGIN) output[idx + 3] = 0;
+    if (r > g + MAGENTA_MARGIN && b > g + MAGENTA_MARGIN && Math.abs(r - b) <= MAGENTA_RB_BALANCE) output[idx + 3] = 0;
   }
 
   // Despill the magenta fringe (PO 2026-06-11). The flood-fill above is BINARY — anti-aliased art

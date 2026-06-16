@@ -1074,6 +1074,7 @@ STEP 2 — Only if canWork is true AND viral is "high" or "med", write "prompt":
 - Render the design in the EXACT chosen style — match its layout, line-work, palette and typography from the playbook. Do NOT mix styles (a Minimalist Line-Art concept must not have heavy halftone; a Bold Typographic must not be a circular badge).
 - Isolated design, headline spelled VERBATIM. ACCURATE niche equipment.
 - ABSOLUTE QUALITY BAR — every style: premium, sellable-on-Etsy commercial quality; NEVER cartoonish, kawaii, chibi, Pixar/Disney, childish, clip-art, sticker, 3D-render, or flat clean modern mascot-logo. If a knowledge-base note calls a mascot "cute"/"comical"/"happy"/"zen", render the animal with characterful craftsmanship appropriate to the chosen style — never as a cartoon.
+- PRINT-SAFE (DTF) — every element must survive direct-to-film print and a magenta chroma-key: render nets, mesh, fences, grids, screens, lattices, halftone fills, ropes, chains and any repeating-line motif as SOLID FULL-COLOR shapes, NEVER as thin open mesh with see-through gaps. No hairline or single-pixel strokes; every line, outline and stem must be a thick, confidently weighted shape. Avoid tiny unreadable text and fine smooth gradients, and keep the artwork's palette clearly away from magenta / hot-pink / fuchsia (the background key color) so nothing keys out.
 - If it fails the gate (canWork false or viral low), set "prompt" to "".
 
 ═══ STYLE PLAYBOOK — what each style looks like (use the one you chose; do not mix) ═══

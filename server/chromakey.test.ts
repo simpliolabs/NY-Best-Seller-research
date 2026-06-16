@@ -44,6 +44,30 @@ async function enclosedHole(): Promise<Buffer> {
   return sharp(buf, { raw: { width: w, height: h, channels: 4 } }).png().toBuffer();
 }
 
+/** 40x40: magenta key bg + an enclosed RED block (r≫b) and an enclosed VIOLET block (b≫r) — BOTH pass
+ *  the global key's r>g+25 && b>g+25 test, so the un-guarded key ATE them — plus an enclosed magenta
+ *  net-hole. The magenta-balance guard (PO 2026-06-16, bug #3) must keep red/violet opaque while still
+ *  keying the magenta hole. */
+async function redVioletArt(): Promise<Buffer> {
+  const w = 40, h = 40, buf = Buffer.alloc(w * h * 4);
+  const set = (x: number, y: number, r: number, g: number, b: number) => {
+    const i = (y * w + x) * 4; buf[i] = r; buf[i + 1] = g; buf[i + 2] = b; buf[i + 3] = 255;
+  };
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      if (x >= 5 && x <= 9 && y >= 5 && y <= 9) set(x, y, 200, 40, 70);        // RED art (r≫b)
+      else if (x >= 30 && x <= 34 && y >= 5 && y <= 9) set(x, y, 90, 40, 200); // VIOLET art (b≫r)
+      else {
+        const inSq = x >= 25 && x <= 32 && y >= 25 && y <= 32;
+        const onRing = inSq && (x <= 26 || x >= 31 || y <= 26 || y >= 31);
+        if (onRing) set(x, y, 50, 90, 180);        // blue ring enclosing the hole
+        else if (inSq) set(x, y, 244, 92, 212);    // enclosed magenta net-hole — still keyed
+        else set(x, y, 210, 80, 150);              // magenta bg (sampled corner)
+      }
+    }
+  return sharp(buf, { raw: { width: w, height: h, channels: 4 } }).png().toBuffer();
+}
+
 async function px(buf: Buffer, x: number, y: number) {
   const { data, info } = await sharp(buf).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   const i = (y * info.width + x) * info.channels;
@@ -81,5 +105,17 @@ describe("chromakeyFromCorners — magenta despill", () => {
     const ring = await px(out, 12, 20);
     expect(ring.a).toBe(255);                  // blue ring preserved
     expect(ring.b).toBeGreaterThan(ring.r);
+  });
+
+  it("balance guard keeps red/violet art opaque while still keying the magenta net-hole", async () => {
+    const out = await chromakeyFromCorners(await redVioletArt());
+    expect((await px(out, 0, 0)).a).toBe(0);      // magenta background keyed
+    const red = await px(out, 7, 7);
+    expect(red.a).toBe(255);                       // RED art preserved (the un-guarded key ate it)
+    expect(red.r).toBeGreaterThan(red.b);
+    const violet = await px(out, 32, 7);
+    expect(violet.a).toBe(255);                    // VIOLET art preserved
+    expect(violet.b).toBeGreaterThan(violet.r);
+    expect((await px(out, 29, 29)).a).toBe(0);     // enclosed magenta net-hole still keyed
   });
 });

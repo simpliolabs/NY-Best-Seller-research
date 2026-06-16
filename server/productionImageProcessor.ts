@@ -50,6 +50,8 @@ async function generateStandaloneDesign(
     `BACKGROUND: Solid hot pink/magenta (#FF00FF) background filling the entire canvas.`,
     `The artwork must have a hard, clean edge against the magenta background — no blending, no gradient, no soft edges.`,
     `Use ONLY the colors described in the style within the artwork itself. The magenta is ONLY for the background.`,
+    `PRINT-SAFE: render any net, mesh, fence, grid, screen, lattice, rope or repeating-line element as SOLID FULL-COLOR shapes, never thin open mesh with gaps; no hairline/thin strokes — every line must be a thick filled shape so it survives DTF printing and the chroma-key.`,
+    `The artwork's own colors must stay clearly away from magenta/hot-pink/fuchsia so no part of the design keys out with the background. Avoid tiny unreadable text and fine smooth gradients.`,
     `NO shirt, NO garment, NO fabric texture visible. Just the flat 2D artwork on solid magenta.`,
     `The design should be centered and fill approximately 60-70% of the canvas.`,
   ].join(" ");
