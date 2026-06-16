@@ -72,7 +72,12 @@ export default function Mockups() {
       // Surface usedDefaultZone and productionReady flags
       setUsedDefaultZone(!!data.usedDefaultZone);
       setProductionReady(!!data.productionReady);
-      toast.success(`Generated ${data.mockupCount} mockup${data.mockupCount !== 1 ? "s" : ""}`);
+      if (data.failedCount && data.failedCount > 0) {
+        const total = data.mockupCount + data.failedCount;
+        toast.warning(`${data.failedCount} of ${total} templates failed`);
+      } else {
+        toast.success(`Generated ${data.mockupCount} mockup${data.mockupCount !== 1 ? "s" : ""}`);
+      }
       mockupsQuery.refetch();
     },
     onError: (err) => {
@@ -340,14 +345,29 @@ export default function Mockups() {
             <CardTitle className="text-base font-['Syne'] flex items-center gap-2">
               <ImageIcon className="h-4 w-4" />
               Generated Mockups ({mockupsQuery.data.length})
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => mockupsQuery.refetch()}
-                className="ml-auto"
-              >
-                <RefreshCw className="h-3.5 w-3.5" />
-              </Button>
+              <div className="ml-auto flex items-center gap-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!canGenerate}
+                  onClick={handleGenerate}
+                  title="Regenerate mockups with current settings"
+                >
+                  {generateMutation.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5 mr-1" />
+                  )}
+                  Regenerate
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => mockupsQuery.refetch()}
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                </Button>
+              </div>
             </CardTitle>
           </CardHeader>
           <CardContent>
