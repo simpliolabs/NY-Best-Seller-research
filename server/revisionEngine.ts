@@ -124,6 +124,8 @@ export async function generateRevision(
   const refRaw = Buffer.from(await refRes.arrayBuffer());
   const targetSize = aspectToSize(aspect);
   let refPng: Buffer;
+  // Lifted to outer scope so the composite-back step below can replay the same placement.
+  let rw = 0, rh = 0, padX = 0, padY = 0;
   if (aspect === "1:1") {
     const refMeta = await sharp(refRaw).metadata();
     const side = Math.max(refMeta.width ?? 0, refMeta.height ?? 0);
@@ -153,8 +155,8 @@ export async function generateRevision(
     if (!sw || !sh) throw new Error("reference image has no dimensions");
     const [tw, th] = targetSize === "1024x1536" ? [1024, 1536] : [1536, 1024];
     const scale = Math.min(tw / sw, th / sh);
-    const rw = Math.round(sw * scale), rh = Math.round(sh * scale);
-    const padX = tw - rw, padY = th - rh;
+    rw = Math.round(sw * scale); rh = Math.round(sh * scale);
+    padX = tw - rw; padY = th - rh;
     refPng = await sharp(refRaw)
       .ensureAlpha()
       .resize(rw, rh, { fit: "fill" })
@@ -182,12 +184,39 @@ export async function generateRevision(
     size: targetSize, // 1:1 → 1024x1024 (legacy surgical), portrait → 1024x1536, landscape → 1536x1024
   });
 
+  // 2a. COMPOSITE-BACK (PO 2026-06-16, bug fix on the 9:16 stripe-recolouring miss): even with the
+  // padded canvas + input_fidelity:high + an uncompromising preservation prompt, gpt-image-1 can
+  // still re-paint opaque pixels — the previous 9:16 result preserved subject + text + sparkle but
+  // recoloured the pink/teal stripes to all-teal. The architectural lock: paste the ORIGINAL artwork
+  // back over its exact original position in the edit result. The existing pixels become byte-for-
+  // byte the source; the model's output ONLY contributes pixels in the transparent extension margin.
+  // Skipped for 1:1 (pad-to-square + trim already restores the source verbatim).
+  let finalBuf = edited;
+  if (aspect !== "1:1" && rw > 0 && rh > 0) {
+    try {
+      const originalCentered = await sharp(refRaw)
+        .ensureAlpha()
+        .resize(rw, rh, { fit: "fill" })
+        .png()
+        .toBuffer();
+      finalBuf = await sharp(edited)
+        .composite([{
+          input: originalCentered,
+          top: Math.floor(padY / 2),
+          left: Math.floor(padX / 2),
+        }])
+        .png()
+        .toBuffer();
+    } catch (err) {
+      console.warn(`[Revision] composite-back failed for concept ${conceptId} ${variationKey}; using raw edit:`, err);
+    }
+  }
+
   // 2b. Safety net only: gpt-image-1 already returns native transparency above. If a run instead
   // comes back on a white box, strip it (edge-connected white flood-fill; passthrough when already
   // transparent, so it's a no-op on the normal path). Never blocks the revision.
-  let finalBuf = edited;
   try {
-    finalBuf = await removeBackground(edited);
+    finalBuf = await removeBackground(finalBuf);
   } catch (err) {
     console.warn(`[Revision] background cleanup failed for concept ${conceptId} ${variationKey}; using raw edit:`, err);
   }
