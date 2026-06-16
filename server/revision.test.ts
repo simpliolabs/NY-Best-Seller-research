@@ -60,6 +60,18 @@ describe("buildRevisionPrompt", () => {
     expect(prompt).not.toContain("DTF Silhouette Rule");
     expect(prompt).not.toContain("Variation:");
   });
+
+  it("non-square aspect drops the anti-rescale clauses and instructs canvas extension", () => {
+    // PO 2026-06-16: "extend vertically" missed because the 1:1 prompt forbade rescale/background
+    // changes. Aspect 9:16 must use a different prompt that ALLOWS the canvas to grow into the new
+    // aspect while preserving the subject + text.
+    const surgical = buildRevisionPrompt("extend vertically", meta, "A", "1:1");
+    const tall = buildRevisionPrompt("extend vertically", meta, "A", "9:16");
+    expect(surgical).toMatch(/do NOT crop|rescale/i);
+    expect(tall).not.toMatch(/do NOT crop, zoom, rescale/i);
+    expect(tall).toContain("9:16");
+    expect(tall).toMatch(/extend(ing)? the/i);
+  });
 });
 
 // ─── Integration: revisionRouter ───────────────────────────────────────────

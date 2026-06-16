@@ -12,6 +12,16 @@ import { insertRevision, getNextIterationNumber, snapshotGenerationToHistory } f
 import { getConceptById } from "./db";
 
 /** Build the revision prompt from instruction + concept metadata */
+export type RevisionAspect = "1:1" | "3:4" | "4:3" | "9:16" | "16:9";
+
+/** Map a PO-selected aspect to the gpt-image-1 size + an optional output dimension hint for the
+ *  prompt. Only 3 native sizes exist; portrait/landscape choices collapse onto the closest. */
+function aspectToSize(aspect: RevisionAspect): "1024x1024" | "1024x1536" | "1536x1024" {
+  if (aspect === "1:1") return "1024x1024";
+  if (aspect === "3:4" || aspect === "9:16") return "1024x1536";
+  return "1536x1024"; // 4:3, 16:9
+}
+
 export function buildRevisionPrompt(
   instruction: string,
   concept: {
@@ -21,7 +31,8 @@ export function buildRevisionPrompt(
     headline?: string | null;
     subtext?: string | null;
   },
-  variationKey: string
+  variationKey: string,
+  aspect: RevisionAspect = "1:1",
 ): string {
   // A revision is a SURGICAL edit, not a redraw. The old prompt fed concept metadata + DTF
   // "silhouette/redraw" rules, which gave the image model licence to recompose — a simple text
@@ -31,7 +42,13 @@ export function buildRevisionPrompt(
   // with gpt-image-1 input_fidelity:"high", this keeps every untouched pixel in place.
   void concept;
   void variationKey;
-  return `You are making a SURGICAL edit to the attached design image. Apply ONLY this change, exactly as written, and nothing more:
+
+  // Aspect 1:1 = original SURGICAL behavior (anti-outpaint guardrail). Non-square = the PO has
+  // explicitly asked for a canvas-changing edit, so the "no crop / no rescale / no background change"
+  // clauses are softened (still preserve the SUBJECT/text fidelity, but allow the canvas to grow into
+  // the new aspect — otherwise the model fights itself, like the YEE HAW "extend vertically" miss).
+  if (aspect === "1:1") {
+    return `You are making a SURGICAL edit to the attached design image. Apply ONLY this change, exactly as written, and nothing more:
 
 "${instruction}"
 
@@ -42,6 +59,20 @@ Keep EVERYTHING ELSE pixel-for-pixel identical to the attached image:
 - every character, graphic, and decoration, unchanged.
 
 Do NOT redraw, restyle, recolour, resize, reposition, or add/remove ANYTHING the instruction did not explicitly name. Change only what the instruction asks; leave all else exactly as in the attached image.`;
+  }
+
+  // Non-square (canvas-changing) revision — extend the canvas to the requested aspect, fill the new
+  // space consistent with the existing artwork, and preserve the existing subject + text faithfully.
+  return `You are extending the attached design image into a NEW ${aspect} canvas. Apply this change exactly as written:
+
+"${instruction}"
+
+Rules:
+- Keep the existing SUBJECT, TEXT, and STYLE pixel-faithful — every letter at the same font, weight, and colour; the character/illustration identical in pose, proportions, and palette.
+- Extend the BACKGROUND into the new aspect consistently with what is already there (same stripes, colours, pattern, texture). New background space must look like a natural continuation of the existing background — not a different style.
+- Do NOT crop or cut off any existing element. Reposition the subject within the new canvas if needed so nothing is clipped.
+- Do NOT restyle, recolour, or simplify any existing element. Only fill the new canvas space.
+- Final output canvas: ${aspect}. Transparent background where the existing design is transparent.`;
 }
 
 /** Generate a design revision using GPT Image with the original as reference */
@@ -56,7 +87,8 @@ export async function generateRevision(
     style: string;
     headline?: string | null;
     subtext?: string | null;
-  }
+  },
+  aspect: RevisionAspect = "1:1",
 ): Promise<{ revisionId: string; imageUrl: string }> {
   // Snapshot the CURRENT design into generation history BEFORE this edit replaces it. The Design Studio
   // edit path was the one overwrite path that skipped this, so "YEE DINK"→"YEE HAW" lost the original
@@ -64,40 +96,51 @@ export async function generateRevision(
   const priorConcept = await getConceptById(conceptId);
   if (priorConcept?.imageUrlA) await snapshotGenerationToHistory(conceptId, priorConcept.imageUrlA, priorConcept.style);
 
-  // 1. Build the faithful-edit prompt (apply ONLY the instruction; keep everything else identical).
-  const prompt = buildRevisionPrompt(instruction, conceptMeta, variationKey);
+  // 1. Build the edit prompt — aspect-aware (1:1 = surgical, non-square = canvas-extending).
+  const prompt = buildRevisionPrompt(instruction, conceptMeta, variationKey, aspect);
 
   // 2. Faithful edit via gpt-image-1 /v1/images/edits with input_fidelity:"high" — the lever that
   // preserves the parts of the design the instruction did NOT touch. The previous Forge
   // GenerateImage path had no fidelity control, so a simple text swap recomposed the design
   // (cropped the top text, invented a blue stripe — PO-flagged 2026-06-10).
   //
-  // PAD-TO-SQUARE (PO-approved fix 2026-06-11, bake-off verified): gpt-image-1 only renders
-  // square/landscape/portrait canvases, so a non-square reference forced a re-frame —
-  // size:"auto" OUTPAINTED the design onto a 1024x1536 canvas (the "extended" failure) and a
-  // bare fixed square CLIPPED the top text. Padding the reference to a square with TRANSPARENT
-  // margins first means the canvas already matches, so the model edits in place (bake-off:
-  // text intact, corners alpha 0, zero invented dark bars); the margins are trimmed back off
-  // after the edit.
+  // PAD-TO-SQUARE (PO-approved fix 2026-06-11, bake-off verified): for the SURGICAL 1:1 path,
+  // gpt-image-1 only renders square/landscape/portrait canvases, so a non-square reference forced a
+  // re-frame — size:"auto" OUTPAINTED (the "extended" failure) and a bare fixed square CLIPPED the
+  // top text. Padding to a square with TRANSPARENT margins means the canvas matches, the model edits
+  // in place, and the margins trim back off after.
+  //
+  // ASPECT-AWARE (PO 2026-06-16, "Aspect ratio" picker): when the PO explicitly chooses a non-square
+  // aspect (e.g. "extend vertically" → 9:16), we SKIP the pad-to-square and ask gpt-image-1 directly
+  // for that aspect. This is the path that was missing — the YEE HAW "extend vertically" miss is
+  // because the engine forced everything back into a square no matter what the instruction said.
   const refRes = await fetch(referenceImageUrl);
   if (!refRes.ok) throw new Error(`Failed to download reference image: ${referenceImageUrl} (${refRes.status})`);
   const refRaw = Buffer.from(await refRes.arrayBuffer());
-  const refMeta = await sharp(refRaw).metadata();
-  const side = Math.max(refMeta.width ?? 0, refMeta.height ?? 0);
-  if (!side) throw new Error("reference image has no dimensions");
-  const padX = side - (refMeta.width ?? 0);
-  const padY = side - (refMeta.height ?? 0);
-  const refPng = await sharp(refRaw)
-    .ensureAlpha()
-    .extend({
-      top: Math.floor(padY / 2),
-      bottom: Math.ceil(padY / 2),
-      left: Math.floor(padX / 2),
-      right: Math.ceil(padX / 2),
-      background: { r: 0, g: 0, b: 0, alpha: 0 },
-    })
-    .png()
-    .toBuffer();
+  const targetSize = aspectToSize(aspect);
+  let refPng: Buffer;
+  if (aspect === "1:1") {
+    const refMeta = await sharp(refRaw).metadata();
+    const side = Math.max(refMeta.width ?? 0, refMeta.height ?? 0);
+    if (!side) throw new Error("reference image has no dimensions");
+    const padX = side - (refMeta.width ?? 0);
+    const padY = side - (refMeta.height ?? 0);
+    refPng = await sharp(refRaw)
+      .ensureAlpha()
+      .extend({
+        top: Math.floor(padY / 2),
+        bottom: Math.ceil(padY / 2),
+        left: Math.floor(padX / 2),
+        right: Math.ceil(padX / 2),
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      })
+      .png()
+      .toBuffer();
+  } else {
+    // Non-square: pass the reference as-is. gpt-image-1 will render at targetSize and the prompt
+    // tells it to extend the existing artwork into the new canvas.
+    refPng = await sharp(refRaw).ensureAlpha().png().toBuffer();
+  }
   const edited = await callImageEdit(refPng, "design.png", prompt, {
     transparent: true, // The reference design is a TRANSPARENT png. Ask gpt-image-1 for a transparent
                        // result so it KEEPS that. transparent:false made it fill the transparent corners
@@ -109,7 +152,7 @@ export async function generateRevision(
     quality: "medium", // submitRevision is a sync mutation with NO retry net; "high" (~90-180s) risks a
                        // Cloudflare 524. "medium" (~30-60s) stays under the edge timeout; the PO
                        // visually approved the medium-quality padded output (2026-06-11).
-    size: "1024x1024", // FIXED square matching the padded reference — never "auto" (it outpaints).
+    size: targetSize, // 1:1 → 1024x1024 (legacy surgical), portrait → 1024x1536, landscape → 1536x1024
   });
 
   // 2b. Safety net only: gpt-image-1 already returns native transparency above. If a run instead
@@ -121,12 +164,15 @@ export async function generateRevision(
   } catch (err) {
     console.warn(`[Revision] background cleanup failed for concept ${conceptId} ${variationKey}; using raw edit:`, err);
   }
-  // 2c. Trim the transparent padding margins back off (inverse of the pad-to-square above).
-  // threshold 10 = only near-fully-transparent edges; non-fatal if trim finds nothing to cut.
-  try {
-    finalBuf = await sharp(finalBuf).trim({ threshold: 10 }).png().toBuffer();
-  } catch (err) {
-    console.warn(`[Revision] padding trim failed for concept ${conceptId} ${variationKey}; using untrimmed:`, err);
+  // 2c. Trim the transparent padding margins back off (inverse of the pad-to-square above) — ONLY
+  // for the 1:1 surgical path. A non-square aspect was deliberately chosen by the PO, so trimming
+  // would defeat the whole feature (it would chop the extended canvas back down to content bounds).
+  if (aspect === "1:1") {
+    try {
+      finalBuf = await sharp(finalBuf).trim({ threshold: 10 }).png().toBuffer();
+    } catch (err) {
+      console.warn(`[Revision] padding trim failed for concept ${conceptId} ${variationKey}; using untrimmed:`, err);
+    }
   }
   const { url: imageUrl } = await storagePut(
     `revisions/${conceptId}-${variationKey}-${Date.now()}.png`,

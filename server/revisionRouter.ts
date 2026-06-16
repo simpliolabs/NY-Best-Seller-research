@@ -91,6 +91,10 @@ export const revisionRouter = router({
         conceptId: z.number(),
         variationKey: z.enum(["A", "B", "C"]),
         instruction: z.string().min(1).max(2000),
+        /** Output canvas aspect (PO 2026-06-16): default "1:1" keeps the original surgical-edit
+         *  behavior (anti-outpaint guardrail). Portrait/landscape options unlock canvas-changing
+         *  edits like "extend vertically" by using gpt-image-1's native non-square sizes. */
+        aspectRatio: z.enum(["1:1", "3:4", "4:3", "9:16", "16:9"]).optional().default("1:1"),
       })
     )
     .mutation(async ({ input }) => {
@@ -134,7 +138,8 @@ export const revisionRouter = router({
           style: concept.style,
           headline: concept.headline,
           subtext: concept.subtext,
-        }
+        },
+        input.aspectRatio
       );
 
       return { revisionId: result.revisionId, imageUrl: result.imageUrl };
