@@ -64,13 +64,17 @@ async function storeGptImage2Response(resp: Response): Promise<GenerateImageResp
  * ALWAYS rejects it — every image wasted a failing attempt — and deferring background-removal out
  * of the scan made it pointless. Designs render opaque; bg removal runs on-demand for mockups.)
  */
-export async function generateGptImage2(prompt: string, signal?: AbortSignal): Promise<GenerateImageResponse> {
+export async function generateGptImage2(
+  prompt: string,
+  signal?: AbortSignal,
+  size: "1024x1024" | "1024x1536" | "1536x1024" = "1024x1024", // PO 2026-06-16: per-concept canvas
+): Promise<GenerateImageResponse> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured — cannot call gpt-image-2");
   const resp = await fetch("https://api.openai.com/v1/images/generations", {
     method: "POST",
     headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "gpt-image-2", prompt, size: "1024x1024", quality: "medium", n: 1 }),
+    body: JSON.stringify({ model: "gpt-image-2", prompt, size, quality: "medium", n: 1 }),
     signal,
   });
   if (!resp.ok) {

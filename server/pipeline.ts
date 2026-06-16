@@ -1015,25 +1015,48 @@ const GPT_IMAGE_TIMEOUT_MS = 90_000; // gpt-image-2 "medium" upper bound; fail f
 // edit→edit-retry→gpt-text→Forge chain ran ~400s/image). Now exactly ONE gpt-image-2 attempt
 // (edit if a bestseller image is present, else text-to-image) → Forge fallback. Worst case
 // ~90s + 60s; Forge guarantees we never ship 0 images.
+/** Map the council's chosen design aspect to (a) a native gpt-image-2 canvas size and (b) a short
+ *  prompt prefix telling the model to draw the design only in the requested aspect region with
+ *  transparent margins. cropToContent (productionImageProcessor) trims those margins after — so the
+ *  FINAL design has the requested aspect even though the native canvas is one of gpt-image-2's 3 sizes. */
+function aspectToGenSize(aspect: "1:1" | "4:5" | "5:4" | "9:16" | "16:9"): "1024x1024" | "1024x1536" | "1536x1024" {
+  if (aspect === "1:1") return "1024x1024";
+  if (aspect === "4:5" || aspect === "9:16") return "1024x1536"; // portrait canvases
+  return "1536x1024"; // 5:4, 16:9 → landscape canvas
+}
+function aspectGuidanceForPrompt(aspect: "1:1" | "4:5" | "5:4" | "9:16" | "16:9"): string {
+  if (aspect === "1:1") return ""; // no extra steering needed for square
+  const shape = aspect === "4:5" || aspect === "9:16" ? "PORTRAIT (tall)" : "LANDSCAPE (wide)";
+  return `Compose the design in a ${aspect} ${shape} content area. Draw the artwork ONLY inside that ${aspect} region; leave the remaining canvas margins fully TRANSPARENT (do NOT fill, stretch, or extend the artwork to fill the whole canvas). The final cropped output should genuinely read as ${aspect}.\n\n`;
+}
+
 async function generateImageWithRetry(
   prompt: string,
   label: string,
   sourceImageUrl?: string | null, // hybrid: when the winner's signal carries a real bestseller image,
                                   // EDIT it (NH mechanism) instead of text-to-image
   timeoutMultiplier = 1, // the serial retry pass passes >1 so genuinely-slow renders (heavy lane styles) get room
+  aspect: "1:1" | "4:5" | "5:4" | "9:16" | "16:9" = "1:1", // PO 2026-06-16: per-concept design aspect
 ): Promise<{ url?: string | null }> {
   const useEdit = !!sourceImageUrl && /^https?:\/\//.test(sourceImageUrl);
   // In edit mode, anchor on the bestseller's print realism but output a NEW flat design — the NH's
   // trick ("output the design only, on white, not on a shirt") also handles listing photos that
   // show the shirt on a model.
   const editPrompt = `Use this reference image ONLY for its print quality, screen-print texture, color treatment and professional finish. Create a NEW, different design: ${prompt} Output the finished artwork by itself on a fully transparent background — not on a shirt, garment, model, or any filled background.`;
+  // Aspect guidance is prepended to the prompt (no-op for 1:1) and the canvas is chosen to natively
+  // support the requested aspect. cropToContent later trims the transparent margins.
+  const aspectPrefix = aspectGuidanceForPrompt(aspect);
+  const genSize = aspectToGenSize(aspect);
+  const promptWithAspect = aspectPrefix + prompt;
   // ONE retry, ONLY on a RATE LIMIT (429), with an 8s backoff — run #840001 rendered just 1/5 winners,
   // the classic concurrent-429 signature (5/5 in an isolated burst). Any other error falls straight
   // through to Forge (bounded). Forge guarantees we never ship 0 images. Time-bounded for the cap.
   let lastGptError = "unknown";
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const gen = useEdit ? generateGptImage2Edit(editPrompt, sourceImageUrl!) : generateGptImage2(prompt);
+      const gen = useEdit
+        ? generateGptImage2Edit(aspectPrefix + editPrompt, sourceImageUrl!)
+        : generateGptImage2(promptWithAspect, undefined, genSize);
       return await withTimeout(gen, GPT_IMAGE_TIMEOUT_MS * timeoutMultiplier, `${label} [gpt-image-2${useEdit ? " edit" : ""} #${attempt}]`);
     } catch (err) {
       lastGptError = err instanceof Error ? err.message : String(err);
@@ -1067,6 +1090,7 @@ STEP 1 — VET (answer honestly):
 3. style — use the ASSIGNED STYLE LANE given in the user message. Each winning design is deliberately assigned ONE approved style so the batch of winners spans a RANGE of styles (and palettes) instead of all looking alike. Render in that assigned style. Only pick a DIFFERENT approved style if the assigned one genuinely cannot carry THIS specific concept — and if you deviate, choose another distinct approved style, never default back to a dark distressed look. The approved-reference IMAGES define the CRAFT and QUALITY BAR and the niche's character treatment, NOT a single look to clone.
 4. needsText — does it need the headline/pun to read as this niche, or does the mascot carry it alone?
 5. viral — would a fan stop scrolling and BUY this? "high" | "med" | "low".
+6. aspect — what CANVAS SHAPE best serves THIS specific design? "1:1" (square — logos, badges, centered crests, balanced compositions), "4:5" (portrait — most apparel: a tall mascot in a pose, hero standing/leaping, vertical composition), "5:4" (slight landscape — most apparel banners, wider mascot in action), "9:16" (tall portrait — long banners, narrow stacked typography, mug wraps), "16:9" (wide — long puns, side-by-side gags, panoramic banners). Pick based on what this design WANTS to be — a leaping llama wants 4:5, a long phrase pun wants 16:9, a tight badge wants 1:1.
 
 STEP 2 — Only if canWork is true AND viral is "high" or "med", write "prompt":
 - MASCOT hero → feature that SPECIFIC mascot performing a real niche action with ACCURATE niche equipment (pickleball: a SOLID RECTANGULAR paddle, a PERFORATED HOLLOW ball, the kitchen line). The mascot is the focal graphic; the headline sits with it. Add the pun/headline text only if needsText.
@@ -1075,6 +1099,7 @@ STEP 2 — Only if canWork is true AND viral is "high" or "med", write "prompt":
 - Isolated design, headline spelled VERBATIM. ACCURATE niche equipment.
 - ABSOLUTE QUALITY BAR — every style: premium, sellable-on-Etsy commercial quality; NEVER cartoonish, kawaii, chibi, Pixar/Disney, childish, clip-art, sticker, 3D-render, or flat clean modern mascot-logo. If a knowledge-base note calls a mascot "cute"/"comical"/"happy"/"zen", render the animal with characterful craftsmanship appropriate to the chosen style — never as a cartoon.
 - PRINT-SAFE (DTF) — every element must survive direct-to-film print and a magenta chroma-key: render nets, mesh, fences, grids, screens, lattices, halftone fills, ropes, chains and any repeating-line motif as SOLID FULL-COLOR shapes, NEVER as thin open mesh with see-through gaps. No hairline or single-pixel strokes; every line, outline and stem must be a thick, confidently weighted shape. Avoid tiny unreadable text and fine smooth gradients, and keep the artwork's palette clearly away from magenta / hot-pink / fuchsia (the background key color) so nothing keys out.
+- ASPECT: compose the design to FIT THE CHOSEN ASPECT inside the canvas. For non-square aspects (4:5, 5:4, 9:16, 16:9), draw the design only inside that aspect's content area and leave the unused canvas margins TRANSPARENT — so the final cropped design genuinely has the chosen shape. Never stretch elements to fill a canvas that doesn't match the aspect.
 - If it fails the gate (canWork false or viral low), set "prompt" to "".
 
 ═══ STYLE PLAYBOOK — what each style looks like (use the one you chose; do not mix) ═══
@@ -1095,7 +1120,7 @@ STEP 2 — Only if canWork is true AND viral is "high" or "med", write "prompt":
 - Watercolor: soft hand-painted washes with bleeding edges, organic shapes, gentle muted palette, illustrative not graphic.
 - Militarycore: surplus / army-stencil — olive/khaki/black palette, stencil block lettering, weathered tag/patch look.
 
-Return STRICT JSON: {"canWork": boolean, "hero": "mascot name or TYPE-ONLY", "style": "EXACTLY one style name from the approved menu", "needsText": boolean, "viral": "high|med|low", "prompt": "string"}.`;
+Return STRICT JSON: {"canWork": boolean, "hero": "mascot name or TYPE-ONLY", "style": "EXACTLY one style name from the approved menu", "needsText": boolean, "viral": "high|med|low", "aspect": "1:1|4:5|5:4|9:16|16:9", "prompt": "string"}.`;
 
 /** An edit-mode rendering anchor drawn from the workspace's Niche Hunter library. */
 export type NicheAnchor = { image: string; status: string; score: number; text: string };
@@ -1192,7 +1217,8 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
   console.log(`[Pipeline/Stage6] Bestseller image pool: ${bestsellerPool.length} real in-niche images for edit-mode rendering`);
 
   // ── Step 3: ONE focused prompt per winner from LLM in parallel ──
-  type PromptSet = { concept: typeof winners[0]; promptA: string; promptB: string; promptC: string; sourceImageUrl?: string | null };
+  type DesignAspect = "1:1" | "4:5" | "5:4" | "9:16" | "16:9";
+  type PromptSet = { concept: typeof winners[0]; promptA: string; promptB: string; promptC: string; sourceImageUrl?: string | null; aspect: DesignAspect };
 
   // Niche style DNA (PO 2026-06-12: "use the Signals from the NICHE hunter to influence here").
   // The Niche Hunter extracts SourceStyleJSON from REAL Etsy bestsellers — feed that proven style
@@ -1412,14 +1438,18 @@ Stage-4 suggested style hint (a guess only — override if the references sugges
       const stripped = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
       const jStart = stripped.indexOf("{"), jEnd = stripped.lastIndexOf("}");
       const jsonStr = jStart >= 0 && jEnd > jStart ? stripped.slice(jStart, jEnd + 1) : stripped;
-      let verdict: { canWork?: boolean; hero?: string; style?: string; viral?: string; prompt?: string };
+      let verdict: { canWork?: boolean; hero?: string; style?: string; viral?: string; aspect?: string; prompt?: string };
       try {
         verdict = JSON.parse(jsonStr);
       } catch {
         console.warn(`[Pipeline] Council JSON parse failed for concept ${concept.id}: ${content.slice(0, 200)}`);
         return null;
       }
-      console.log(`[Pipeline/Council] "${concept.conceptName}" → hero=${verdict.hero ?? "?"} style=${verdict.style ?? "?"} viral=${verdict.viral ?? "?"} canWork=${verdict.canWork}`);
+      // Validate aspect; default to 1:1 if the council omits it or returns an unknown value (PO 2026-06-16).
+      const ALLOWED_ASPECTS: readonly DesignAspect[] = ["1:1", "4:5", "5:4", "9:16", "16:9"] as const;
+      const aspect: DesignAspect = (ALLOWED_ASPECTS as readonly string[]).includes(verdict.aspect ?? "")
+        ? (verdict.aspect as DesignAspect) : "1:1";
+      console.log(`[Pipeline/Council] "${concept.conceptName}" → hero=${verdict.hero ?? "?"} style=${verdict.style ?? "?"} aspect=${aspect} viral=${verdict.viral ?? "?"} canWork=${verdict.canWork}`);
       // Gate: only a passing concept gets a prompt. (A failed gate yields an empty prompt → this
       // winner is skipped downstream, same as a failed prompt-gen.)
       const prompt = (verdict.canWork && verdict.viral !== "low" && verdict.prompt) ? verdict.prompt : "";
@@ -1430,6 +1460,7 @@ Stage-4 suggested style hint (a guess only — override if the references sugges
         promptC: "",
         // Council designs are generated FRESH (text-to-image) so the chosen mascot renders.
         sourceImageUrl: null,
+        aspect,
       };
     } catch (err) {
       console.warn(`[Pipeline] Design council failed for concept ${concept.id}:`, err);
@@ -1452,14 +1483,14 @@ Stage-4 suggested style hint (a guess only — override if the references sugges
   console.log(`[Pipeline] Got ${validPromptSets.length} valid prompt sets, generating ${validPromptSets.length} images (1 hero per concept) in parallel...`);
 
   // ── Step 4: Generate all images in parallel (up to 15) ───────────────
-  type ImageTask = { concept: typeof winners[0]; variation: "A" | "B" | "C"; prompt: string; sourceImageUrl?: string | null };
+  type ImageTask = { concept: typeof winners[0]; variation: "A" | "B" | "C"; prompt: string; sourceImageUrl?: string | null; aspect: DesignAspect };
   const allImageTasks: ImageTask[] = [];
 
   for (const ps of validPromptSets) {
     // scans-to-1 (PO 2026-06-11): render ONE hero image per concept (was 3) — cuts scan image-gen
     // cost 3x. Prefer variation A (Clean/Bold hero); fall back to B/C only if A came back empty.
     const heroPrompt = ps.promptA || ps.promptB || ps.promptC;
-    if (heroPrompt) allImageTasks.push({ concept: ps.concept, variation: "A", prompt: heroPrompt, sourceImageUrl: ps.sourceImageUrl });
+    if (heroPrompt) allImageTasks.push({ concept: ps.concept, variation: "A", prompt: heroPrompt, sourceImageUrl: ps.sourceImageUrl, aspect: ps.aspect });
   }
 
   const runImageTask = async (task: typeof allImageTasks[number], timeoutMultiplier = 1) => {
@@ -1469,6 +1500,7 @@ Stage-4 suggested style hint (a guess only — override if the references sugges
         `Image ${task.variation} for concept ${task.concept.id}`,
         task.sourceImageUrl,
         timeoutMultiplier,
+        task.aspect,
       );
       const rawUrl = img.url ?? null;
       // Production-ready transparent PNG (background removal) is DEFERRED out of the scan (PO
