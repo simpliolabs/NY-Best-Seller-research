@@ -59,11 +59,10 @@ export default function Listings() {
     { enabled: !!workspaceId }
   );
 
-  // winnersOnly:false — Niche-Hunter concepts are all created isWinner:false (db.ts createConceptFromPattern),
-  // so winnersOnly:true filtered the listings dropdown to EMPTY. Any concept with a design image is listable.
-  const conceptsQuery = trpc.library.list.useQuery(
-    { limit: 200, offset: 0, workspaceId, sortBy: "hasImages", sortDir: "desc" },
-    { enabled: !!workspaceId && showCreateForm }
+  // Only concepts that already have mockup renders — winners first.
+  const conceptsQuery = trpc.listing.eligibleConcepts.useQuery(
+    { workspaceId: activeWorkspace?.id ?? "" },
+    { enabled: !!activeWorkspace?.id && showCreateForm }
   );
 
   const groupsQuery = trpc.productGroup.list.useQuery(
@@ -132,12 +131,8 @@ export default function Listings() {
   const isShopifyConnected = shopifyStatus.data?.connected ?? false;
 
   // ─── Helpers ───────────────────────────────────────────────────────
-  const conceptsWithImages = useMemo(() => {
-    if (!conceptsQuery.data?.concepts) return [];
-    return conceptsQuery.data.concepts.filter(
-      (c) => c.imageUrlA || c.imageUrlB || c.imageUrlC || c.productionUrlA || c.productionUrlB || c.productionUrlC
-    );
-  }, [conceptsQuery.data]);
+  // eligibleConcepts already returns only mockup-ready concepts, winners-first.
+  const conceptsWithImages = conceptsQuery.data ?? [];
 
   const filteredConcepts = useMemo(() => {
     const q = conceptSearch.trim().toLowerCase();
@@ -245,7 +240,15 @@ export default function Listings() {
                   <SelectContent>
                     {filteredConcepts.map((c) => (
                       <SelectItem key={c.id} value={String(c.id)}>
-                        {c.conceptName}
+                        <span className="flex items-center gap-1.5">
+                          {(c as any).isWinner && <span title="Winner">⭐</span>}
+                          <span className="truncate">{c.conceptName}</span>
+                          {(c as any).mockupCount != null && (
+                            <span className="text-[10px] text-muted-foreground ml-auto">
+                              {(c as any).mockupCount} mockup{(c as any).mockupCount !== 1 ? "s" : ""}
+                            </span>
+                          )}
+                        </span>
                       </SelectItem>
                     ))}
                   </SelectContent>
