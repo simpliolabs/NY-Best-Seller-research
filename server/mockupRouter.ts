@@ -7,7 +7,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "./_core/trpc";
 import { compositeDesignOnMockup, anchorForProductType, resolvePrintZone } from "./mockupCompositor";
-import { pickBestColors } from "./mockupColorMatcher";
+import { pickBestColors, scoreRendersReadability } from "./mockupColorMatcher";
 import { processDesignForProduction } from "./productionImageProcessor";
 import {
   createMockupRender,
@@ -15,7 +15,7 @@ import {
   getMockupsByConceptVariation,
   deleteMockupRender,
 } from "./mockupDb";
-import { getMockupsByGroup, getProductGroupById } from "./productGroupDb";
+import { getMockupsByGroup, getProductGroupById, getMockupTemplatesByIds } from "./productGroupDb";
 import { storagePut } from "./storage";
 import { nanoid } from "nanoid";
 import { getDb } from "./db";
@@ -233,6 +233,31 @@ export const mockupRouter = router({
     .input(z.object({ conceptId: z.number(), variationKey: z.enum(["A", "B", "C"]) }))
     .query(async ({ input }) => {
       return getMockupsByConceptVariation(input.conceptId, input.variationKey);
+    }),
+
+  /** Readability score per render for the Listings UI (PO 2026-06-17). The matcher's signal stopped
+   *  at generation time, so a dark-gray "Kitchen Violation" design shipped on a near-invisible Espresso
+   *  shirt because the manual checkbox grid had no contrast hint. This exposes the same per-template
+   *  worstSig score (level "low" when worstSig < 0.25) so Manus can paint low-contrast tiles with a
+   *  red border + show a warning banner. PO chose WARN (don't block) — publish path is unchanged. */
+  getReadability: protectedProcedure
+    .input(z.object({ conceptId: z.number(), variationKey: z.enum(["A", "B", "C"]).optional() }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      const concepts = await db.select().from(designConcepts).where(eq(designConcepts.id, input.conceptId)).limit(1);
+      const concept = concepts[0];
+      if (!concept) throw new TRPCError({ code: "NOT_FOUND", message: "Concept not found" });
+      const designUrl = concept.productionUrlA || concept.imageUrlA;
+      if (!designUrl) return [];
+      const renders = input.variationKey
+        ? await getMockupsByConceptVariation(input.conceptId, input.variationKey)
+        : await getMockupsByConcept(input.conceptId);
+      if (!renders.length) return [];
+      const uniqueTemplateIds = Array.from(new Set(renders.map((r) => r.templateId)));
+      const templates = await getMockupTemplatesByIds(uniqueTemplateIds);
+      const templatesById = new Map(templates.map((t) => [t.id, t]));
+      return scoreRendersReadability(designUrl, renders.map((r) => ({ id: r.id, templateId: r.templateId })), templatesById);
     }),
 
   /** Regenerate a single mockup (re-composite with current design) */

@@ -2,7 +2,7 @@
  * Product Group DB helpers — Phase C
  * Karpathy: plain functions, no class hierarchy, no abstractions beyond what's needed.
  */
-import { eq, asc } from "drizzle-orm";
+import { eq, asc, inArray } from "drizzle-orm";
 import { getDb } from "./db";
 import { productGroups, mockupTemplates } from "../drizzle/schema";
 import type { ProductGroup, InsertProductGroup, MockupTemplate, InsertMockupTemplate } from "../drizzle/schema";
@@ -50,6 +50,15 @@ export async function getMockupsByGroup(groupId: string): Promise<MockupTemplate
     .from(mockupTemplates)
     .where(eq(mockupTemplates.groupId, groupId))
     .orderBy(asc(mockupTemplates.sortOrder));
+}
+
+/** Look up mockup templates by a list of ids. Used by the readability scorer (PO 2026-06-17) so the
+ *  Listings UI can flag low-contrast tiles. */
+export async function getMockupTemplatesByIds(ids: string[]): Promise<MockupTemplate[]> {
+  if (!ids.length) return [];
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(mockupTemplates).where(inArray(mockupTemplates.id, ids));
 }
 
 export async function createMockupTemplate(

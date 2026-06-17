@@ -139,3 +139,65 @@ export async function pickBestColors(
   pick.sort((a, b) => b.score - a.score);
   return pick.map((s) => s.t);
 }
+
+export type ReadabilityScore = {
+  renderId: string;
+  templateId: string;
+  colorName: string;
+  colorHex: string;
+  score: number;     // 0..1, area-weighted average visibility (matches pickBestColors)
+  worstSig: number;  // 0..1, visibility of the least-visible SIGNIFICANT ink (the readability gate)
+  level: "good" | "low"; // "low" = worstSig < MIN_SIG_VISIBILITY = 0.25
+};
+
+/**
+ * Score each render by readability against its template's blank color. Reuses the SAME math as
+ * pickBestColors (palette extraction → area-weighted score + worst-significant-ink check), so the
+ * Listings UI can flag low-contrast tiles BEFORE the user publishes (PO 2026-06-17: a dark-gray
+ * raccoon design shipped on Espresso because the matcher's signal stopped at generation time and
+ * the manual checkbox grid had no visibility hint). On palette-extraction failure ALL renders are
+ * marked "good" — never blocks the UI.
+ */
+export async function scoreRendersReadability(
+  designImageUrl: string,
+  renders: Array<{ id: string; templateId: string }>,
+  templatesById: Map<string, MockupTemplate>,
+): Promise<ReadabilityScore[]> {
+  const fallback = (r: { id: string; templateId: string }): ReadabilityScore => {
+    const t = templatesById.get(r.templateId);
+    return {
+      renderId: r.id, templateId: r.templateId,
+      colorName: t?.colorName ?? "?", colorHex: t?.colorHex ?? "#000000",
+      score: 1, worstSig: 1, level: "good",
+    };
+  };
+
+  let palette: Array<RGB & { weight: number }>;
+  try {
+    palette = await extractDesignPalette(designImageUrl);
+  } catch (err) {
+    console.warn("[Readability] palette extraction failed, marking all renders 'good':", err);
+    return renders.map(fallback);
+  }
+  if (palette.length === 0) return renders.map(fallback);
+
+  return renders.map((r) => {
+    const t = templatesById.get(r.templateId);
+    if (!t) return { renderId: r.id, templateId: r.templateId, colorName: "?", colorHex: "#000000", score: 0, worstSig: 0, level: "low" };
+    const blank = hexToRgb(t.colorHex);
+    if (!blank) return { renderId: r.id, templateId: r.templateId, colorName: t.colorName, colorHex: t.colorHex, score: 0, worstSig: 0, level: "low" };
+    let score = 0;
+    let worstSig = 1;
+    for (const c of palette) {
+      const v = visibility(c, blank);
+      score += c.weight * v;
+      if (c.weight >= SIGNIFICANT_INK_WEIGHT) worstSig = Math.min(worstSig, v);
+    }
+    return {
+      renderId: r.id, templateId: r.templateId,
+      colorName: t.colorName, colorHex: t.colorHex,
+      score, worstSig,
+      level: worstSig < MIN_SIG_VISIBILITY ? "low" : "good",
+    };
+  });
+}
