@@ -4,6 +4,7 @@
  * Flow: select concept → pick mockups → generate copy → mark ready.
  */
 import { useState, useMemo } from "react";
+import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { Button } from "@/components/ui/button";
@@ -74,6 +75,16 @@ export default function Listings() {
     { conceptId: Number(selectedConceptId) },
     { enabled: !!selectedConceptId }
   );
+
+  const readabilityQuery = trpc.mockup.getReadability.useQuery(
+    { conceptId: Number(selectedConceptId) },
+    { enabled: !!selectedConceptId }
+  );
+  const scoreByRender = useMemo(() => {
+    const m = new Map<string, { level: "good" | "low"; colorName: string; worstSig: number; renderId: string }>();
+    for (const s of readabilityQuery.data ?? []) m.set(s.renderId, s);
+    return m;
+  }, [readabilityQuery.data]);
 
   // ─── Mutations ─────────────────────────────────────────────────────
   const createMutation = trpc.listing.create.useMutation({
@@ -304,32 +315,53 @@ export default function Listings() {
             {/* Mockup Selection */}
             {selectedConceptId && mockupsQuery.data && mockupsQuery.data.length > 0 && (
               <div className="space-y-2">
-                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  Select Mockup Images ({selectedMockups.length} selected)
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                    Select Mockup Images ({selectedMockups.length} selected)
+                  </label>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs h-6"
+                    onClick={() => {
+                      const good = (readabilityQuery.data ?? []).filter(s => s.level === "good").map(s => s.renderId);
+                      setSelectedMockups(good.slice(0, 8));
+                    }}
+                    disabled={!readabilityQuery.data?.length}
+                  >
+                    Select recommended
+                  </Button>
+                </div>
                 <div className="grid grid-cols-3 md:grid-cols-5 lg:grid-cols-6 gap-2">
-                  {mockupsQuery.data.map((m) => (
-                    <button
-                      key={m.id}
-                      onClick={() => toggleMockup(m.id)}
-                      className={`relative rounded-lg overflow-hidden border-2 transition-all ${
-                        selectedMockups.includes(m.id)
-                          ? "border-primary ring-2 ring-primary/20"
-                          : "border-border hover:border-primary/40"
-                      }`}
-                    >
-                      <img
-                        src={m.compositeUrl}
-                        alt={`Mockup ${m.variationKey}`}
-                        className="w-full aspect-square object-contain bg-muted/30"
-                      />
-                      {selectedMockups.includes(m.id) && (
-                        <div className="absolute top-1 right-1 bg-primary text-primary-foreground rounded-full p-0.5">
-                          <CheckCircle2 className="h-3 w-3" />
-                        </div>
-                      )}
-                    </button>
-                  ))}
+                  {mockupsQuery.data.map((m) => {
+                    const s = scoreByRender.get(m.id);
+                    const isLow = s?.level === "low";
+                    const isSelected = selectedMockups.includes(m.id);
+                    return (
+                      <button
+                        key={m.id}
+                        onClick={() => toggleMockup(m.id)}
+                        className={cn(
+                          "relative rounded-lg overflow-hidden border-2 transition-all",
+                          isLow ? "border-red-500" : "border-border hover:border-primary/40",
+                          isSelected && "ring-2 ring-primary/20 border-primary"
+                        )}
+                      >
+                        <img
+                          src={m.compositeUrl}
+                          alt={s?.colorName ?? `Mockup ${m.variationKey}`}
+                          className="w-full aspect-square object-contain bg-muted/30"
+                        />
+                        <p className="text-[10px] text-center py-0.5 truncate px-0.5">{s?.colorName ?? ""}</p>
+                        {isLow && <span className="absolute top-1 right-1 text-[10px] bg-red-500 text-white px-1 rounded">Low contrast</span>}
+                        {isSelected && (
+                          <div className="absolute top-1 left-1 bg-primary text-primary-foreground rounded-full p-0.5">
+                            <CheckCircle2 className="h-3 w-3" />
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -339,6 +371,16 @@ export default function Listings() {
                 No mockups found for this concept. Generate mockups first.
               </p>
             )}
+
+            {/* Low-contrast warning */}
+            {(() => {
+              const lowSelected = selectedMockups.filter(id => scoreByRender.get(id)?.level === "low");
+              return lowSelected.length > 0 ? (
+                <div className="mb-1 p-2 rounded bg-amber-50 border border-amber-300 text-amber-800 text-sm dark:bg-amber-950/30 dark:border-amber-700 dark:text-amber-300">
+                  ⚠️ {lowSelected.length} low-contrast pick(s): {lowSelected.map(id => scoreByRender.get(id)?.colorName).join(", ")}. The design ink likely won't read clearly on these shirt colors.
+                </div>
+              ) : null;
+            })()}
 
             {/* Validation hint */}
             {(!selectedConceptId || !selectedGroupId || selectedMockups.length === 0) && !createMutation.isPending && (
