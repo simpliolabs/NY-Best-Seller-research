@@ -2707,6 +2707,56 @@ export async function regenerateConceptViaCouncil(
 }
 
 /**
+ * First-time image generation for a concept that currently has NO images. Routes through the same
+ * council as the scan pipeline and regenerate — closes the last quality gap (PO 2026-06-17: a fresh
+ * generation of "DUPR Driven" came back as bare typography + paddle/arrow accents because the legacy
+ * generateSingleImage in routers.ts was the 2-step prompt-writer with stale concept.style + no
+ * playbook / no DTF rules / no Bold Typographic enforcement / no niche KB / no vision refs / no
+ * aspect). Uses ASSIGNED-style mode (soft lane) — the council may veto the concept's scan-time style
+ * if the workspace's allowed-styles menu doesn't include it (e.g. "athletic, data-driven" → council
+ * picks a real playbook style instead).
+ */
+export async function generateConceptViaCouncil(
+  conceptId: number,
+): Promise<{ success: boolean; message: string; imageUrl?: string; style?: string }> {
+  const concept = await getConceptById(conceptId);
+  if (!concept) return { success: false, message: "Concept not found." };
+  if (concept.imageUrlA || concept.imageUrlB || concept.imageUrlC) {
+    return { success: false, message: "Concept already has images." };
+  }
+  const run = await getRunById(concept.runId);
+  const workspaceId = run?.workspaceId ?? null;
+  const councilCtx = await loadCouncilContext(workspaceId);
+
+  // Pick an assigned style. The concept's scan-time `style` (often a Stage-4 phrase like
+  // "athletic, data-driven") is rarely a valid playbook style — use it ONLY when it matches the
+  // allowed-styles menu; otherwise fall back to the first allowed style and let the council veto.
+  const fallbackLane = ["Vintage/Distressed", "Bold Typographic", "Halftone Screen-Print"];
+  const allowed = councilCtx.allowedStylesList.length ? councilCtx.allowedStylesList : fallbackLane;
+  const conceptStyleIsValid = typeof concept.style === "string" && allowed.includes(concept.style);
+  const assignedStyle = conceptStyleIsValid ? concept.style : allowed[0];
+
+  const promptSet = await runCouncilOnce(concept, councilCtx, {
+    assignedStyle,
+    conceptStyleHint: concept.style ?? "",
+  });
+  if (!promptSet) return { success: false, message: "Council failed or returned malformed JSON — see server logs." };
+  const promptText = promptSet.promptA;
+  if (!promptText) {
+    return { success: false, message: "Council vetoed the concept (canWork=false or viral=low) — no prompt to render." };
+  }
+  const aspect = promptSet.aspect;
+  const finalStyle = assignedStyle;
+
+  const img = await generateImageWithRetry(promptText, `Generate concept ${conceptId}`, null, 1, aspect);
+  if (!img.url) return { success: false, message: "Image generation returned no URL." };
+  await updateConceptImages(conceptId, { imageUrlA: img.url, imagePromptA: promptText });
+  await updateConceptStyle(conceptId, finalStyle);
+  await updateConceptProductionUrl(conceptId, "A", null);
+  return { success: true, message: `Generated 1 design via the design council.`, imageUrl: img.url, style: finalStyle };
+}
+
+/**
  * Regenerate images for the top winner concepts in a completed run.
  * Used when a run completed with 0 images (e.g., due to timeout during Stage 6).
  * Also re-runs scoring (Stage 5) if all concepts have NULL trendScore (scoring timed out).

@@ -782,66 +782,14 @@ export const appRouter = router({
     generateSingleImage: protectedProcedure
       .input(z.object({ conceptId: z.number() }))
       .mutation(async ({ input }) => {
-        const concept = await getConceptById(input.conceptId);
-        if (!concept) return { success: false, message: "Concept not found." };
-        if (concept.imageUrlA || concept.imageUrlB || concept.imageUrlC) {
-          return { success: false, message: "Concept already has images." };
-        }
-
-        // Build a simplified prompt for the concept
-        const promptSystem = `You are a senior art director. Write THREE image generation prompts for a t-shirt graphic design concept. Each prompt should be detailed (200+ words) and describe a print-ready design with transparent/white background suitable for DTF printing. Aim for professional, commercial-grade, Etsy-bestseller quality: clean confident linework, rich purposeful detail, balanced focal composition, a deliberate limited color palette, crisp and polished — a design someone would actually buy. Render the design in the concept's stated art style. The HEADLINE and SUBTEXT provided below MUST both be rendered as clearly readable text, spelled exactly — the headline is the typographic centerpiece; never drop it for a graphic-only design. ABSOLUTE RULE: NEVER cartoonish, clip-art, kawaii, chibi, or childish/exaggerated cartoon styling — under any circumstances. Return ONLY a JSON object with keys: variation_a, variation_b, variation_c.`;
-        const userMsg = `Design concept:
-Name: ${concept.conceptName}
-Format: ${concept.format}
-Style: ${concept.style}
-Headline: ${concept.headline ?? "none"}
-Subtext: ${concept.subtext ?? "none"}
-Color Palette: ${(concept.colorPalette as string[] ?? []).join(", ") || "not specified"}
-Layout: ${concept.layoutDescription ?? "not specified"}
-Font: ${concept.fontSuggestion ?? "not specified"}`;
-
+        // ROUTE THROUGH THE COUNCIL (PO 2026-06-17). The legacy 2-step prompt-writer here was the
+        // last quality gap — a "DUPR Driven" first-time gen came back as bare typography + paddle
+        // and arrow accents because this path had stale concept.style + colorPalette + layout +
+        // font from Stage-4, NO playbook, NO Bold Typographic enforcement, NO niche KB, NO vision
+        // refs, NO aspect. Now uses the same shared council the scan + regen paths use.
         try {
-          const promptResult = await invokeLLM({
-            messages: [
-              { role: "system", content: promptSystem },
-              { role: "user", content: userMsg },
-            ],
-            response_format: { type: "json_object" },
-          });
-
-          const promptContent = typeof promptResult.choices[0]?.message?.content === "string"
-            ? promptResult.choices[0].message.content : "";
-          const parsed = JSON.parse(promptContent);
-          const prompts = {
-            A: parsed.variation_a ?? parsed.prompt ?? "",
-            B: parsed.variation_b ?? "",
-            C: parsed.variation_c ?? "",
-          };
-
-          // Generate images in parallel
-          const results = await Promise.allSettled(
-            (["A", "B", "C"] as const).filter(v => prompts[v]).map(async (variation) => {
-              const img = await generateImage({ prompt: prompts[variation] });
-              return { variation, url: img.url ?? null, prompt: prompts[variation] };
-            })
-          );
-
-          const update: Parameters<typeof updateConceptImages>[1] = {};
-          let generated = 0;
-          for (const r of results) {
-            if (r.status !== "fulfilled" || !r.value.url) continue;
-            generated++;
-            const { variation, url, prompt } = r.value;
-            if (variation === "A") { update.imageUrlA = url; update.imagePromptA = prompt; }
-            if (variation === "B") { update.imageUrlB = url; update.imagePromptB = prompt; }
-            if (variation === "C") { update.imageUrlC = url; update.imagePromptC = prompt; }
-          }
-
-          if (Object.keys(update).length > 0) {
-            await updateConceptImages(input.conceptId, update);
-          }
-
-          return { success: true, message: `Generated ${generated} images.` };
+          const { generateConceptViaCouncil } = await import("./pipeline");
+          return await generateConceptViaCouncil(input.conceptId);
         } catch (err: any) {
           console.error(`[GenerateSingleImage] Failed for concept ${input.conceptId}:`, err);
           return { success: false, message: err?.message ?? "Image generation failed." };
