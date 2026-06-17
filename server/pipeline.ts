@@ -1095,17 +1095,17 @@ STEP 1 — VET (answer honestly):
 STEP 2 — Only if canWork is true AND viral is "high" or "med", write "prompt":
 - MASCOT hero → feature that SPECIFIC mascot performing a real niche action with ACCURATE niche equipment (pickleball: a SOLID RECTANGULAR paddle, a PERFORATED HOLLOW ball, the kitchen line). The mascot is the focal graphic; the headline sits with it. Add the pun/headline text only if needsText.
 - TYPE-ONLY → a bold, characterful typographic treatment of the headline; no forced graphic.
-- Render the design in the EXACT chosen style — match its layout, line-work, palette and typography from the playbook. Do NOT mix styles (a Minimalist Line-Art concept must not have heavy halftone; a Bold Typographic must not be a circular badge).
+- Render the design in the EXACT chosen style — match its layout, line-work, palette and typography from the playbook. Do NOT mix styles (a Bold Typographic must not be a circular badge; a Vintage/Distressed must not have a clean modern sans-serif).
 - Isolated design, headline spelled VERBATIM. ACCURATE niche equipment.
 - ABSOLUTE QUALITY BAR — every style: premium, sellable-on-Etsy commercial quality; NEVER cartoonish, kawaii, chibi, Pixar/Disney, childish, clip-art, sticker, 3D-render, or flat clean modern mascot-logo. If a knowledge-base note calls a mascot "cute"/"comical"/"happy"/"zen", render the animal with characterful craftsmanship appropriate to the chosen style — never as a cartoon.
 - PRINT-SAFE (DTF) — every element must survive direct-to-film print and a magenta chroma-key: render nets, mesh, fences, grids, screens, lattices, halftone fills, ropes, chains and any repeating-line motif as SOLID FULL-COLOR shapes, NEVER as thin open mesh with see-through gaps. No hairline or single-pixel strokes; every line, outline and stem must be a thick, confidently weighted shape. Avoid tiny unreadable text and fine smooth gradients, and keep the artwork's palette clearly away from magenta / hot-pink / fuchsia (the background key color) so nothing keys out.
 - ASPECT: compose the design to FIT THE CHOSEN ASPECT inside the canvas. For non-square aspects (4:5, 5:4, 9:16, 16:9), draw the design only inside that aspect's content area and leave the unused canvas margins TRANSPARENT — so the final cropped design genuinely has the chosen shape. Never stretch elements to fill a canvas that doesn't match the aspect.
+- COMPOSITION (DTF cost + multi-color shirts): default to a COMPACT design — the subject (mascot, typography, or mascot+headline) standing ALONE with TRANSPARENT pixels around it; no full-canvas backdrop, no enclosing sunburst/sunset/halftone-gradient/rectangular panel, no retro frame around the subject. The ONLY exception is when the concept IS a badge, crest, seal, or varsity emblem (e.g. Collegiate/Varsity, a country-club crest): then the full design fills the badge SHAPE, but the area OUTSIDE that badge shape is still transparent. Transparent area = less DTF ink = the design reads on any shirt color.
 - If it fails the gate (canWork false or viral low), set "prompt" to "".
 
 ═══ STYLE PLAYBOOK — what each style looks like (use the one you chose; do not mix) ═══
-- Vintage/Distressed: heavy worn cracked screen-print, fine halftone grit, ink-pull imperfections, faded retro palette (cream/burnt-orange/mustard/forest/charcoal). 1970s park-tee feel.
-- Vintage Engraving: hand-drawn woodcut/engraving line-work, cross-hatching + stippling, 1-2 inks, antique apothecary/scientific-plate look. Mascots rendered like a vintage Bigfoot tee or naturalist illustration.
-- Vintage Hand-Drawn Illustration: organic ink line art, slight imperfections, hand-drawn feel, muted vintage palette, illustrative not graphic.
+- Vintage/Distressed: heavy worn cracked screen-print, chunky halftone grit (rendered as solid dot shapes, never thin mesh), ink-pull imperfections on thickly-weighted strokes, faded retro palette (cream/burnt-orange/mustard/forest/charcoal). 1970s park-tee feel.
+- Vintage Hand-Drawn Illustration: organic hand-drawn illustration with BOLD ink line work — every outline a thick confident brush stroke (never hairline), slight imperfections, hand-drawn feel, muted vintage palette, illustrative not graphic.
 - Retro 70s-80s: groovy bubble/funk type, sunbursts, rainbow gradients within a limited 70s palette, warm browns/oranges/yellows, optimistic and graphic.
 - Retro Groovy: 70s psychedelic — wavy custom lettering, hippie palette, swirling forms, looser and more decorative than Retro 70s-80s.
 - Vintage 90's: 90s sports/streetwear — bold geometric blocks, color-block panels, varsity-meets-graffiti energy, primary palette + black.
@@ -1113,7 +1113,6 @@ STEP 2 — Only if canWork is true AND viral is "high" or "med", write "prompt":
 - Cabincore / Cottagecore: cozy folk-art, pine/forest/cabin/mushroom motifs, warm muted earth tones; Cabincore = rugged outdoors, Cottagecore = soft pastoral florals/herbs.
 - Halftone Screen-Print: clean punk/indie poster — bold flat shapes overlaid with prominent halftone dot patterns, high-contrast 2-color separations.
 - Bold Typographic: typography IS the design — chunky display lettering, modern type-forward, no/minimal illustration; high contrast, generous negative space (NOT a badge).
-- Minimalist Line-Art: a single confident thin black line drawing, clean white background, minimal type, gallery-poster minimalism (NOT distressed, NOT badged).
 - Dark Academia: oxblood/forest-green/cream palette, classical serifs and Latin-feel borders, books/owls/celestial motifs, scholarly elegance.
 - Collegiate/Varsity: classic varsity letterman — block/serif college type, arched headline + circular seal, school colors, athletic crest.
 - Streetwear/Y2K: brand-graphic energy — bold sans, glossy chrome/Y2K palette, modern hype-drop look.
@@ -1334,7 +1333,10 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
       const { DEFAULT_ALLOWED_STYLES } = await import("../shared/styleProfile");
       // Non-printable styles never make sellable t-shirt graphics (PO 2026-06-15: a Photorealistic lane
       // rendered a literal octopus PHOTO). Exclude them even if a workspace's saved allowlist still has one.
-      const NON_PRINTABLE_STYLES = new Set(["Photorealistic"]);
+      // Hard-block DTF-incompatible styles even if a workspace's saved allowlist still has them.
+      // Photorealistic renders photos. Minimalist Line-Art = hairline strokes. Vintage Engraving =
+      // cross-hatching + stippling. None survive DTF print. (PO 2026-06-15 + 2026-06-16.)
+      const NON_PRINTABLE_STYLES = new Set(["Photorealistic", "Minimalist Line-Art", "Vintage Engraving"]);
       allowedStylesList = (Array.isArray(wsStyles) && wsStyles.length ? wsStyles : DEFAULT_ALLOWED_STYLES)
         .filter((s): s is string => typeof s === "string" && s.trim().length > 0 && !NON_PRINTABLE_STYLES.has(s));
       console.log(`[Pipeline/Stage6] Council KB: ${mascots.length} mascots, ${gags.length} gags, ${phrases.length} catchphrases | styles: ${allowedStylesList.length} | visionRefs: ${approvedVisionRefs.length}`);
@@ -1378,7 +1380,7 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
     // winner a different APPROVED style so the batch spans a range of styles AND palettes (each playbook
     // style carries its own palette). Soft lane — the council may veto per concept; the refs become the
     // CRAFT/QUALITY bar, not a single look to clone.
-    const styleLanes = allowedStylesList.length ? allowedStylesList : ["Vintage/Distressed", "Bold Typographic", "Minimalist Line-Art"];
+    const styleLanes = allowedStylesList.length ? allowedStylesList : ["Vintage/Distressed", "Bold Typographic", "Halftone Screen-Print"];
     const assignedStyle = styleLanes[idx % styleLanes.length];
 
     // VISION-GROUNDED DESIGN COUNCIL (PO 2026-06-14): the council SEES the buyer's hand-approved Etsy
@@ -1394,7 +1396,7 @@ async function stageDesignExpansion(runId: number, force = false): Promise<numbe
 ${nicheKB || "(no mascots configured — fall back to a strong type-only design)"}
 
 YOUR ASSIGNED STYLE LANE for this design (#${idx + 1} of ${winners.length}): ${assignedStyle}
-Render THIS design in "${assignedStyle}" and its native palette per the STYLE PLAYBOOK — do NOT force a dark background. Only switch to a different APPROVED style if "${assignedStyle}" genuinely cannot carry this concept; if you do, pick a distinct approved style and never collapse back to a dark distressed look. Full approved menu (for that fallback only): ${allowedStylesList.length ? allowedStylesList.join(" | ") : "Vintage/Distressed | Bold Typographic | Minimalist Line-Art"}
+Render THIS design in "${assignedStyle}" and its native palette per the STYLE PLAYBOOK — do NOT force a dark background. Only switch to a different APPROVED style if "${assignedStyle}" genuinely cannot carry this concept; if you do, pick a distinct approved style and never collapse back to a dark distressed look. Full approved menu (for that fallback only): ${allowedStylesList.length ? allowedStylesList.join(" | ") : "Vintage/Distressed | Bold Typographic | Halftone Screen-Print"}
 
 ${avoidDirectives ? `AVOID (learned from the buyer's past rejections): ${avoidDirectives}\n\n` : ""}THE NEW CONCEPT:
 Name: ${concept.conceptName}

@@ -27,15 +27,15 @@ export interface StyleProfile {
   allowedStyles?: string[];
 }
 
-/** Default art-style menu seeded onto new workspaces (PO 2026-06-09). Cartoonish excluded; also
- *  the options shown in the per-concept Regenerate dropdown. */
+/** Default art-style menu seeded onto new workspaces (PO 2026-06-09). Cartoonish, Photorealistic,
+ *  and thin-line styles (Minimalist Line-Art, Vintage Engraving) excluded — DTF can't print hairline
+ *  strokes, cross-hatching, or stippling (PO 2026-06-16). Also the options shown in the per-concept
+ *  Regenerate dropdown. */
 export const DEFAULT_ALLOWED_STYLES: string[] = [
   "Vintage/Distressed",
   "Retro 70s-80s",
   "Halftone Screen-Print",
   "Bold Typographic",
-  "Minimalist Line-Art",
-  "Vintage Engraving",
   "Dark Academia",
   "Collegiate/Varsity",
   "Cottagecore",
