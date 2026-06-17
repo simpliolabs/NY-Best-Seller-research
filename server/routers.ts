@@ -1080,7 +1080,7 @@ Font feel: ${concept.fontSuggestion ?? "not specified"}`;
   health: router({
     status: publicProcedure.query(async () => {
       const health = await checkHealth();
-      return { ...health, buildCommit: "4afae4e", buildPipelineMd5: "1eae01c2e1c322be934aa08c20302fb1" };
+      return { ...health, buildCommit: "28bd863", buildPipelineMd5: "c32c92a45b3064da88b8083097754a75" };
     }),
 
     healingLog: protectedProcedure
