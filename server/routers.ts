@@ -860,64 +860,14 @@ Font: ${concept.fontSuggestion ?? "not specified"}`;
         style: z.string().min(1).max(200),
       }))
       .mutation(async ({ input }) => {
-        const concept = await getConceptById(input.conceptId);
-        if (!concept) return { success: false, message: "Concept not found." };
-
-        // ONE faithful prompt (was THREE — 3x the API spend). HARD-require the headline + subtext be
-        // rendered as readable text: the old 3-prompt writer wrote art-only essays that silently
-        // dropped the headline, so the rendered design never matched the concept card's promised copy.
-        const promptSystem = `You are a senior t-shirt art director. Write ONE image-generation prompt for a print-ready DTF t-shirt graphic, rendered ENTIRELY in this art style: "${input.style}".
-
-HARD REQUIREMENTS — the generated design MUST:
-- Render the HEADLINE as the prominent typographic centerpiece, spelled EXACTLY, letter-for-letter, including punctuation.
-- Render the SUBTEXT as clearly readable secondary text, spelled EXACTLY.
-- Describe the lettering itself — font character, weight, placement, hierarchy — AND the supporting graphic, so the image model draws BOTH the words and the art.
-(If a text field is "none", omit only that line — never invent copy.)
-
-Keep it focused and concrete (~120-160 words), not a long essay. Transparent or pure-white background, DTF-ready. A deliberate, limited color palette. ABSOLUTE RULE: NEVER cartoonish, clip-art, kawaii, chibi, or childish/exaggerated styling. Return ONLY a JSON object: {"prompt": "..."}.`;
-        // PO 2026-06-16 — the dropdown's style choice was being ignored: the prompt previously injected
-        // STALE concept.colorPalette + layoutDescription + fontSuggestion (written during the original
-        // scan under the ORIGINAL style). The LLM mashed "render in {newStyle}" + "use {oldStyle}'s
-        // palette/layout/font" into a hybrid. (Verified by audit wa0r0eyi9.) Fix: drop the stale
-        // fields and inject the new style's PLAYBOOK description as the authoritative source for
-        // palette / layout / lettering / composition.
-        const { STYLE_PLAYBOOK } = await import("../shared/styleProfile");
-        const playbookLine = STYLE_PLAYBOOK[input.style] ?? "";
-        const userMsg = [
-          `Concept name: ${concept.conceptName}`,
-          `Format: ${concept.format}`,
-          `HEADLINE (render verbatim): ${concept.headline ?? "none"}`,
-          `SUBTEXT (render verbatim): ${concept.subtext ?? "none"}`,
-          `Art style (use exactly): ${input.style}`,
-          playbookLine ? `Style playbook (authoritative — derive palette, layout, lettering, and composition from THIS; ignore any prior concept palette/layout/font): ${playbookLine}` : "",
-        ].filter(Boolean).join("\n");
-
+        // ROUTE THROUGH THE COUNCIL (PO 2026-06-16). The previous stripped-down 2-step prompt-writer
+        // produced visibly thinner designs than scan winners (no niche KB, no vision references, no
+        // avoid directives, no aspect picker, no STYLE PLAYBOOK). Now we delegate to the same brain
+        // the scan pipeline uses, with the user's dropdown style LOCKED as the assigned lane.
+        // Snapshot, render, save, clear productionUrl — all done inside regenerateConceptViaCouncil.
         try {
-          // Snapshot the design we're about to replace, so every past version stays restorable.
-          await snapshotGenerationToHistory(input.conceptId, concept.imageUrlA, concept.style);
-
-          const promptResult = await invokeLLM({
-            messages: [
-              { role: "system", content: promptSystem },
-              { role: "user", content: userMsg },
-            ],
-            response_format: { type: "json_object" },
-          });
-          const promptContent = typeof promptResult.choices[0]?.message?.content === "string"
-            ? promptResult.choices[0].message.content : "";
-          const prompt: string = JSON.parse(promptContent).prompt ?? "";
-          if (!prompt) return { success: false, message: "Prompt generation returned empty." };
-
-          const img = await generateImage({ prompt });
-          if (!img.url) return { success: false, message: "Image generation returned no image." };
-
-          // ONE best design -> slot A (mockups + listings already default to A). Clear the cached
-          // production render so mockups re-process the NEW image instead of the old one.
-          await updateConceptImages(input.conceptId, { imageUrlA: img.url, imagePromptA: prompt });
-          await updateConceptStyle(input.conceptId, input.style);
-          await updateConceptProductionUrl(input.conceptId, "A", null);
-
-          return { success: true, message: `Regenerated 1 design in "${input.style}" style.` };
+          const { regenerateConceptViaCouncil } = await import("./pipeline");
+          return await regenerateConceptViaCouncil(input.conceptId, input.style);
         } catch (err: any) {
           console.error(`[RegenerateImage] Failed for concept ${input.conceptId}:`, err);
           return { success: false, message: err?.message ?? "Regeneration failed." };

@@ -46,6 +46,9 @@ import {
   updateConceptSignalTags,
   getConceptsByBookId,
   getDismissedConceptTagsByWorkspace,
+  getConceptById,
+  updateConceptStyle,
+  updateConceptProductionUrl,
 } from "./db";
 import type { InsertBook, InsertDesignConcept } from "../drizzle/schema";
 import { scrapeAllForums, computeForumScore, extractCrossSourceSignals, type ForumSignals, type CrossSourceSignal } from "./forumScraper";
@@ -2603,6 +2606,186 @@ async function resumePipeline(runId: number, fromStage: number): Promise<void> {
   } finally {
     clearInterval(keepAliveInterval);
   }
+}
+
+/**
+ * Per-concept regenerate that ROUTES THROUGH THE SAME DESIGN COUNCIL as the scan pipeline (PO
+ * 2026-06-16). The old concepts.regenerateImage in routers.ts was a stripped-down LLM prompt-writer
+ * with no niche KB, no vision references, no avoid directives, no aspect picker — producing
+ * visibly thinner designs than scan winners. This orchestrator gives single-concept regenerate the
+ * SAME context the pipeline council has: workspace mascots/catchphrases, approved-design vision
+ * references, dismiss-tag avoid directives, the allowed-styles menu, the STYLE PLAYBOOK, and the
+ * council's aspect picker — with the user's dropdown style LOCKED as the assigned lane.
+ *
+ * Returns { success, message, imageUrl?, style? }. Snapshots the prior design to generation
+ * history; updates concept.imageUrlA + imagePromptA + style; clears productionUrlA so mockups
+ * re-process. Phase 1: duplicates context-loading from stageDesignExpansion — Phase 2 will extract
+ * a shared helper. This commit keeps the pipeline path UNTOUCHED to avoid regression risk.
+ */
+export async function regenerateConceptViaCouncil(
+  conceptId: number,
+  lockedStyle: string,
+): Promise<{ success: boolean; message: string; imageUrl?: string; style?: string }> {
+  type DesignAspect = "1:1" | "4:5" | "5:4" | "9:16" | "16:9";
+
+  const concept = await getConceptById(conceptId);
+  if (!concept) return { success: false, message: "Concept not found." };
+  const run = await getRunById(concept.runId);
+  const workspaceId = run?.workspaceId ?? null;
+
+  // ── Load workspace-level council context (mirrors stageDesignExpansion lines ~1219-1333) ──────
+  // Legacy concepts without a workspaceId get an EMPTY context — the council still runs with the
+  // system prompt + playbook + locked style + concept text, just without niche KB / vision refs.
+  const { getWorkspaceById } = await import("./workspaceDb");
+  const wsRow = workspaceId ? await getWorkspaceById(workspaceId) : null;
+  const all = workspaceId ? await getTrendPatternsByWorkspace(workspaceId) : [];
+  const approved = all.filter((p) => p.status === "approved");
+  const dismissed = all.filter((p) => p.status === "dismissed");
+
+  // Vision references — APPROVED designs (most-recent first), HEAD-validated, top 6.
+  let approvedVisionRefs: Array<{ url: string; title: string }> = approved
+    .filter((p) =>
+      (p.productionDesignUrl && /^https?:\/\//.test(p.productionDesignUrl)) ||
+      (p.sourceImageUrl && /^https?:\/\//.test(p.sourceImageUrl)))
+    .sort((a, b) => (b.approvedAt?.getTime() ?? b.createdAt?.getTime() ?? 0) - (a.approvedAt?.getTime() ?? a.createdAt?.getTime() ?? 0))
+    .slice(0, 6)
+    .map((p) => ({
+      url: (p.productionDesignUrl && /^https?:\/\//.test(p.productionDesignUrl) ? p.productionDesignUrl : p.sourceImageUrl) as string,
+      title: p.patternName ?? "Untitled",
+    }));
+  if (approvedVisionRefs.length) {
+    const checked = await Promise.all(approvedVisionRefs.map(async (r) => {
+      try {
+        const resp = await withTimeout(fetch(r.url, { method: "HEAD" }), 8000, `ref check ${r.title}`);
+        return resp.ok && (resp.headers.get("content-type") ?? "").startsWith("image/") ? r : null;
+      } catch { return null; }
+    }));
+    approvedVisionRefs = checked.filter((r): r is { url: string; title: string } => !!r);
+  }
+
+  // Avoid directives — pattern dismissals + scan-design dismissals (NH parity).
+  const TAG_DIRECTIVE: Record<string, string> = {
+    poor_composition: "a strong, balanced composition",
+    off_brand: "stay strictly on-brand for this niche",
+    transfer_failed: "an idea native to THIS niche (no awkward cross-niche transfer)",
+    bad_subject: "a clear, appealing focal subject",
+    weak_humor: "genuinely sharp, funny writing",
+    bad_colors: "a deliberate, harmonious limited palette",
+    too_generic: "a distinctive, non-generic idea",
+    wrong_style: "the niche's proven art style",
+    too_dark: "varied, lighter palettes — do NOT default every design to a dark background",
+    too_similar: "a look clearly distinct from the rest of the set (different style + palette)",
+  };
+  const tagCounts: Record<string, number> = {};
+  for (const p of dismissed) for (const t of ((p.rejectionTags as string[]) ?? [])) tagCounts[t] = (tagCounts[t] ?? 0) + 1;
+  if (workspaceId) for (const t of await getDismissedConceptTagsByWorkspace(workspaceId)) tagCounts[t] = (tagCounts[t] ?? 0) + 1;
+  const topTags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([t]) => TAG_DIRECTIVE[t]).filter(Boolean);
+  const avoidDirectives = topTags.length ? topTags.join("; ") : "";
+
+  // Niche knowledge base — mascots + visual gags + catchphrases (the council's character palette).
+  const cm = ((wsRow?.nicheProfile ?? {}) as { culturalMap?: Record<string, any> }).culturalMap ?? {};
+  const kb: string[] = [];
+  const mascots = (cm.animalMascots ?? []).filter((m: any) => m?.animal).map((m: any) => `${m.animal}${m.visualTreatment ? ` (${m.visualTreatment})` : ""}`);
+  if (mascots.length) kb.push(`ON-BRAND MASCOTS — the ONLY recognizable hero characters: ${mascots.join("; ")}`);
+  const gags = (cm.funPoints ?? []).map((f: any) => f?.visualConcept).filter(Boolean);
+  if (gags.length) kb.push(`Signature visual gags: ${gags.slice(0, 6).join(" | ")}`);
+  const phrases = (cm.catchphrases ?? []).filter(Boolean);
+  if (phrases.length) kb.push(`Catchphrases: ${phrases.slice(0, 8).join(", ")}`);
+  const transfer = (cm.transferableVisualConcepts ?? []).map((t: any) => t?.targetAdaptation).filter(Boolean);
+  if (transfer.length) kb.push(`Transferable concepts: ${transfer.slice(0, 5).join("; ")}`);
+  const nicheKB = kb.join("\n");
+
+  // Allowed styles — workspace's saved menu, stripped of non-printable styles (matches the pipeline guard).
+  const wsStyles = wsRow?.styleProfile?.allowedStyles;
+  const { DEFAULT_ALLOWED_STYLES } = await import("../shared/styleProfile");
+  const NON_PRINTABLE_STYLES = new Set(["Photorealistic", "Minimalist Line-Art", "Vintage Engraving"]);
+  const allowedStylesList = (Array.isArray(wsStyles) && wsStyles.length ? wsStyles : DEFAULT_ALLOWED_STYLES)
+    .filter((s): s is string => typeof s === "string" && s.trim().length > 0 && !NON_PRINTABLE_STYLES.has(s));
+
+  // ── Build the council user content (vision refs + niche KB + locked style + concept) ──────────
+  const visionRefIntro = approvedVisionRefs.length
+    ? `Below are ${approvedVisionRefs.length} t-shirt designs the BUYER has explicitly APPROVED for this niche. Study their CRAFT: texture, line work, typography quality, niche-character treatment, and premium sellable mood. This is the QUALITY BAR and the niche authenticity your output must match. They are NOT a single look to clone — render in your LOCKED STYLE LANE (below). Match the craftsmanship; render in your locked style.`
+    : `No approved-design references for this niche yet — fall back to the STYLE PLAYBOOK and your locked style lane.`;
+
+  const userContent: import("./_core/llm").MessageContent[] = [
+    { type: "text", text: `${visionRefIntro}\n\nAPPROVED REFERENCES (in order):${approvedVisionRefs.map((r, i) => `\n  ${i + 1}. "${r.title}"`).join("")}` },
+    ...approvedVisionRefs.map((r): import("./_core/llm").MessageContent => ({ type: "image_url" as const, image_url: { url: r.url, detail: "low" as const } })),
+    { type: "text", text: `NICHE KNOWLEDGE BASE (your only character palette for mascot picks):
+${nicheKB || "(no mascots configured — fall back to a strong type-only design)"}
+
+YOUR LOCKED STYLE LANE for this design: ${lockedStyle}
+The buyer EXPLICITLY chose this style from the dropdown — render in "${lockedStyle}" and its native palette per the STYLE PLAYBOOK. Do NOT switch to a different approved style — this is a single-concept regenerate, not a council-assigned lane. Allowed styles (for reference only, do NOT override): ${allowedStylesList.length ? allowedStylesList.join(" | ") : "Vintage/Distressed | Bold Typographic | Halftone Screen-Print"}
+
+${avoidDirectives ? `AVOID (learned from the buyer's past rejections): ${avoidDirectives}\n\n` : ""}THE CONCEPT TO REGENERATE:
+Name: ${concept.conceptName}
+Headline (render VERBATIM): ${concept.headline ?? "none"}
+Subtext (verbatim): ${concept.subtext ?? "none"}
+Fan phrase it's anchored to: ${concept.sourcePhrase ?? "not specified"}` },
+  ];
+
+  // ── Call the council (vision-grounded; text-only retry on vision failure) ─────────────────────
+  const runCouncil = async (parts: import("./_core/llm").MessageContent[]): Promise<string> => {
+    const res = await withTimeout(
+      invokeLLM({
+        messages: [
+          { role: "system", content: NICHE_COUNCIL_SYSTEM },
+          { role: "user", content: parts },
+        ],
+        response_format: { type: "json_object" },
+      }),
+      75_000,
+      `Council regenerate for concept ${concept.id}`,
+    );
+    return typeof res.choices[0]?.message?.content === "string" ? res.choices[0].message.content : "";
+  };
+
+  let content: string;
+  try {
+    content = await runCouncil(userContent);
+  } catch (visionErr) {
+    if (approvedVisionRefs.length) {
+      console.warn(`[Regen/Council] Vision call failed for concept ${concept.id}, retrying text-only:`, visionErr instanceof Error ? visionErr.message : visionErr);
+      content = await runCouncil(userContent.filter((c) => typeof c === "string" || c.type !== "image_url"));
+    } else {
+      return { success: false, message: `Council LLM failed: ${visionErr instanceof Error ? visionErr.message : String(visionErr)}` };
+    }
+  }
+
+  // Parse JSON verdict
+  const stripped = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+  const jStart = stripped.indexOf("{"), jEnd = stripped.lastIndexOf("}");
+  const jsonStr = jStart >= 0 && jEnd > jStart ? stripped.slice(jStart, jEnd + 1) : stripped;
+  let verdict: { canWork?: boolean; hero?: string; style?: string; viral?: string; aspect?: string; prompt?: string };
+  try {
+    verdict = JSON.parse(jsonStr);
+  } catch {
+    console.warn(`[Regen/Council] JSON parse failed for concept ${concept.id}: ${content.slice(0, 200)}`);
+    return { success: false, message: "Council returned malformed JSON." };
+  }
+  const ALLOWED_ASPECTS: readonly DesignAspect[] = ["1:1", "4:5", "5:4", "9:16", "16:9"];
+  const aspect: DesignAspect = (ALLOWED_ASPECTS as readonly string[]).includes(verdict.aspect ?? "")
+    ? (verdict.aspect as DesignAspect) : "1:1";
+  console.log(`[Regen/Council] "${concept.conceptName}" → hero=${verdict.hero ?? "?"} style=${verdict.style ?? "?"} (locked=${lockedStyle}) aspect=${aspect} viral=${verdict.viral ?? "?"}`);
+  const promptText = (verdict.canWork && verdict.viral !== "low" && verdict.prompt) ? verdict.prompt : "";
+  if (!promptText) {
+    return { success: false, message: "Council vetoed the concept (canWork=false or viral=low) — no prompt to render." };
+  }
+
+  // ── Snapshot prior design + render + save ─────────────────────────────────────────────────────
+  try {
+    await snapshotGenerationToHistory(conceptId, concept.imageUrlA, concept.style);
+  } catch (e) {
+    console.warn(`[Regen/Council] history snapshot failed for concept ${conceptId} (non-fatal):`, e);
+  }
+  const img = await generateImageWithRetry(promptText, `Regenerate concept ${conceptId}`, null, 1, aspect);
+  if (!img.url) {
+    return { success: false, message: "Image generation returned no URL." };
+  }
+  await updateConceptImages(conceptId, { imageUrlA: img.url, imagePromptA: promptText });
+  await updateConceptStyle(conceptId, lockedStyle);
+  await updateConceptProductionUrl(conceptId, "A", null);
+
+  return { success: true, message: `Regenerated in "${lockedStyle}" via the design council.`, imageUrl: img.url, style: lockedStyle };
 }
 
 /**
