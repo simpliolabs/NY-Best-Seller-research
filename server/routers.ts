@@ -986,7 +986,7 @@ export const appRouter = router({
   health: router({
     status: publicProcedure.query(async () => {
       const health = await checkHealth();
-      return { ...health, buildCommit: "4693439", buildPipelineMd5: "49b0c7c78148d3b531952cebf9a721e0" };
+      return { ...health, buildCommit: "aa89056", buildPipelineMd5: "0efd0de0384a01bf2784bfda859921d2" };
     }),
 
     healingLog: protectedProcedure
