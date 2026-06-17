@@ -875,14 +875,22 @@ HARD REQUIREMENTS — the generated design MUST:
 (If a text field is "none", omit only that line — never invent copy.)
 
 Keep it focused and concrete (~120-160 words), not a long essay. Transparent or pure-white background, DTF-ready. A deliberate, limited color palette. ABSOLUTE RULE: NEVER cartoonish, clip-art, kawaii, chibi, or childish/exaggerated styling. Return ONLY a JSON object: {"prompt": "..."}.`;
-        const userMsg = `Concept name: ${concept.conceptName}
-Format: ${concept.format}
-HEADLINE (render verbatim): ${concept.headline ?? "none"}
-SUBTEXT (render verbatim): ${concept.subtext ?? "none"}
-Art style (use exactly): ${input.style}
-Color palette: ${(concept.colorPalette as string[] ?? []).join(", ") || "not specified"}
-Layout intent: ${concept.layoutDescription ?? "not specified"}
-Font feel: ${concept.fontSuggestion ?? "not specified"}`;
+        // PO 2026-06-16 — the dropdown's style choice was being ignored: the prompt previously injected
+        // STALE concept.colorPalette + layoutDescription + fontSuggestion (written during the original
+        // scan under the ORIGINAL style). The LLM mashed "render in {newStyle}" + "use {oldStyle}'s
+        // palette/layout/font" into a hybrid. (Verified by audit wa0r0eyi9.) Fix: drop the stale
+        // fields and inject the new style's PLAYBOOK description as the authoritative source for
+        // palette / layout / lettering / composition.
+        const { STYLE_PLAYBOOK } = await import("../shared/styleProfile");
+        const playbookLine = STYLE_PLAYBOOK[input.style] ?? "";
+        const userMsg = [
+          `Concept name: ${concept.conceptName}`,
+          `Format: ${concept.format}`,
+          `HEADLINE (render verbatim): ${concept.headline ?? "none"}`,
+          `SUBTEXT (render verbatim): ${concept.subtext ?? "none"}`,
+          `Art style (use exactly): ${input.style}`,
+          playbookLine ? `Style playbook (authoritative — derive palette, layout, lettering, and composition from THIS; ignore any prior concept palette/layout/font): ${playbookLine}` : "",
+        ].filter(Boolean).join("\n");
 
         try {
           // Snapshot the design we're about to replace, so every past version stays restorable.

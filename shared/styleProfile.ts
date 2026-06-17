@@ -49,3 +49,25 @@ export const DEFAULT_ALLOWED_STYLES: string[] = [
   "Cabincore",
   "Retro Groovy",
 ];
+
+/** STYLE PLAYBOOK — the authoritative one-line visual description per style. Single source of truth
+ *  shared by (a) the design council's NICHE_COUNCIL_SYSTEM playbook section and (b) the per-concept
+ *  regenerate prompt in routers.ts (so the dropdown's style choice actually steers the render rather
+ *  than fighting stale concept metadata). PO 2026-06-16. */
+export const STYLE_PLAYBOOK: Record<string, string> = {
+  "Vintage/Distressed": "heavy worn cracked screen-print, chunky halftone grit (rendered as solid dot shapes, never thin mesh), ink-pull imperfections on thickly-weighted strokes, faded retro palette (cream/burnt-orange/mustard/forest/charcoal). 1970s park-tee feel.",
+  "Vintage Hand-Drawn Illustration": "organic hand-drawn illustration with BOLD ink line work — every outline a thick confident brush stroke (never hairline), slight imperfections, hand-drawn feel, muted vintage palette, illustrative not graphic.",
+  "Retro 70s-80s": "groovy bubble/funk type, sunbursts, rainbow gradients within a limited 70s palette, warm browns/oranges/yellows, optimistic and graphic.",
+  "Retro Groovy": "70s psychedelic — wavy custom lettering, hippie palette, swirling forms, looser and more decorative than Retro 70s-80s.",
+  "Vintage 90's": "90s sports/streetwear — bold geometric blocks, color-block panels, varsity-meets-graffiti energy, primary palette + black.",
+  "Western Americana": "rope/wood-cut decorative borders, hand-lettered Old-West/saloon serifs, dusty sepia + denim palette, cowboy/desert motifs.",
+  "Cabincore": "cozy folk-art, pine/forest/cabin/mushroom motifs, warm muted earth tones; rugged outdoors.",
+  "Cottagecore": "cozy folk-art, soft pastoral florals/herbs, warm muted earth tones.",
+  "Halftone Screen-Print": "clean punk/indie poster — bold flat shapes overlaid with prominent halftone dot patterns, high-contrast 2-color separations.",
+  "Bold Typographic": "typography IS the design — chunky display lettering, modern type-forward; NO illustration, NO mascot, NO paddle/ball/court props, NO accent decorations (no stars, sparkles, sweat drops, dotted accents) — typography stands ALONE; high contrast, generous negative space (NOT a badge). If the concept seems to want an illustration, the council should have picked a different style — Bold Typographic is type-only by definition.",
+  "Dark Academia": "oxblood/forest-green/cream palette, classical serifs and Latin-feel borders, books/owls/celestial motifs, scholarly elegance.",
+  "Collegiate/Varsity": "classic varsity letterman — block/serif college type, arched headline + circular seal, school colors, athletic crest.",
+  "Streetwear/Y2K": "brand-graphic energy — bold sans, glossy chrome/Y2K palette, modern hype-drop look.",
+  "Watercolor": "soft hand-painted washes with bleeding edges, organic shapes, gentle muted palette, illustrative not graphic.",
+  "Militarycore": "surplus / army-stencil — olive/khaki/black palette, stencil block lettering, weathered tag/patch look.",
+};
