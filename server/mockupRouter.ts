@@ -86,25 +86,19 @@ export const mockupRouter = router({
       let designUrl: string | null | undefined = undefined;
       let isProductionReady = false;
       if (input.sourceRevisionId) {
+        // PO 2026-06-17 — V5-overwrite fix: DO NOT call processDesignForProduction here. That
+        // function writes to concept.productionUrlA (the LIVE slot cache), which was silently
+        // overwriting the live design's cutout every time the user clicked Make-mockup on a
+        // historical version (PO: "OVERWROTE 'Stuck at 3.5 V5' to create a brand new image of
+        // what was generated"). For per-revision mockups, the revision's resultImageUrl IS the
+        // design (v5 pass-through means no bg-removal anyway), so we skip the processor entirely
+        // and feed the URL straight to the compositor. Zero side effects on the live slot.
         const { getRevisionById } = await import("./revisionDb");
         const rev = await getRevisionById(input.sourceRevisionId);
         if (!rev) throw new TRPCError({ code: "NOT_FOUND", message: `Revision ${input.sourceRevisionId} not found` });
-        try {
-          console.log(`[Mockup] Per-revision generate (rev=${input.sourceRevisionId}) — running rembg fresh on ${rev.resultImageUrl.substring(0, 80)}...`);
-          // processDesignForProduction writes to concept[productionUrlKey] when called — that's the
-          // LIVE slot cache, which we DO NOT want to touch for a historical revision. Pass a sentinel
-          // variation to skip the DB write side-effect: the function returns the URL but we don't
-          // accept a write on the live slot. Cheap alternative: skip the function's persist and call
-          // its core directly. We use the function as-is + accept the side-effect to keep this
-          // commit surgical; live-slot cache is overwritten with the historical version's clean URL.
-          // The next live-mockup-generate will re-derive (cost: $0.001), which is acceptable.
-          designUrl = await processDesignForProduction(rev.resultImageUrl, input.conceptId, input.variationKey, undefined, false);
-          isProductionReady = true;
-        } catch (err) {
-          console.warn(`[Mockup] Per-revision auto-process FAILED for rev=${input.sourceRevisionId}; falling back to raw URL:`, err);
-          designUrl = rev.resultImageUrl;
-          isProductionReady = false;
-        }
+        console.log(`[Mockup] Per-revision generate (rev=${input.sourceRevisionId}) — using revision URL as-is`);
+        designUrl = rev.resultImageUrl;
+        isProductionReady = false; // not a production-cropped URL — compositor handles content placement
       } else {
         // LIVE SLOT PATH (existing behavior): regenerateProduction forces the auto-process path
         // even when a cached productionUrl exists — the escape hatch for invalidating cached URLs
