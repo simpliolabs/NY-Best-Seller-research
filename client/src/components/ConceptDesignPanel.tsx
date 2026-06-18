@@ -27,6 +27,8 @@ import {
   Image as ImageIcon,
   XCircle,
   Undo2,
+  Pencil,
+  Check,
 } from "lucide-react";
 
 const DISMISS_TAGS = [
@@ -225,12 +227,31 @@ export function ConceptDesignPanel({
     );
   };
 
-  const handleMockupFromHistory = async (imageUrl: string) => {
-    // Restore first (mockup compositor uses slot A), then navigate
-    restoreMutation.mutate(
-      { conceptId, imageUrl },
-      { onSuccess: () => navigate(`/${slug}/mockups?conceptId=${conceptId}`) }
-    );
+  const handleMockupFromHistory = (revisionId: string) => {
+    navigate(`/${slug}/mockups?conceptId=${conceptId}&revisionId=${revisionId}`);
+  };
+
+  // ─── Inline rename state ────────────────────────────────────────────────────
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const renameRevisionMutation = trpc.concepts.renameRevision.useMutation({
+    onSuccess: () => {
+      toast.success("Version renamed");
+      utils.concepts.getGenerationHistory.invalidate({ conceptId });
+      setRenamingId(null);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const startRename = (rowId: string, currentName: string) => {
+    setRenamingId(rowId);
+    setRenameValue(currentName);
+  };
+  const commitRename = (revisionId: string) => {
+    if (renameValue.trim()) {
+      renameRevisionMutation.mutate({ revisionId, name: renameValue.trim() });
+    } else {
+      setRenamingId(null);
+    }
   };
 
   // ─── Relative time helper ────────────────────────────────────────────────────
@@ -546,8 +567,34 @@ export function ConceptDesignPanel({
                 </div>
                 {/* Meta + actions */}
                 <div className="p-2 space-y-1.5">
-                  <p className="text-[11px] text-muted-foreground truncate">
-                    {(row.instruction || "Generation").replace("Generation — ", "")} · {relativeTime(row.createdAt)}
+                  {/* Inline rename */}
+                  <div className="flex items-center gap-1">
+                    {renamingId === row.id ? (
+                      <input
+                        autoFocus
+                        className="flex-1 text-[11px] border rounded px-1 py-0.5 bg-background"
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onBlur={() => commitRename(row.id)}
+                        onKeyDown={(e) => { if (e.key === "Enter") commitRename(row.id); if (e.key === "Escape") setRenamingId(null); }}
+                      />
+                    ) : (
+                      <>
+                        <p className="flex-1 text-[11px] text-muted-foreground truncate">
+                          {row.name || (row.instruction || "Generation").replace("Generation — ", "")}
+                        </p>
+                        <button
+                          className="text-muted-foreground hover:text-foreground p-0.5"
+                          title="Rename version"
+                          onClick={() => startRename(row.id, row.name || `Version #${history.indexOf(row) + 1}`)}
+                        >
+                          <Pencil className="h-3 w-3" />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground/70">
+                    {relativeTime(row.createdAt)}
                   </p>
                   <div className="flex gap-1">
                     <Button
@@ -576,7 +623,7 @@ export function ConceptDesignPanel({
                       className="h-7 w-7 flex-1"
                       title="Make mockup"
                       disabled={restoreMutation.isPending}
-                      onClick={() => handleMockupFromHistory(row.resultImageUrl)}
+                      onClick={() => handleMockupFromHistory(row.id)}
                     >
                       <Shirt className="h-3.5 w-3.5" />
                     </Button>

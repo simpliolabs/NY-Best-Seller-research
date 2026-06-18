@@ -34,6 +34,15 @@ export async function insertRevision(data: {
   });
 }
 
+/** Set the user-editable name for a revision (PO 2026-06-17, per-design identity). Existing
+ *  getRevisionById at L95 is reused by mockup.generate when sourceRevisionId is set to resolve
+ *  the design URL from that specific version. */
+export async function updateRevisionName(id: string, name: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.update(designRevisions).set({ name }).where(eq(designRevisions.id, id));
+}
+
 /** Get all revisions for a concept+variation, newest first */
 export async function getRevisionsByConceptVariation(
   conceptId: number,

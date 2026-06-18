@@ -36,11 +36,15 @@ export default function Mockups() {
   const { activeWorkspace } = useWorkspace();
   const workspaceId = activeWorkspace?.id ?? "";
 
-  // Read conceptId from URL search params (from Library "Send to Mockups" link)
+  // Read conceptId + revisionId from URL search params
   const searchString = useSearch();
   const urlConceptId = useMemo(() => {
     const params = new URLSearchParams(searchString);
     return params.get("conceptId") ?? "";
+  }, [searchString]);
+  const revisionId = useMemo(() => {
+    const params = new URLSearchParams(searchString);
+    return params.get("revisionId") ?? undefined;
   }, [searchString]);
 
   // State for generation form
@@ -70,6 +74,27 @@ export default function Mockups() {
     { conceptId: Number(selectedConceptId) },
     { enabled: !!selectedConceptId }
   );
+
+  // Filter mockups by revisionId when present (per-design identity)
+  const filteredMockups = useMemo(() => {
+    if (!mockupsQuery.data) return [];
+    if (!revisionId) {
+      // Live-slot: show only NULL-sourceRevisionId renders
+      return mockupsQuery.data.filter((m) => !m.sourceRevisionId);
+    }
+    return mockupsQuery.data.filter((m) => m.sourceRevisionId === revisionId);
+  }, [mockupsQuery.data, revisionId]);
+
+  // Fetch revision name when revisionId is in URL
+  const revisionHistoryQuery = trpc.concepts.getGenerationHistory.useQuery(
+    { conceptId: Number(selectedConceptId) },
+    { enabled: !!selectedConceptId && !!revisionId }
+  );
+  const revisionName = useMemo(() => {
+    if (!revisionId || !revisionHistoryQuery.data) return undefined;
+    const rev = revisionHistoryQuery.data.find((r) => r.id === revisionId);
+    return rev?.name || rev?.instruction || "Version";
+  }, [revisionId, revisionHistoryQuery.data]);
 
   // Generate mutation
   const generateMutation = trpc.mockup.generate.useMutation({
@@ -173,15 +198,20 @@ export default function Mockups() {
       variationKey: selectedVariation as "A" | "B" | "C",
       productGroupId: selectedGroupId,
       colorCount,
+      ...(revisionId ? { sourceRevisionId: revisionId } : {}),
     });
   }
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold font-['Syne'] tracking-tight">Mockups</h1>
+        <h1 className="text-2xl font-bold font-['Syne'] tracking-tight">
+          Mockups{revisionName ? ` · ${revisionName}` : ""}
+        </h1>
         <p className="text-muted-foreground text-sm mt-1">
-          Generate product mockups by compositing your designs onto blank shirt templates.
+          {revisionId
+            ? "Generating mockups for a specific design version. These won\u2019t replace the live-slot mockups."
+            : "Generate product mockups by compositing your designs onto blank shirt templates."}
         </p>
       </div>
 
@@ -360,12 +390,12 @@ export default function Mockups() {
       )}
 
       {/* Mockup Gallery */}
-      {selectedConceptId && mockupsQuery.data && mockupsQuery.data.length > 0 && (
+      {selectedConceptId && filteredMockups.length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base font-['Syne'] flex items-center gap-2">
               <ImageIcon className="h-4 w-4" />
-              Generated Mockups ({mockupsQuery.data.length})
+              Generated Mockups ({filteredMockups.length})
               <div className="ml-auto flex items-center gap-1">
                 <Button
                   variant="outline"
@@ -393,7 +423,7 @@ export default function Mockups() {
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              {mockupsQuery.data.map((mockup) => (
+              {filteredMockups.map((mockup) => (
                 <div
                   key={mockup.id}
                   className="group relative rounded-lg overflow-hidden border bg-muted/30"
@@ -429,7 +459,7 @@ export default function Mockups() {
       )}
 
       {/* Empty state */}
-      {selectedConceptId && mockupsQuery.data && mockupsQuery.data.length === 0 && !generateMutation.isPending && (
+      {selectedConceptId && mockupsQuery.data && filteredMockups.length === 0 && !generateMutation.isPending && (
         <div className="text-center py-12 text-muted-foreground">
           <Shirt className="h-12 w-12 mx-auto mb-3 opacity-40" />
           <p className="text-sm">No mockups generated yet for this concept.</p>

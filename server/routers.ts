@@ -823,10 +823,9 @@ export const appRouter = router({
       }),
 
     /** Restore a past generation (from history) as the live design (slot A). Snapshots the current
-     *  design into history first so it's never lost, then points A at the chosen past URL, clears
-     *  the cached production render, AND deletes the existing mockup renders so the Mockups page
-     *  doesn't show stale composites from the OLD design (PO 2026-06-17: "if i press make mockup
-     *  on any of the other versions it just produces the last one"). */
+     *  design into history first so it's never lost, then points A at the chosen past URL and clears
+     *  the cached production render. NON-DESTRUCTIVE (PO 2026-06-17, undoing dbfb746): the other
+     *  versions' mockups stay — each mockup self-identifies via mockupRenders.sourceRevisionId. */
     restoreGeneration: protectedProcedure
       .input(z.object({
         conceptId: z.number(),
@@ -842,13 +841,19 @@ export const appRouter = router({
         await snapshotGenerationToHistory(input.conceptId, concept.imageUrlA, concept.style);
         await updateConceptImages(input.conceptId, { imageUrlA: input.imageUrl });
         await updateConceptProductionUrl(input.conceptId, "A", null);
-        // Drop the OLD design's mockup renders — they composite the prior productionUrlA against
-        // the shirt templates and would otherwise sit in the Mockups page as ghost results. The
-        // page can re-trigger mockup.generate to produce fresh renders from the restored design.
-        const { getMockupsByConceptVariation, deleteMockupRender } = await import("./mockupDb");
-        const stale = await getMockupsByConceptVariation(input.conceptId, "A");
-        for (const r of stale) await deleteMockupRender(r.id);
         return { success: true, message: "Restored design to slot A." };
+      }),
+
+    /** Rename a specific design VERSION (a row in design_revisions, including history-key "H" rows).
+     *  Lets the PO label cards in the "Previous versions" gallery so they can tell which llama is
+     *  which (PO 2026-06-17, per-design identity). Separate from concepts.rename (which renames the
+     *  CONCEPT). */
+    renameRevision: protectedProcedure
+      .input(z.object({ revisionId: z.string().min(1), name: z.string().min(1).max(120) }))
+      .mutation(async ({ input }) => {
+        const { updateRevisionName } = await import("./revisionDb");
+        await updateRevisionName(input.revisionId, input.name.trim());
+        return { success: true };
       }),
 
     /** Rename a concept (PO 2026-06-12) — generated names are capped at 50 chars, but the human can
@@ -994,7 +999,7 @@ export const appRouter = router({
   health: router({
     status: publicProcedure.query(async () => {
       const health = await checkHealth();
-      return { ...health, buildCommit: "dbfb746", buildPipelineMd5: "672a435b8cfcc998bd56b16cd615fd86" };
+      return { ...health, buildCommit: "d6d235a", buildPipelineMd5: "672a435b8cfcc998bd56b16cd615fd86" };
     }),
 
     healingLog: protectedProcedure

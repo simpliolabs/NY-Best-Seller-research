@@ -564,6 +564,10 @@ export const mockupRenders = mysqlTable("mockup_renders", {
   variationKey: varchar("variationKey", { length: 1 }).notNull(),
   templateId: varchar("templateId", { length: 36 }).notNull(),
   compositeUrl: text("compositeUrl").notNull(),
+  /** Which design revision this composite was generated from (PO 2026-06-17, per-design identity).
+   *  NULL = legacy / live-slot semantics (uses concept.imageUrlA at the time). Setting this lets
+   *  multiple versions' mockups coexist instead of one overwriting the other. */
+  sourceRevisionId: varchar("sourceRevisionId", { length: 36 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
@@ -582,6 +586,10 @@ export const designRevisions = mysqlTable("design_revisions", {
     accepted: boolean("accepted").notNull().default(false),
   dismissedAt: timestamp("dismissedAt"),
   rejectionTags: json("rejectionTags").$type<string[]>(),
+  /** User-editable label for this design version (PO 2026-06-17, per-design identity).
+   *  Each card in the "Previous versions" gallery can be renamed so the PO can tell which
+   *  llama is which. Default is derived from style + index in the UI when NULL. */
+  name: varchar("name", { length: 120 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type DesignRevision = typeof designRevisions.$inferSelect;

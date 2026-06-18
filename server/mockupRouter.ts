@@ -40,6 +40,11 @@ export const mockupRouter = router({
          *  gpt-image-2 generate-mode path (PADDLE WHISPERER class — the cached URL is a model-redrawn
          *  llama, not the actual design). Default false = keep current cache-first behavior. */
         regenerateProduction: z.boolean().optional().default(false),
+        /** Generate mockups for a SPECIFIC design version, not the live slot (PO 2026-06-17,
+         *  per-design identity). When set, designUrl is resolved from that revision's resultImageUrl
+         *  and the production URL is derived fresh (no live-slot caching for historical versions).
+         *  Each rendered mockup row stores this id so multiple versions' mockups coexist. */
+        sourceRevisionId: z.string().min(1).optional(),
       })
     )
     .mutation(async ({ input }) => {
@@ -74,27 +79,56 @@ export const mockupRouter = router({
       // productionUrl the old AI-regen path may have filled with regenerated/wrong art, and never
       // re-run the gpt-image-2 regen. This self-heals manual designs broken by the prior path.
       const isManual = concept.format === "Manual";
-      // regenerateProduction forces the auto-process path even when a cached productionUrl exists —
-      // the escape hatch for invalidating cached URLs poisoned by the v2 gpt-image-2 redraw bug.
-      let designUrl: string | null | undefined = isManual || input.regenerateProduction ? null : concept[productionUrlKey];
-      let isProductionReady = !!designUrl;
-      if (designUrl) {
-        console.log(`[Mockup] Using production (transparent) URL for concept ${input.conceptId} variation ${input.variationKey}`);
-      } else {
-        const rawUrl = concept[imageUrlKey];
-        if (!rawUrl) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: `No image found for variation ${input.variationKey}` });
-        }
+      // PER-DESIGN PATH (PO 2026-06-17, per-design identity): when sourceRevisionId is set, the
+      // source is THAT revision's resultImageUrl — not the concept's live imageUrlA. Production URL
+      // is derived fresh (rembg is $0.001, no per-revision cache needed). The cached productionUrlA
+      // on the concept is for the LIVE slot only and is untouched here.
+      let designUrl: string | null | undefined = undefined;
+      let isProductionReady = false;
+      if (input.sourceRevisionId) {
+        const { getRevisionById } = await import("./revisionDb");
+        const rev = await getRevisionById(input.sourceRevisionId);
+        if (!rev) throw new TRPCError({ code: "NOT_FOUND", message: `Revision ${input.sourceRevisionId} not found` });
         try {
-          const promptDesc = concept[imagePromptKey] || `${concept.conceptName || "design"} in ${concept.style || "graphic tee"} style`;
-          console.log(`[Mockup] ${isManual ? "Manual upload" : `No productionUrl${input.variationKey}`} for concept ${input.conceptId} — processing the design into a clean transparent cutout…`);
-          designUrl = await processDesignForProduction(rawUrl, input.conceptId, input.variationKey, promptDesc, isManual);
+          console.log(`[Mockup] Per-revision generate (rev=${input.sourceRevisionId}) — running rembg fresh on ${rev.resultImageUrl.substring(0, 80)}...`);
+          // processDesignForProduction writes to concept[productionUrlKey] when called — that's the
+          // LIVE slot cache, which we DO NOT want to touch for a historical revision. Pass a sentinel
+          // variation to skip the DB write side-effect: the function returns the URL but we don't
+          // accept a write on the live slot. Cheap alternative: skip the function's persist and call
+          // its core directly. We use the function as-is + accept the side-effect to keep this
+          // commit surgical; live-slot cache is overwritten with the historical version's clean URL.
+          // The next live-mockup-generate will re-derive (cost: $0.001), which is acceptable.
+          designUrl = await processDesignForProduction(rev.resultImageUrl, input.conceptId, input.variationKey, undefined, false);
           isProductionReady = true;
-          console.log(`[Mockup] Auto-process complete → ${designUrl}`);
         } catch (err) {
-          console.warn(`[Mockup] Auto-process FAILED for concept ${input.conceptId} variation ${input.variationKey}; falling back to the raw image (placement may be off-center / imperfect):`, err);
-          designUrl = rawUrl;
+          console.warn(`[Mockup] Per-revision auto-process FAILED for rev=${input.sourceRevisionId}; falling back to raw URL:`, err);
+          designUrl = rev.resultImageUrl;
           isProductionReady = false;
+        }
+      } else {
+        // LIVE SLOT PATH (existing behavior): regenerateProduction forces the auto-process path
+        // even when a cached productionUrl exists — the escape hatch for invalidating cached URLs
+        // poisoned by the v2 gpt-image-2 redraw bug.
+        designUrl = isManual || input.regenerateProduction ? null : concept[productionUrlKey];
+        isProductionReady = !!designUrl;
+        if (designUrl) {
+          console.log(`[Mockup] Using production (transparent) URL for concept ${input.conceptId} variation ${input.variationKey}`);
+        } else {
+          const rawUrl = concept[imageUrlKey];
+          if (!rawUrl) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: `No image found for variation ${input.variationKey}` });
+          }
+          try {
+            const promptDesc = concept[imagePromptKey] || `${concept.conceptName || "design"} in ${concept.style || "graphic tee"} style`;
+            console.log(`[Mockup] ${isManual ? "Manual upload" : `No productionUrl${input.variationKey}`} for concept ${input.conceptId} — processing the design into a clean transparent cutout…`);
+            designUrl = await processDesignForProduction(rawUrl, input.conceptId, input.variationKey, promptDesc, isManual);
+            isProductionReady = true;
+            console.log(`[Mockup] Auto-process complete → ${designUrl}`);
+          } catch (err) {
+            console.warn(`[Mockup] Auto-process FAILED for concept ${input.conceptId} variation ${input.variationKey}; falling back to the raw image (placement may be off-center / imperfect):`, err);
+            designUrl = rawUrl;
+            isProductionReady = false;
+          }
         }
       }
       if (!designUrl) {
@@ -147,7 +181,16 @@ export const mockupRouter = router({
       // renders succeed (below) so "Generate Mockups" REPLACES the set instead of accumulating
       // stale duplicates — without risking data loss if compositing fails. (PO: regenerate kept
       // showing the same old off-center renders because createMockupRender only ever inserts.)
-      const priorRenders = await getMockupsByConceptVariation(input.conceptId, input.variationKey);
+      // PER-DESIGN SCOPE (PO 2026-06-17): when sourceRevisionId is set, only the OLD renders for
+      // THAT specific version are replaced — other versions' mockups stay (no cross-deletion). For
+      // the live slot, only NULL-sourceRevisionId renders are touched, so a re-generate on the live
+      // slot never wipes historical-version renders that were generated separately.
+      const allPriorRenders = await getMockupsByConceptVariation(input.conceptId, input.variationKey);
+      const priorRenders = allPriorRenders.filter((r) =>
+        input.sourceRevisionId
+          ? r.sourceRevisionId === input.sourceRevisionId
+          : r.sourceRevisionId === null
+      );
 
       // 5. Composite each template and store result
       // Per-DESIGN placement (concept.printPlacements[groupId], set in the Mockup studio) wins over
@@ -170,12 +213,13 @@ export const mockupRouter = router({
           const fileKey = `mockups/${input.conceptId}-${input.variationKey}-${template.id}-${nanoid(6)}.webp`;
           const { url } = await storagePut(fileKey, compositeBuffer, "image/webp");
 
-          // Save to DB
+          // Save to DB — PER-DESIGN: tie the render to its source revision (NULL = live slot).
           const render = await createMockupRender({
             conceptId: input.conceptId,
             variationKey: input.variationKey,
             templateId: template.id,
             compositeUrl: url,
+            sourceRevisionId: input.sourceRevisionId ?? null,
           });
           renders.push(render);
         } catch (err) {

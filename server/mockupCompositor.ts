@@ -518,7 +518,11 @@ async function trimToContent(imageBuf: Buffer): Promise<Buffer> {
  *  range and a heavily-wrinkled shirt's strong folds get compressed, instead of the effect riding
  *  the raw fabric (which made it invisible on smooth product mockups). */
 const FABRIC_WARP_STRENGTH = 0.25; // sweet spot (PO 2026-06-16): 0.35 read vintage/dirty, 0.18 read pasted-on. 0.25 + the tightened clamp below = clean print that still contacts folds.
-const WARP_GAIN = 6.0;    // shading gain on the NORMALIZED fold detail
+const WARP_GAIN = 10.0;   // shading gain on the NORMALIZED fold detail. PO 2026-06-17: bumped from 6.0
+                          // → 10.0 (with the clamp widened below) after v4 rembg's hard-edge cutouts
+                          // composited too FLAT — the prior v2/v3 magenta-chromakey produced softer
+                          // partial alpha that bled some fold luminance through, masking the gain.
+                          // Now rembg's clean alpha demands a stronger shade modulation to read folds.
 const WARP_AMP = 45;      // max displacement (px) at strength 1.0 (follows broad folds)
 const WARP_TARGET = 18;   // local-contrast normalization target (RMS of fold detail, 0-255)
 const WARP_FLOOR = 10;    // min RMS before normalizing — raised (PO 2026-06-16) so a smooth flat-lay can't amplify its weave/JPEG noise into vintage speckle
@@ -577,7 +581,7 @@ export async function warpDesignOntoFabric(
         if (a <= 0.01) continue;
         const detail = (at(gray, sx, sy) - at(low, sx, sy)) * norm;
         let shade = 1 + strength * WARP_GAIN * (detail / 255);
-        shade = Math.max(0.72, Math.min(1.25, shade)); // ±25% swing (PO 2026-06-16): widened from ±22% so folds read but tighter than the original ±85% that bleached/dirtied the print
+        shade = Math.max(0.62, Math.min(1.32, shade)); // PO 2026-06-17: ±32% swing (was ±25%) — widened to match the WARP_GAIN 6→10 bump so rembg's hard-edge cutouts get visible fold modulation. Still tighter than the original ±85% that bleached/dirtied the print.
         const o = (sy * W + sx) * CH;
         for (let c = 0; c < 3; c++) {
           const v = Math.max(0, Math.min(255, design[k + c] * shade));

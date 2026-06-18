@@ -14,11 +14,21 @@ export async function createMockupRender(data: {
   variationKey: string;
   templateId: string;
   compositeUrl: string;
+  /** PO 2026-06-17, per-design identity: tie this render to a specific design version so
+   *  multiple versions' mockups coexist. NULL = legacy live-slot semantics. */
+  sourceRevisionId?: string | null;
 }): Promise<MockupRender> {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
   const id = nanoid();
-  await db.insert(mockupRenders).values({ id, ...data });
+  await db.insert(mockupRenders).values({
+    id,
+    conceptId: data.conceptId,
+    variationKey: data.variationKey,
+    templateId: data.templateId,
+    compositeUrl: data.compositeUrl,
+    sourceRevisionId: data.sourceRevisionId ?? null,
+  });
   const rows = await db
     .select()
     .from(mockupRenders)
@@ -40,6 +50,27 @@ export async function getMockupsByConceptVariation(
       and(
         eq(mockupRenders.conceptId, conceptId),
         eq(mockupRenders.variationKey, variationKey)
+      )
+    );
+}
+
+/** Renders for a specific design VERSION — used when the Mockups page is viewing a particular
+ *  revision's tile, not the live-slot view. (PO 2026-06-17, per-design identity.) */
+export async function getMockupsByConceptVariationAndRevision(
+  conceptId: number,
+  variationKey: string,
+  sourceRevisionId: string
+): Promise<MockupRender[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(mockupRenders)
+    .where(
+      and(
+        eq(mockupRenders.conceptId, conceptId),
+        eq(mockupRenders.variationKey, variationKey),
+        eq(mockupRenders.sourceRevisionId, sourceRevisionId)
       )
     );
 }
