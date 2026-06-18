@@ -157,6 +157,22 @@ export function ConceptDesignPanel({
     );
   };
 
+  // ─── Product group (for regenerate-from-original) ─────────────────────────────
+  const groupsQuery = trpc.productGroup.list.useQuery(
+    { workspaceId: activeWorkspace?.id ?? "" },
+    { enabled: !!activeWorkspace?.id }
+  );
+  const defaultGroupId = groupsQuery.data?.[0]?.id ?? "";
+
+  const regenerateFromOriginalMutation = trpc.mockup.generate.useMutation({
+    onSuccess: () => {
+      toast.success("Production design regenerated from original!");
+      utils.concepts.getById.invalidate();
+      utils.books.getById.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
   // ─── Mutations ───────────────────────────────────────────────────────────────
   const regenerateMutation = trpc.concepts.regenerateImage.useMutation({
     onSuccess: (data) => {
@@ -326,6 +342,16 @@ export function ConceptDesignPanel({
             >
               <Shirt className="h-3.5 w-3.5" />
               Make mockup
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs gap-1.5"
+              onClick={() => regenerateFromOriginalMutation.mutate({ conceptId, variationKey: "A", productGroupId: defaultGroupId, regenerateProduction: true })}
+              disabled={regenerateFromOriginalMutation.isPending || !defaultGroupId}
+              title="Re-derive the clean production design from the raw original (fixes concepts whose cached design was AI-redrawn by the old pipeline)"
+            >
+              {regenerateFromOriginalMutation.isPending ? "Regenerating…" : "Regenerate from Original"}
             </Button>
             <Button
               variant="outline"

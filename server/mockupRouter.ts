@@ -35,6 +35,11 @@ export const mockupRouter = router({
         variationKey: z.enum(["A", "B", "C"]),
         productGroupId: z.string(),
         colorCount: z.number().min(1).max(20).optional(),
+        /** Force re-derive the production (transparent) URL, ignoring the cached value (PO 2026-06-17).
+         *  Use this to invalidate concepts whose cached productionUrl* was created by the broken v2
+         *  gpt-image-2 generate-mode path (PADDLE WHISPERER class — the cached URL is a model-redrawn
+         *  llama, not the actual design). Default false = keep current cache-first behavior. */
+        regenerateProduction: z.boolean().optional().default(false),
       })
     )
     .mutation(async ({ input }) => {
@@ -69,7 +74,9 @@ export const mockupRouter = router({
       // productionUrl the old AI-regen path may have filled with regenerated/wrong art, and never
       // re-run the gpt-image-2 regen. This self-heals manual designs broken by the prior path.
       const isManual = concept.format === "Manual";
-      let designUrl: string | null | undefined = isManual ? null : concept[productionUrlKey];
+      // regenerateProduction forces the auto-process path even when a cached productionUrl exists —
+      // the escape hatch for invalidating cached URLs poisoned by the v2 gpt-image-2 redraw bug.
+      let designUrl: string | null | undefined = isManual || input.regenerateProduction ? null : concept[productionUrlKey];
       let isProductionReady = !!designUrl;
       if (designUrl) {
         console.log(`[Mockup] Using production (transparent) URL for concept ${input.conceptId} variation ${input.variationKey}`);

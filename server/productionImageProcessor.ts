@@ -1,25 +1,25 @@
 /**
- * Production Image Processor — v2 (Magenta Chromakey)
+ * Production Image Processor — v4 (rembg primary, Kontext fallback, PO 2026-06-17)
  *
  * Converts a raw generated design image into a production-ready transparent PNG.
  *
- * Architecture (spike-validated 5/5):
- * 1. Generate a STANDALONE version of the design on a solid magenta background
- *    using gpt-image-2 in GENERATE mode (not edit mode). The source image is
- *    passed as a style reference, not as the canvas being edited.
- * 2. Corner-sampled flood-fill chromakey: sample the corner pixel color, then
- *    edge-connected flood-fill removing all pixels within tolerance of that color.
- *    This produces a clean transparent PNG with no halos.
+ * Architecture:
+ * 1. PRIMARY — fal-ai/imageutils/rembg: purpose-built bg-removal (~$0.001/call, ~2-5s).
+ *    Deterministic mask, no prompt to misinterpret, no model deciding what to preserve.
+ *    Returns a transparent PNG directly — no chromakey step needed.
+ * 2. FALLBACK — FLUX.1 Kontext: only fires when rembg errors. Repaints BG magenta,
+ *    chromakey strips it. ~$0.04/call. Insurance for the rare segmentation edge case.
  * 3. Crop to content bounds and upload to S3.
  *
- * Why magenta: the model reliably produces a flat colored background when asked.
- * It does NOT produce exact #FF00FF — it produces a muted pink/magenta (r≈200-220,
- * g≈60-100, b≈120-170). The corner-sampled flood-fill handles this variance
- * automatically because it keys off the ACTUAL corner color, not a hardcoded value.
+ * Why v4 (replaces v3 Kontext-primary): v3 used Kontext for every bg-removal, which is
+ * an instruction-driven creative model — overkill for "strip the background." rembg
+ * is the right tool: segmentation model, not a generation model. 40x cheaper, faster,
+ * one fewer post-processing step (rembg returns transparent direct, no chromakey).
  *
- * Why NOT edit mode: edit mode treats the source as a canvas and draws ON it.
- * Generate mode with a style reference produces a new standalone artwork that
- * matches the style without inheriting the background/garment from the source.
+ * Why v3 was needed at all (and why v4 keeps the Kontext fallback): v2 was gpt-image-2
+ * in GENERATE mode — passed the source as a "style reference" and got back a
+ * creatively-reinterpreted new design (PADDLE WHISPERER came back as a different llama,
+ * PO 2026-06-17). v3 fixed the redraw bug; v4 makes it cheap and fast.
  */
 import sharp from "sharp";
 import { storagePut } from "./storage";
@@ -27,70 +27,133 @@ import { updateConceptProductionUrl } from "./db";
 import { chromakeyFromCorners } from "./chromakey";
 
 /**
- * Generate a standalone design on magenta background using gpt-image-2 generate mode.
- * The source image is passed as a style reference (image[]) — NOT as the edit canvas.
- * Returns the raw PNG buffer from the API.
+ * Remove the background from the source design using fal-ai/imageutils/rembg via the
+ * fal queue API. Returns a transparent PNG buffer directly — no chromakey step needed.
+ *
+ * rembg is a dedicated segmentation model (BiRefNet / U²-Net family), not a generative
+ * one — so the subject pixels are preserved without instruction-following risk. Fast
+ * (~2-5s), cheap (~$0.001/call), deterministic mask.
+ *
+ * Requires FAL_KEY (already in the prod env — used by patternProductionProcessor,
+ * revisionEngine.generateRevisionViaFalKontext, and the Kontext fallback below).
  */
-async function generateStandaloneDesign(
-  sourceImageUrl: string,
-  promptDescription: string
-): Promise<Buffer> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
+async function removeBackgroundViaRembg(sourceImageUrl: string): Promise<Buffer> {
+  const key = process.env.FAL_KEY;
+  if (!key) throw new Error("FAL_KEY is not configured");
+  const headers = { Authorization: `Key ${key}`, "Content-Type": "application/json" };
 
-  // Download source image to send as style reference
-  const imgResp = await fetch(sourceImageUrl);
-  if (!imgResp.ok) throw new Error(`Failed to download source image: ${imgResp.status}`);
-  const imgBuf = Buffer.from(await imgResp.arrayBuffer());
+  console.log(`[ProdProcessor v4] Removing background via rembg. Source: ${sourceImageUrl.substring(0, 80)}...`);
 
-  // Build the prompt: standalone artwork on solid magenta background
+  const submit = await fetch("https://queue.fal.run/fal-ai/imageutils/rembg", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ image_url: sourceImageUrl }),
+  });
+  if (!submit.ok) {
+    throw new Error(`fal rembg submit error (${submit.status}): ${(await submit.text()).slice(0, 300)}`);
+  }
+  const { status_url, response_url } = (await submit.json()) as {
+    status_url: string;
+    response_url: string;
+  };
+
+  // Same poll pattern as the other fal callers. rembg is much faster (~2-5s typical)
+  // but the cap matches Kontext's so SDK-quirk timeouts behave the same way.
+  let completed = false;
+  for (let i = 0; i < 80; i++) {
+    await new Promise((r) => setTimeout(r, 3000));
+    const st = (await (await fetch(status_url, { headers })).json()) as {
+      status?: string;
+      error?: unknown;
+    };
+    if (st.status === "COMPLETED") { completed = true; break; }
+    if (st.status === "FAILED" || st.error) {
+      throw new Error(`fal rembg failed: ${JSON.stringify(st).slice(0, 300)}`);
+    }
+  }
+  if (!completed) throw new Error("fal rembg timed out after 240s");
+
+  // rembg returns `{ image: { url, ... } }` (singular); other fal models use `images[0]`.
+  // Handle both shapes defensively.
+  const out = (await (await fetch(response_url, { headers })).json()) as {
+    image?: { url: string };
+    images?: Array<{ url: string }>;
+  };
+  const url = out.image?.url ?? out.images?.[0]?.url;
+  if (!url) throw new Error(`fal rembg returned no image: ${JSON.stringify(out).slice(0, 200)}`);
+
+  const dl = await fetch(url);
+  if (!dl.ok) throw new Error(`Failed to download rembg output: ${dl.status}`);
+  return Buffer.from(await dl.arrayBuffer());
+}
+
+/**
+ * Kontext fallback — only fires when rembg errors. Same identity-preserving "isolate
+ * subject onto magenta backdrop" approach as v3; downstream chromakey strips the magenta.
+ * ~$0.04/call vs rembg's $0.001, so we only use it when rembg can't.
+ */
+async function isolateSubjectViaKontext(sourceImageUrl: string): Promise<Buffer> {
+  const key = process.env.FAL_KEY;
+  if (!key) throw new Error("FAL_KEY is not configured");
+  const headers = { Authorization: `Key ${key}`, "Content-Type": "application/json" };
+
+  // Kontext follows instructions literally — say exactly what we want and call out
+  // what to preserve. The subject-preservation language is the load-bearing part.
   const prompt = [
-    `Create a standalone t-shirt graphic design artwork.`,
-    `Subject and style: ${promptDescription}`,
-    `BACKGROUND: Solid hot pink/magenta (#FF00FF) background filling the entire canvas.`,
-    `The artwork must have a hard, clean edge against the magenta background — no blending, no gradient, no soft edges.`,
-    `Use ONLY the colors described in the style within the artwork itself. The magenta is ONLY for the background.`,
-    `PRINT-SAFE: render any net, mesh, fence, grid, screen, lattice, rope or repeating-line element as SOLID FULL-COLOR shapes, never thin open mesh with gaps; no hairline/thin strokes — every line must be a thick filled shape so it survives DTF printing and the chroma-key.`,
-    `The artwork's own colors must stay clearly away from magenta/hot-pink/fuchsia so no part of the design keys out with the background. Avoid tiny unreadable text and fine smooth gradients.`,
-    `NO shirt, NO garment, NO fabric texture visible. Just the flat 2D artwork on solid magenta.`,
-    `The design should be centered and fill approximately 60-70% of the canvas.`,
+    "Remove the background from the attached image: keep the subject (the main illustration,",
+    "characters, mascots, typography, badges, props) pixel-for-pixel IDENTICAL — same pose,",
+    "same proportions, same colors, same fonts, same composition. Do NOT redesign, restyle,",
+    "recolor, resize, or reposition any part of the subject. Replace ONLY the background with",
+    "solid hot pink magenta (#FF00FF) filling every pixel that is not part of the subject.",
+    "Hard clean edge between the subject and the magenta — no blending, no gradient, no fade.",
+    "No shirt, no garment, no fabric texture, no scene, no backdrop, no frame — just the",
+    "subject on solid magenta.",
   ].join(" ");
 
-  console.log(`[ProdProcessor v2] Generating standalone design. Prompt: "${prompt.substring(0, 120)}..."`);
+  console.log(`[ProdProcessor v3] Isolating subject via Kontext. Source: ${sourceImageUrl.substring(0, 80)}...`);
 
-  // images/edits endpoint (the only one that accepts image[]) with the source as style reference
-  const formData = new FormData();
-  formData.append("model", "gpt-image-2");
-  formData.append("prompt", prompt);
-  formData.append("size", "1024x1024");
-  formData.append("quality", "medium"); // was "high" — halve cost/latency of this 2nd call (audit #2); matches the first-pass gen
-  // Pass source image as style reference
-  const blob = new Blob([imgBuf], { type: "image/png" });
-  formData.append("image[]", blob, "style_reference.png");
-
-  const resp = await fetch("https://api.openai.com/v1/images/edits", {
+  const submit = await fetch("https://queue.fal.run/fal-ai/flux-pro/kontext", {
     method: "POST",
-    headers: { "Authorization": `Bearer ${apiKey}` },
-    body: formData,
+    headers,
+    body: JSON.stringify({
+      prompt,
+      image_url: sourceImageUrl,
+      safety_tolerance: "6", // most permissive — design content (mascots, slogans) trips lower
+    }),
   });
-
-  if (!resp.ok) {
-    const errText = await resp.text();
-    throw new Error(`gpt-image-2 API error (${resp.status}): ${errText.substring(0, 300)}`);
+  if (!submit.ok) {
+    throw new Error(`fal Kontext submit error (${submit.status}): ${(await submit.text()).slice(0, 300)}`);
   }
+  const { status_url, response_url } = (await submit.json()) as {
+    status_url: string;
+    response_url: string;
+  };
 
-  const data = await resp.json() as { data: Array<{ b64_json?: string; url?: string }> };
-  const item = data.data?.[0];
-  if (!item) throw new Error("gpt-image-2 returned no image data");
-
-  if (item.b64_json) {
-    return Buffer.from(item.b64_json, "base64");
-  } else if (item.url) {
-    const dlResp = await fetch(item.url);
-    if (!dlResp.ok) throw new Error(`Failed to download generated image: ${dlResp.status}`);
-    return Buffer.from(await dlResp.arrayBuffer());
+  // Poll until COMPLETED — same pattern as patternProductionProcessor.callFalKontextEdit
+  // and revisionEngine.generateRevisionViaFalKontext (~3s × 80 = 240s cap).
+  let completed = false;
+  for (let i = 0; i < 80; i++) {
+    await new Promise((r) => setTimeout(r, 3000));
+    const st = (await (await fetch(status_url, { headers })).json()) as {
+      status?: string;
+      error?: unknown;
+    };
+    if (st.status === "COMPLETED") { completed = true; break; }
+    if (st.status === "FAILED" || st.error) {
+      throw new Error(`fal Kontext failed: ${JSON.stringify(st).slice(0, 300)}`);
+    }
   }
-  throw new Error("gpt-image-2 response has neither b64_json nor url");
+  if (!completed) throw new Error("fal Kontext timed out after 240s");
+
+  const out = (await (await fetch(response_url, { headers })).json()) as {
+    images?: Array<{ url: string }>;
+  };
+  const url = out.images?.[0]?.url;
+  if (!url) throw new Error(`fal Kontext returned no image: ${JSON.stringify(out).slice(0, 200)}`);
+
+  const dl = await fetch(url);
+  if (!dl.ok) throw new Error(`Failed to download Kontext output: ${dl.status}`);
+  return Buffer.from(await dl.arrayBuffer());
 }
 
 /**
@@ -142,17 +205,16 @@ async function cropToContent(imageBuf: Buffer): Promise<Buffer> {
 /**
  * Process a raw design image URL into a production-ready transparent PNG.
  *
- * Pipeline:
- * 1. Generate standalone artwork on magenta BG (gpt-image-2 generate mode)
- * 2. Chromakey: corner-sampled flood-fill → transparent
- * 3. Crop to content bounds
- * 4. Upload to S3
- * 5. Persist URL in DB
+ * Pipeline (v4):
+ *  - already-transparent → just crop to content bounds (cheapest, no AI)
+ *  - Manual upload → local removeBackground (sharp flood-fill, no AI)
+ *  - everything else → fal rembg (primary) → Kontext+chromakey (fallback) → crop → upload
  *
- * @param imageUrl - URL of the raw generated design image (used as style reference)
+ * @param imageUrl - URL of the raw generated design image
  * @param conceptId - DB concept ID
  * @param variation - A/B/C variation key
- * @param promptDescription - Text description of the design (from imagePromptA/B/C or style+conceptName)
+ * @param promptDescription - kept for back-compat; no longer fed to any model (subject is read
+ *   from the image itself, so the description was noise + the source of v2's redraw risk)
  * @returns URL of the production-ready transparent PNG in S3
  */
 export async function processDesignForProduction(
@@ -162,7 +224,7 @@ export async function processDesignForProduction(
   promptDescription?: string,
   isManual = false,
 ): Promise<string> {
-  console.log(`[ProdProcessor v2] Processing concept ${conceptId} variation ${variation}...`);
+  console.log(`[ProdProcessor v4] Processing concept ${conceptId} variation ${variation}...`);
 
   // Check if the source image is already transparent (skip regeneration)
   const srcResp = await fetch(imageUrl);
@@ -187,22 +249,31 @@ export async function processDesignForProduction(
   let transparentPng: Buffer;
   if (transparentRatio > 0.3) {
     // Already transparent — just crop to content bounds
-    console.log(`[ProdProcessor v2] Image already transparent (${(transparentRatio * 100).toFixed(1)}%), cropping only`);
+    console.log(`[ProdProcessor v4] Image already transparent (${(transparentRatio * 100).toFixed(1)}%), cropping only`);
     transparentPng = await cropToContent(srcBuf);
   } else if (isManual) {
     // Manual upload (PO 2026-06-15 bug #1): a FINISHED user design on a literal background. Remove the
-    // bg LOCALLY (white → flood-fill, colored → AI-extraction fallback) — NEVER regenerate via
-    // gpt-image-2, which replaces the user's own art and throws without OPENAI_API_KEY (the upload errors).
-    console.log(`[ProdProcessor v2] Manual upload — local background removal, no AI regeneration`);
+    // bg LOCALLY (white → flood-fill, colored → AI-extraction fallback) — never use the AI path,
+    // which used to redraw the user's own art (the original v2 gpt-image-2 generate-mode bug).
+    console.log(`[ProdProcessor v4] Manual upload — local background removal, no AI regeneration`);
     const { removeBackground } = await import("./mockupCompositor");
     const removed = await removeBackground(srcBuf);
     transparentPng = await cropToContent(removed);
   } else {
-    // Generate standalone design on magenta BG, then chromakey
-    const description = promptDescription || "the design shown in the reference image";
-    const rawMagenta = await generateStandaloneDesign(imageUrl, description);
-    const keyed = await chromakeyFromCorners(rawMagenta);
-    transparentPng = await cropToContent(keyed);
+    // PRIMARY: rembg returns transparent PNG directly. No prompt, no chromakey, deterministic mask.
+    // FALLBACK: Kontext on rembg error — paints magenta backdrop, chromakey strips it. promptDescription
+    // is intentionally unused; both models read the subject from the image, so any text description is
+    // just noise (and was where the v2 path's "creative reinterpretation" risk lived).
+    void promptDescription;
+    try {
+      const rembgOut = await removeBackgroundViaRembg(imageUrl);
+      transparentPng = await cropToContent(rembgOut);
+    } catch (rembgErr) {
+      console.warn(`[ProdProcessor v4] rembg failed; falling back to Kontext for concept ${conceptId} ${variation}:`, rembgErr);
+      const rawMagenta = await isolateSubjectViaKontext(imageUrl);
+      const keyed = await chromakeyFromCorners(rawMagenta);
+      transparentPng = await cropToContent(keyed);
+    }
   }
 
   // Upload to S3

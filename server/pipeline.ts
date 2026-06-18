@@ -1020,9 +1020,10 @@ const GPT_IMAGE_TIMEOUT_MS = 90_000; // gpt-image-2 "medium" upper bound; fail f
 // (edit if a bestseller image is present, else text-to-image) → Forge fallback. Worst case
 // ~90s + 60s; Forge guarantees we never ship 0 images.
 /** Map the council's chosen design aspect to (a) a native gpt-image-2 canvas size and (b) a short
- *  prompt prefix telling the model to draw the design only in the requested aspect region with
- *  transparent margins. cropToContent (productionImageProcessor) trims those margins after — so the
- *  FINAL design has the requested aspect even though the native canvas is one of gpt-image-2's 3 sizes. */
+ *  prompt prefix telling the model to draw the design only in the requested aspect region. The
+ *  generations endpoint REJECTS background:"transparent" (see imageGeneration.ts:63-65, removed
+ *  2026-06-13), so the output is always opaque and Kontext (productionImageProcessor v3) strips
+ *  the background on-demand at mockup time. cropToContent then trims to the actual content bbox. */
 function aspectToGenSize(aspect: "1:1" | "4:5" | "5:4" | "9:16" | "16:9"): "1024x1024" | "1024x1536" | "1536x1024" {
   if (aspect === "1:1") return "1024x1024";
   if (aspect === "4:5" || aspect === "9:16") return "1024x1536"; // portrait canvases
@@ -1031,7 +1032,9 @@ function aspectToGenSize(aspect: "1:1" | "4:5" | "5:4" | "9:16" | "16:9"): "1024
 function aspectGuidanceForPrompt(aspect: "1:1" | "4:5" | "5:4" | "9:16" | "16:9"): string {
   if (aspect === "1:1") return ""; // no extra steering needed for square
   const shape = aspect === "4:5" || aspect === "9:16" ? "PORTRAIT (tall)" : "LANDSCAPE (wide)";
-  return `Compose the design in a ${aspect} ${shape} content area. Draw the artwork ONLY inside that ${aspect} region; leave the remaining canvas margins fully TRANSPARENT (do NOT fill, stretch, or extend the artwork to fill the whole canvas). The final cropped output should genuinely read as ${aspect}.\n\n`;
+  // No "transparent margins" lie — gpt-image-2 can't deliver alpha. We tell the model to keep the
+  // artwork compact inside the aspect region; Kontext + cropToContent handle the rest downstream.
+  return `Compose the design in a ${aspect} ${shape} content area. Draw the artwork ONLY inside that ${aspect} region — do NOT stretch, fill, or extend it across the whole canvas. The final cropped output should genuinely read as ${aspect}.\n\n`;
 }
 
 async function generateImageWithRetry(
@@ -1046,9 +1049,10 @@ async function generateImageWithRetry(
   // In edit mode, anchor on the bestseller's print realism but output a NEW flat design — the NH's
   // trick ("output the design only, on white, not on a shirt") also handles listing photos that
   // show the shirt on a model.
-  const editPrompt = `Use this reference image ONLY for its print quality, screen-print texture, color treatment and professional finish. Create a NEW, different design: ${prompt} Output the finished artwork by itself on a fully transparent background — not on a shirt, garment, model, or any filled background.`;
+  const editPrompt = `Use this reference image ONLY for its print quality, screen-print texture, color treatment and professional finish. Create a NEW, different design: ${prompt} Output the finished artwork as a standalone graphic — no shirt, no garment, no model, no mockup, no scene.`;
   // Aspect guidance is prepended to the prompt (no-op for 1:1) and the canvas is chosen to natively
-  // support the requested aspect. cropToContent later trims the transparent margins.
+  // support the requested aspect. cropToContent later trims to the content bbox; Kontext (v3
+  // productionImageProcessor) handles bg-removal on-demand at mockup time.
   const aspectPrefix = aspectGuidanceForPrompt(aspect);
   const genSize = aspectToGenSize(aspect);
   const promptWithAspect = aspectPrefix + prompt;
@@ -1103,8 +1107,8 @@ STEP 2 — Only if canWork is true AND viral is "high" or "med", write "prompt":
 - Isolated design, headline spelled VERBATIM. ACCURATE niche equipment.
 - ABSOLUTE QUALITY BAR — every style: premium, sellable-on-Etsy commercial quality; NEVER cartoonish, kawaii, chibi, Pixar/Disney, childish, clip-art, sticker, 3D-render, or flat clean modern mascot-logo. If a knowledge-base note calls a mascot "cute"/"comical"/"happy"/"zen", render the animal with characterful craftsmanship appropriate to the chosen style — never as a cartoon.
 - PRINT-SAFE (DTF) — every element must survive direct-to-film print and a magenta chroma-key. APPLIES TO EVERY ELEMENT regardless of which style you picked: typography, mascot, illustration, paddles, accents, decorations — ALL of them. Render nets, mesh, fences, grids, screens, lattices, halftone fills, ropes, chains and any repeating-line motif as SOLID FULL-COLOR shapes, NEVER as thin open mesh with see-through gaps. No hairline or single-pixel strokes; every line, outline and stem must be a thick, confidently weighted shape. NEVER prescribe a "line art", "thin line", "minimalist line", "fine line", "single line", "hairline", "delicate line", or "outlined" treatment for ANY element in the prompt — every illustration (paddle, mascot, prop, accessory) must be a fully-rendered FILLED shape (solid silhouette or thickly-outlined block), not a wireframe drawing. PROHIBITED decorative motifs that won't survive DTF: tiny stars, sparkles, dust specks, sweat drops, dotted accent marks, fine flourishes, scattered confetti dots — anything under ~30px stroke weight. Avoid tiny unreadable text and fine smooth gradients, and keep the artwork's palette clearly away from magenta / hot-pink / fuchsia (the background key color) so nothing keys out.
-- ASPECT: compose the design to FIT THE CHOSEN ASPECT inside the canvas. For non-square aspects (4:5, 5:4, 9:16, 16:9), draw the design only inside that aspect's content area and leave the unused canvas margins TRANSPARENT — so the final cropped design genuinely has the chosen shape. Never stretch elements to fill a canvas that doesn't match the aspect.
-- COMPOSITION (DTF cost + multi-color shirts): default to a COMPACT design — the subject (mascot, typography, or mascot+headline) standing ALONE with TRANSPARENT pixels around it; no full-canvas backdrop, no enclosing sunburst/sunset/halftone-gradient/rectangular panel, no retro frame around the subject. The ONLY exception is when the concept IS a badge, crest, seal, or varsity emblem (e.g. Collegiate/Varsity, a country-club crest): then the full design fills the badge SHAPE, but the area OUTSIDE that badge shape is still transparent. Transparent area = less DTF ink = the design reads on any shirt color.
+- ASPECT: compose the design to FIT THE CHOSEN ASPECT inside the canvas. For non-square aspects (4:5, 5:4, 9:16, 16:9), draw the design only inside that aspect's content area — never stretch elements to fill a canvas that doesn't match the aspect. Downstream bg-removal (Kontext) handles the rest.
+- COMPOSITION (DTF cost + multi-color shirts): default to a COMPACT design — the subject (mascot, typography, or mascot+headline) standing ALONE in the canvas with no enclosing sunburst/sunset/halftone-gradient/rectangular panel, no retro frame, no full-canvas backdrop. The ONLY exception is when the concept IS a badge, crest, seal, or varsity emblem (e.g. Collegiate/Varsity, a country-club crest): then the full design fills the badge SHAPE. A compact subject is easier for downstream bg-removal to isolate cleanly, reads on any shirt color, and uses less DTF ink.
 - If it fails the gate (canWork false or viral low), set "prompt" to "".
 
 ═══ STYLE PLAYBOOK — what each style looks like (use the one you chose; do not mix) ═══
