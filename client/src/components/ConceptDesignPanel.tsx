@@ -24,6 +24,7 @@ import {
   ShoppingBag,
   History,
   RotateCcw,
+  RotateCw,
   Image as ImageIcon,
   XCircle,
   Undo2,
@@ -203,6 +204,15 @@ export function ConceptDesignPanel({
   const { data: historyRaw, isLoading: historyLoading } =
     trpc.concepts.getGenerationHistory.useQuery({ conceptId });
 
+  // ─── Version labels ──────────────────────────────────────────────────────────
+  const historyRows = historyRaw ?? [];
+  const totalVersions = historyRows.length + 1;
+  const liveVersionLabel = `${conceptName} V${totalVersions}`;
+  const historyVersionLabel = (i: number) =>
+    `${conceptName} V${totalVersions - 1 - i}`;
+  const displayName = (row: typeof historyRows[0], i: number) =>
+    row.name ?? historyVersionLabel(i);
+
   // Filter out the currently-live design from history, split active vs dismissed
   const displayUrl = productionUrlA || imageUrlA;
   const history = useMemo(() => {
@@ -307,7 +317,7 @@ export function ConceptDesignPanel({
 
         {/* Meta + controls */}
         <div className="flex-1 min-w-[240px] flex flex-col">
-          <span className="text-xs text-muted-foreground">Current design</span>
+          <span className="text-xs text-muted-foreground">{liveVersionLabel}</span>
           <span className="text-sm mt-0.5">
             Style: <span className="font-medium">{currentStyle || "—"}</span>
           </span>
@@ -368,10 +378,11 @@ export function ConceptDesignPanel({
               variant="outline"
               size="sm"
               className="h-8 text-xs gap-1.5"
-              onClick={() => regenerateFromOriginalMutation.mutate({ conceptId, variationKey: "A", productGroupId: defaultGroupId, regenerateProduction: true })}
+              onClick={() => navigate(`/${slug}/mockups?conceptId=${conceptId}&regenerate=1`)}
               disabled={regenerateFromOriginalMutation.isPending || !defaultGroupId}
               title="Re-derive the clean production design from the raw original (fixes concepts whose cached design was AI-redrawn by the old pipeline)"
             >
+              <RotateCw className="h-3.5 w-3.5" />
               {regenerateFromOriginalMutation.isPending ? "Regenerating…" : "Regenerate from Original"}
             </Button>
             <Button
@@ -567,7 +578,7 @@ export function ConceptDesignPanel({
                 </div>
                 {/* Meta + actions */}
                 <div className="p-2 space-y-1.5">
-                  {/* Inline rename */}
+                  {/* Inline rename with version label */}
                   <div className="flex items-center gap-1">
                     {renamingId === row.id ? (
                       <input
@@ -581,7 +592,7 @@ export function ConceptDesignPanel({
                     ) : (
                       <>
                         <p className="flex-1 text-[11px] text-muted-foreground truncate">
-                          {row.name || (row.instruction || "Generation").replace("Generation — ", "")}
+                          {displayName(row, history.indexOf(row))}
                         </p>
                         <button
                           className="text-muted-foreground hover:text-foreground p-0.5"
@@ -626,6 +637,18 @@ export function ConceptDesignPanel({
                       onClick={() => handleMockupFromHistory(row.id)}
                     >
                       <Shirt className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      className="h-7 w-7 flex-1"
+                      title="Regenerate from Original (re-derive transparent + fresh mockups for this version)"
+                      disabled={restoreMutation.isPending}
+                      onClick={() => {
+                        navigate(`/${slug}/mockups?conceptId=${conceptId}&revisionId=${row.id}&regenerate=1`);
+                      }}
+                    >
+                      <RotateCw className="h-3.5 w-3.5" />
                     </Button>
                     <Button
                       variant="outline"

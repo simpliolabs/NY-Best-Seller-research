@@ -46,6 +46,10 @@ export default function Mockups() {
     const params = new URLSearchParams(searchString);
     return params.get("revisionId") ?? undefined;
   }, [searchString]);
+  const regenerate = useMemo(() => {
+    const params = new URLSearchParams(searchString);
+    return params.get("regenerate") === "1";
+  }, [searchString]);
 
   // State for generation form
   const [selectedConceptId, setSelectedConceptId] = useState<string>(urlConceptId);
@@ -92,9 +96,17 @@ export default function Mockups() {
   );
   const revisionName = useMemo(() => {
     if (!revisionId || !revisionHistoryQuery.data) return undefined;
-    const rev = revisionHistoryQuery.data.find((r) => r.id === revisionId);
-    return rev?.name || rev?.instruction || "Version";
-  }, [revisionId, revisionHistoryQuery.data]);
+    const allRevs = revisionHistoryQuery.data;
+    const revIdx = allRevs.findIndex((r) => r.id === revisionId);
+    if (revIdx === -1) return undefined;
+    const rev = allRevs[revIdx];
+    // Derive version label: oldest = V1, newest history = V(total-1), live = V(total)
+    const totalVersions = allRevs.length + 1;
+    const versionNumber = totalVersions - 1 - revIdx;
+    const selectedConcept = (conceptsQuery.data?.concepts ?? []).find((c: any) => String(c.id) === selectedConceptId);
+    const cName = selectedConcept?.conceptName ?? "Concept";
+    return rev.name ?? `${cName} V${versionNumber}`;
+  }, [revisionId, revisionHistoryQuery.data, conceptsQuery.data, selectedConceptId]);
 
   // Generate mutation
   const generateMutation = trpc.mockup.generate.useMutation({
@@ -199,6 +211,7 @@ export default function Mockups() {
       productGroupId: selectedGroupId,
       colorCount,
       ...(revisionId ? { sourceRevisionId: revisionId } : {}),
+      ...(regenerate ? { regenerateProduction: true } : {}),
     });
   }
 
