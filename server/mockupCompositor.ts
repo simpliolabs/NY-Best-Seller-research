@@ -5,7 +5,6 @@
  * Karpathy: one function, no class hierarchy, no speculative abstractions.
  */
 import sharp from "sharp";
-import { generateImage } from "./_core/imageGeneration";
 
 export interface PrintArea {
   x: number;      // ratio 0-1 (left offset within garment bbox)
@@ -269,64 +268,18 @@ export async function removeBackground(imageBuf: Buffer): Promise<Buffer> {
         .toBuffer({ resolveWithObject: true });
       return simpleWhiteRemoval(data, info);
     } else {
-      // Colored/textured background (legacy shirt mockup images).
-      // Use AI extraction to isolate the design from the shirt.
-      return await aiDesignExtraction(imageBuf);
+      // Colored/textured/scene background — composite VERBATIM (PO 2026-06-17 canonical model).
+      // This branch USED to call aiDesignExtraction, which sent the image to a generate-edit model
+      // to "extract the design." That MANGLED intentional full-scene designs — the photoreal raccoon
+      // on a night street came back as garbage, and vintage backdrops were destroyed. Intentional
+      // backgrounds are now KEPT. If the user wants a colored/scene background stripped, they do it
+      // explicitly via the Design Studio "Remove background" action (a revision). Only the model's
+      // blank near-white canvas (the whiteEdgeRatio branch above) is auto-removed — that's not an
+      // intentional design element, and the flood-fill is deterministic + safe.
+      return imageBuf;
     }
   } catch (err) {
     console.warn("[BG Removal] Failed, using original image:", err);
-    return imageBuf;
-  }
-}
-
-/**
- * Crop an image to the bounding box of its colored (non-white, non-transparent) content.
- * Used after AI extraction to remove the white padding the AI adds around designs.
- * White pixels inside the design (paddle face, net interior) are preserved because
- * we only crop the CANVAS — we don't modify any pixel values.
- */
-async function cropToColoredContent(imageBuf: Buffer): Promise<Buffer> {
-  try {
-    const { data, info } = await sharp(imageBuf)
-      .ensureAlpha()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-    const { width, height, channels } = info;
-
-    // Find bounding box of non-transparent pixels
-    let minX = width, maxX = 0, minY = height, maxY = 0;
-    let found = false;
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const idx = (y * width + x) * channels;
-        const a = data[idx + 3];
-        if (a > 30) {
-          if (x < minX) minX = x;
-          if (x > maxX) maxX = x;
-          if (y < minY) minY = y;
-          if (y > maxY) maxY = y;
-          found = true;
-        }
-      }
-    }
-
-    if (!found) return imageBuf; // Fully transparent — return as-is
-
-    // Add 4px padding so we don't clip anti-aliased edges
-    const pad = 4;
-    const left = Math.max(0, minX - pad);
-    const top = Math.max(0, minY - pad);
-    const cropW = Math.min(width - left, maxX - left + 1 + pad);
-    const cropH = Math.min(height - top, maxY - top + 1 + pad);
-
-    // Only crop if it actually reduces the canvas meaningfully (> 5% reduction)
-    const reduction = 1 - (cropW * cropH) / (width * height);
-    if (reduction < 0.05) return imageBuf;
-
-    return sharp(imageBuf)
-      .extract({ left, top, width: cropW, height: cropH })
-      .toBuffer();
-  } catch {
     return imageBuf;
   }
 }
@@ -398,53 +351,10 @@ function simpleWhiteRemoval(data: Buffer, info: { width: number; height: number;
     .toBuffer();
 }
 
-/**
- * AI-powered design extraction for images that show a design on a shirt/colored background.
- * Uses the image generation edit mode to isolate just the graphic design.
- */
-async function aiDesignExtraction(imageBuf: Buffer): Promise<Buffer> {
-  try {
-    const b64 = imageBuf.toString("base64");
-    const result = await generateImage({
-      prompt: "Extract ONLY the graphic design/artwork from this t-shirt image. Remove the t-shirt, remove any background (wooden planks, fabric texture, etc). Output ONLY the isolated graphic design elements (text, illustrations, badges, icons) on a pure white background. The design should be centered with white space around it. No shirt, no background, no shadows — just the flat graphic artwork.",
-      originalImages: [{
-        b64Json: b64,
-        mimeType: "image/png",
-      }],
-    });
-
-    if (!result.url) {
-      console.warn("[AI Extraction] No URL returned, falling back to original");
-      return imageBuf;
-    }
-
-    // Download the extracted design
-    const res = await fetch(result.url);
-    if (!res.ok) throw new Error(`Failed to download extracted design: ${res.status}`);
-    const extractedBuf = Buffer.from(await res.arrayBuffer());
-
-    // Apply simple white removal on the extracted design (which should be on white bg)
-    const { data, info } = await sharp(extractedBuf)
-      .ensureAlpha()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-
-    const noBg = await simpleWhiteRemoval(data, info);
-
-    // Crop to the bounding box of non-transparent content.
-    // The AI often returns a larger canvas with the design not centered — crop removes
-    // the excess transparent area so the design fills its bounding box correctly.
-    return cropToColoredContent(noBg);
-  } catch (err) {
-    console.warn("[AI Extraction] Failed, falling back to simple removal:", err);
-    // Fall back to simple removal
-    const { data, info } = await sharp(imageBuf)
-      .ensureAlpha()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-    return simpleWhiteRemoval(data, info);
-  }
-}
+// aiDesignExtraction (+ its helper cropToColoredContent above) deleted 2026-06-17: it was the
+// "extract the design from a shirt photo" generate-edit path that mangled intentional full-scene
+// designs (the photoreal raccoon). removeBackground no longer calls it; colored/scene designs
+// composite verbatim. Explicit user bg-removal lives in the revision engine, not here.
 
 /**
  * Trim transparent pixels from a design image to get the actual content bounds.
@@ -642,10 +552,12 @@ export async function compositeDesignOnMockup(config: CompositeConfig): Promise<
 
   let trimmedDesign: Buffer;
   if (isAlreadyTransparent) {
-    // Production-ready transparent PNG — just trim to content bounds
+    // Already-transparent PNG — just trim to content bounds
     trimmedDesign = await trimDesign(rawDesignBuf);
   } else {
-    // Raw image with background — run full removal pipeline
+    // Opaque design. removeBackground now only strips the model's blank near-white canvas
+    // (deterministic flood-fill); colored/scene designs pass through VERBATIM (PO 2026-06-17 —
+    // the raccoon's night scene + vintage backdrops are intentional and must print as drawn).
     const trimmedFirst = await trimToContent(rawDesignBuf);
     const noBgDesign = await removeBackground(trimmedFirst);
     trimmedDesign = await trimDesign(noBgDesign);
