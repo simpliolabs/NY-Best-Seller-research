@@ -25,8 +25,38 @@ import { eq } from "drizzle-orm";
 import { invokeLLM } from "./_core/llm";
 import { generateHalftoneSeparation, prepareFullTonePrintFile, INK_COLORS } from "./halftone";
 import type { InkName } from "./halftone";
+import { createPrintFile, findPrintFileByHash, getPrintFilesByConcept } from "./printFileDb";
+import { knockoutColors, hexToRgb } from "./knockout";
+import { classifyDesignType } from "./designType";
+import { analyzeGarmentFit } from "./garmentFit";
+import { createHash } from "crypto";
 
 const INK_NAMES = Object.keys(INK_COLORS) as [InkName, ...InkName[]];
+
+/** Store a generated print PNG once: content-hash dedupe (reuse the stored file on an identical
+ *  re-export instead of piling up duplicate 69MB PNGs), then storagePut + index into print_files so
+ *  the seller can find it later (PO 2026-06-17 print-files library). Returns the persisted row's url. */
+async function persistPrintFile(
+  png: Buffer,
+  meta: {
+    conceptId: number; variationKey: "A" | "B" | "C"; sourceRevisionId?: string;
+    kind: "fulltone" | "halftone" | "knockout"; inkColor?: string | null;
+    filename: string; widthPx: number; heightPx: number;
+  },
+): Promise<{ url: string; filename: string; widthPx: number; heightPx: number; dpi: number; deduped: boolean }> {
+  const contentHash = createHash("sha256").update(png).digest("hex");
+  const existing = await findPrintFileByHash(meta.conceptId, contentHash);
+  if (existing) {
+    return { url: existing.url, filename: existing.filename, widthPx: existing.widthPx, heightPx: existing.heightPx, dpi: existing.dpi, deduped: true };
+  }
+  const { url } = await storagePut(`print/${meta.conceptId}-${meta.variationKey}-${nanoid(6)}-${meta.filename}`, png, "image/png");
+  await createPrintFile({
+    conceptId: meta.conceptId, variationKey: meta.variationKey, sourceRevisionId: meta.sourceRevisionId ?? null,
+    kind: meta.kind, inkColor: meta.inkColor ?? null, url, filename: meta.filename,
+    widthPx: meta.widthPx, heightPx: meta.heightPx, dpi: 300, contentHash,
+  });
+  return { url, filename: meta.filename, widthPx: meta.widthPx, heightPx: meta.heightPx, dpi: 300, deduped: false };
+}
 
 /** Resolve the design source URL for an export (PO 2026-06-17, print export). A specific version
  *  when sourceRevisionId is given, else the live slot: imageUrl (the design as drawn) preferred,
@@ -359,10 +389,12 @@ export const mockupRouter = router({
 
       const srcBuf = await fetchToBuffer(srcUrl);
       const png = await prepareFullTonePrintFile(srcBuf, input.widthIn, input.heightIn);
-      const name = `${slugify(concept.conceptName)}-print.png`;
-      const { url } = await storagePut(`print/${input.conceptId}-${input.variationKey}-${nanoid(6)}-${name}`, png, "image/png");
-      const { widthPx, heightPx } = { widthPx: input.widthIn * 300, heightPx: input.heightIn * 300 };
-      return { url, filename: name, widthPx, heightPx, dpi: 300 };
+      const stored = await persistPrintFile(png, {
+        conceptId: input.conceptId, variationKey: input.variationKey, sourceRevisionId: input.sourceRevisionId,
+        kind: "fulltone", filename: `${slugify(concept.conceptName)}-print.png`,
+        widthPx: input.widthIn * 300, heightPx: input.heightIn * 300,
+      });
+      return { ...stored };
     }),
 
   /** Halftone print export (PO 2026-06-17, feat B). One single-ink AM halftone separation per
@@ -395,11 +427,119 @@ export const mockupRouter = router({
         const png = await generateHalftoneSeparation(srcBuf, {
           inkColor, lpi: input.lpi, widthIn: input.widthIn, heightIn: input.heightIn,
         });
-        const filename = `${slug}-halftone-${inkColor}.png`;
-        const { url } = await storagePut(`print/${input.conceptId}-${input.variationKey}-${nanoid(6)}-${filename}`, png, "image/png");
-        results.push({ inkColor, url, filename });
+        const stored = await persistPrintFile(png, {
+          conceptId: input.conceptId, variationKey: input.variationKey, sourceRevisionId: input.sourceRevisionId,
+          kind: "halftone", inkColor, filename: `${slug}-halftone-${inkColor}.png`,
+          widthPx: input.widthIn * 300, heightPx: input.heightIn * 300,
+        });
+        results.push({ inkColor, url: stored.url, filename: stored.filename });
       }
       return { results, lpi: input.lpi, dpi: 300, note: "Single-ink halftone proof — verify on a test print before relying on it." };
+    }),
+
+  /** Color knockout print file (PO 2026-06-17, CP2): delete a color (usually the shirt color) so the
+   *  garment shows through — e.g. a white-line skull on black → knock out black. Flood mode (default)
+   *  removes only the border-connected background, preserving the design's own same-color detail.
+   *  Returns the transparent print PNG + a flattened-on-garment PREVIEW so the seller SEES the garment
+   *  through the holes before printing (mandatory per the print-shop review). */
+  knockoutPrintFile: protectedProcedure
+    .input(z.object({
+      conceptId: z.number(),
+      variationKey: z.enum(["A", "B", "C"]).default("A"),
+      sourceRevisionId: z.string().min(1).optional(),
+      knockoutColor: z.string(),                 // hex of the color to delete (usually the shirt color)
+      garmentColor: z.string().optional(),       // hex for the preview swatch; defaults to knockoutColor
+      tolerance: z.number().min(10).max(150).default(60),
+      fuzz: z.number().min(0).max(120).default(45),
+      mode: z.enum(["flood", "global"]).default("flood"),
+      widthIn: z.number().min(1).max(40).default(12),
+      heightIn: z.number().min(1).max(40).default(16),
+    }))
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      const concept = (await db.select().from(designConcepts).where(eq(designConcepts.id, input.conceptId)).limit(1))[0];
+      if (!concept) throw new TRPCError({ code: "NOT_FOUND", message: "Concept not found" });
+      const target = hexToRgb(input.knockoutColor);
+      if (!target) throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid knockoutColor hex" });
+      const srcUrl = await resolveExportSourceUrl(concept, input.variationKey, input.sourceRevisionId);
+      if (!srcUrl) throw new TRPCError({ code: "BAD_REQUEST", message: "No design image to knock out" });
+
+      const srcBuf = await fetchToBuffer(srcUrl);
+      const knocked = await knockoutColors(srcBuf, {
+        targets: [target], tolerance: input.tolerance, fuzz: input.fuzz, mode: input.mode,
+      });
+
+      // Print file: size the knocked-out design to print resolution + persist.
+      const printPng = await prepareFullTonePrintFile(knocked, input.widthIn, input.heightIn);
+      const stored = await persistPrintFile(printPng, {
+        conceptId: input.conceptId, variationKey: input.variationKey, sourceRevisionId: input.sourceRevisionId,
+        kind: "knockout", inkColor: input.knockoutColor,
+        filename: `${slugify(concept.conceptName)}-knockout.png`,
+        widthPx: input.widthIn * 300, heightPx: input.heightIn * 300,
+      });
+
+      // PREVIEW (mandatory): flatten the knocked-out design over the garment color so the seller sees
+      // the shirt showing through the holes. Small, not persisted — it's a proof, not a deliverable.
+      const swatch = hexToRgb(input.garmentColor ?? input.knockoutColor) ?? { r: 17, g: 17, b: 17 };
+      const previewBuf = await (await import("sharp")).default(knocked)
+        .resize(700, 700, { fit: "inside", withoutEnlargement: false })
+        .flatten({ background: swatch })
+        .webp()
+        .toBuffer();
+      const { url: previewUrl } = await storagePut(
+        `print-preview/${input.conceptId}-${input.variationKey}-${nanoid(6)}-knockout-preview.webp`, previewBuf, "image/webp",
+      );
+
+      return { ...stored, previewUrl };
+    }),
+
+  /** Design-type recommendation (PO 2026-06-17, CP3). Classifies the design so the UI can RECOMMEND
+   *  the right print treatment — and warn (NOT grey-out) before someone one-click-halftones a
+   *  photoreal design into a black blob. Returns type + per-tool fit + a plain-English reason. */
+  classifyDesign: protectedProcedure
+    .input(z.object({
+      conceptId: z.number(),
+      variationKey: z.enum(["A", "B", "C"]).default("A"),
+      sourceRevisionId: z.string().min(1).optional(),
+    }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      const concept = (await db.select().from(designConcepts).where(eq(designConcepts.id, input.conceptId)).limit(1))[0];
+      if (!concept) throw new TRPCError({ code: "NOT_FOUND", message: "Concept not found" });
+      const srcUrl = await resolveExportSourceUrl(concept, input.variationKey, input.sourceRevisionId);
+      if (!srcUrl) throw new TRPCError({ code: "BAD_REQUEST", message: "No design image to classify" });
+      const srcBuf = await fetchToBuffer(srcUrl);
+      return classifyDesignType(srcBuf);
+    }),
+
+  /** Garment-fit guidance (PO 2026-06-17, CP4). Recommends shirt-color DIRECTION from the design's
+   *  light/dark content (the contrast matcher under-surfaces black for light-content vintage designs)
+   *  + the DTF white-underbase reminder for dark shirts. Advisory — does not change auto color picks. */
+  getGarmentGuidance: protectedProcedure
+    .input(z.object({
+      conceptId: z.number(),
+      variationKey: z.enum(["A", "B", "C"]).default("A"),
+      sourceRevisionId: z.string().min(1).optional(),
+    }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      const concept = (await db.select().from(designConcepts).where(eq(designConcepts.id, input.conceptId)).limit(1))[0];
+      if (!concept) throw new TRPCError({ code: "NOT_FOUND", message: "Concept not found" });
+      const srcUrl = await resolveExportSourceUrl(concept, input.variationKey, input.sourceRevisionId);
+      if (!srcUrl) throw new TRPCError({ code: "BAD_REQUEST", message: "No design image to analyze" });
+      const srcBuf = await fetchToBuffer(srcUrl);
+      return analyzeGarmentFit(srcBuf);
+    }),
+
+  /** Print-files library (PO 2026-06-17): every generated print export for a concept, newest first.
+   *  Fixes "where are the stored downloadable print files?" — they're now persisted + retrievable. */
+  getPrintFiles: protectedProcedure
+    .input(z.object({ conceptId: z.number() }))
+    .query(async ({ input }) => {
+      return getPrintFilesByConcept(input.conceptId);
     }),
 
   /** Regenerate a single mockup (re-composite with current design) */

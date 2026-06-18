@@ -27,7 +27,7 @@ import type { PrintZoneCoords } from "@/components/PrintZoneEditor";
 import { MockupLightbox } from "@/components/MockupLightbox";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
-import { Loader2, Image as ImageIcon, Shirt, RefreshCw, Trash2, AlertTriangle, Move, Check, X } from "lucide-react";
+import { Loader2, Image as ImageIcon, Shirt, RefreshCw, Trash2, AlertTriangle, Move, Check, X, Download, Info } from "lucide-react";
 
 
 export default function Mockups() {
@@ -136,6 +136,40 @@ export default function Mockups() {
   const [inkColor, setInkColor] = useState<
     "black" | "white" | "navy" | "red" | "forest" | "maroon" | "gold"
   >("black");
+  const [knockoutHex, setKnockoutHex] = useState("#111111");
+  const [knockoutMode, setKnockoutMode] = useState<"flood" | "global">("flood");
+
+  // Print files library
+  const printFilesQuery = trpc.mockup.getPrintFiles.useQuery(
+    { conceptId: Number(selectedConceptId) },
+    { enabled: !!selectedConceptId }
+  );
+
+  // Design-type classification (warn, never disable)
+  const classifyQuery = trpc.mockup.classifyDesign.useQuery(
+    {
+      conceptId: Number(selectedConceptId),
+      variationKey: (selectedVariation || "A") as "A" | "B" | "C",
+      ...(revisionId ? { sourceRevisionId: revisionId } : {}),
+    },
+    { enabled: !!selectedConceptId }
+  );
+
+  // Garment guidance
+  const garmentQuery = trpc.mockup.getGarmentGuidance.useQuery(
+    {
+      conceptId: Number(selectedConceptId),
+      variationKey: (selectedVariation || "A") as "A" | "B" | "C",
+      ...(revisionId ? { sourceRevisionId: revisionId } : {}),
+    },
+    { enabled: !!selectedConceptId }
+  );
+
+  // Knockout mutation
+  const knockoutMutation = trpc.mockup.knockoutPrintFile.useMutation({
+    onSuccess: () => { printFilesQuery.refetch(); },
+    onError: (e) => toast.error(e.message),
+  });
 
   // Delete mutation
   const deleteMockup = trpc.mockup.deleteMockup.useMutation({
@@ -473,21 +507,47 @@ export default function Mockups() {
 
       {/* Print files panel */}
       {!!selectedConceptId && (
-        <div className="mt-4 p-3 rounded-lg border bg-slate-50">
-          <h3 className="text-sm font-semibold mb-2">Print files — 300 DPI</h3>
+        <div className="mt-4 p-3 rounded-lg border bg-slate-50 space-y-3">
+          <h3 className="text-sm font-semibold">Print files — 300 DPI</h3>
+
+          {/* Garment guidance */}
+          {garmentQuery.data && (
+            <div className="p-2 rounded bg-blue-50 border border-blue-200 text-xs text-blue-800">
+              <p className="font-semibold">{garmentQuery.data.summary}</p>
+              {garmentQuery.data.underbaseNote && (
+                <p className="mt-1 text-blue-600">{garmentQuery.data.underbaseNote}</p>
+              )}
+            </div>
+          )}
+
+          {/* Full-tone export */}
           <div className="flex items-center gap-2 flex-wrap">
             <Button
               variant="outline" size="sm"
               disabled={exportPrintMutation.isPending}
-              onClick={() => exportPrintMutation.mutate({
-                conceptId: Number(selectedConceptId),
-                variationKey: (selectedVariation || "A") as "A" | "B" | "C",
-                ...(revisionId ? { sourceRevisionId: revisionId } : {}),
-              })}
+              onClick={() => {
+                exportPrintMutation.mutate({
+                  conceptId: Number(selectedConceptId),
+                  variationKey: (selectedVariation || "A") as "A" | "B" | "C",
+                  ...(revisionId ? { sourceRevisionId: revisionId } : {}),
+                });
+              }}
             >
-              {exportPrintMutation.isPending ? "Preparing…" : "Download print file"}
+              {exportPrintMutation.isPending ? "Preparing…" : "Download print file (DTF)"}
             </Button>
+          </div>
+          {exportPrintMutation.data && (
+            <a
+              href={exportPrintMutation.data.url}
+              download={exportPrintMutation.data.filename}
+              className="block text-sm text-blue-600 underline"
+            >
+              ⬇ {exportPrintMutation.data.filename} — {exportPrintMutation.data.widthPx}×{exportPrintMutation.data.heightPx}, 300 DPI
+            </a>
+          )}
 
+          {/* Halftone section */}
+          <div className="flex items-center gap-2 flex-wrap">
             <select
               value={inkColor}
               onChange={(e) => setInkColor(e.target.value as typeof inkColor)}
@@ -514,21 +574,15 @@ export default function Mockups() {
             >
               {halftoneMutation.isPending ? "Rendering…" : "Generate halftone"}
             </Button>
+            {classifyQuery.data?.recommendations.halftone === "not-recommended" && (
+              <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-0.5" title={classifyQuery.data.reason}>
+                <AlertTriangle className="h-3 w-3" /> Not ideal for this design
+              </span>
+            )}
           </div>
-
-          {exportPrintMutation.data && (
-            <a
-              href={exportPrintMutation.data.url}
-              download={exportPrintMutation.data.filename}
-              className="block mt-2 text-sm text-blue-600 underline"
-            >
-              ⬇ {exportPrintMutation.data.filename} — {exportPrintMutation.data.widthPx}×{exportPrintMutation.data.heightPx}, 300 DPI
-            </a>
-          )}
-
           {halftoneMutation.data && (
-            <div className="mt-2 space-y-1">
-              {halftoneMutation.data.results.map((r) => (
+            <div className="space-y-1">
+              {halftoneMutation.data.results.map((r: any) => (
                 <div key={r.inkColor} className="flex items-center gap-2">
                   <img src={r.url} alt={r.inkColor}
                        className="h-12 w-12 object-contain border bg-white rounded" />
@@ -537,6 +591,93 @@ export default function Mockups() {
                 </div>
               ))}
               <p className="text-[11px] text-amber-700">{halftoneMutation.data.note}</p>
+            </div>
+          )}
+
+          {/* Knockout section */}
+          <div className="border-t pt-3">
+            <h4 className="text-xs font-semibold mb-1">Color Knockout</h4>
+            <div className="flex items-center gap-2 flex-wrap">
+              <label className="text-xs">Shirt hex:</label>
+              <input
+                type="color"
+                value={knockoutHex}
+                onChange={(e) => setKnockoutHex(e.target.value)}
+                className="h-7 w-10 border rounded cursor-pointer"
+              />
+              <input
+                type="text"
+                value={knockoutHex}
+                onChange={(e) => setKnockoutHex(e.target.value)}
+                className="text-xs border rounded px-2 py-1 w-20 bg-white font-mono"
+              />
+              <label className="flex items-center gap-1 text-xs">
+                <input
+                  type="checkbox"
+                  checked={knockoutMode === "global"}
+                  onChange={(e) => setKnockoutMode(e.target.checked ? "global" : "flood")}
+                />
+                Remove enclosed areas too
+              </label>
+              <Button
+                variant="outline" size="sm"
+                disabled={knockoutMutation.isPending}
+                onClick={() => knockoutMutation.mutate({
+                  conceptId: Number(selectedConceptId),
+                  variationKey: (selectedVariation || "A") as "A" | "B" | "C",
+                  ...(revisionId ? { sourceRevisionId: revisionId } : {}),
+                  knockoutColor: knockoutHex,
+                  garmentColor: knockoutHex,
+                  mode: knockoutMode,
+                })}
+              >
+                {knockoutMutation.isPending ? "Knocking out…" : "Knockout"}
+              </Button>
+              {classifyQuery.data?.recommendations.knockout === "not-recommended" && (
+                <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-0.5" title={classifyQuery.data.reason}>
+                  <AlertTriangle className="h-3 w-3" /> Not ideal for this design
+                </span>
+              )}
+            </div>
+            {knockoutMutation.data && (
+              <div className="mt-2 space-y-2">
+                <p className="text-xs font-medium">Preview (on-garment proof):</p>
+                <img
+                  src={knockoutMutation.data.previewUrl}
+                  alt="Knockout preview on garment"
+                  className="h-40 w-40 object-contain border rounded bg-neutral-200"
+                />
+                <a
+                  href={knockoutMutation.data.url}
+                  download={knockoutMutation.data.filename}
+                  className="block text-sm text-blue-600 underline"
+                >
+                  ⬇ Download knockout file: {knockoutMutation.data.filename}
+                </a>
+              </div>
+            )}
+          </div>
+
+          {/* Print files library */}
+          {printFilesQuery.data && printFilesQuery.data.length > 0 && (
+            <div className="border-t pt-3">
+              <h4 className="text-xs font-semibold mb-1 flex items-center gap-1">
+                <Download className="h-3 w-3" /> Saved print files ({printFilesQuery.data.length})
+              </h4>
+              <div className="space-y-1 max-h-40 overflow-y-auto">
+                {printFilesQuery.data.map((f: any) => (
+                  <a
+                    key={f.id}
+                    href={f.url}
+                    download={f.filename}
+                    className="flex items-center gap-2 text-xs text-blue-600 hover:underline"
+                  >
+                    <span className="px-1 py-0.5 bg-slate-200 rounded text-[10px] font-mono">{f.kind}</span>
+                    {f.filename}
+                    <span className="text-slate-400">{f.widthPx}×{f.heightPx}</span>
+                  </a>
+                ))}
+              </div>
             </div>
           )}
         </div>

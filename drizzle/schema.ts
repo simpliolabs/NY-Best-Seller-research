@@ -574,6 +574,33 @@ export const mockupRenders = mysqlTable("mockup_renders", {
 export type MockupRender = typeof mockupRenders.$inferSelect;
 export type InsertMockupRender = typeof mockupRenders.$inferInsert;
 
+/**
+ * Print files — persisted index of downloadable print-ready exports (PO 2026-06-17, "where are the
+ * stored downloadable print files?"). Each row = one generated print asset (full-tone DTF, halftone,
+ * or knockout) for a concept version. The actual PNG lives in S3 (url); this row makes it findable.
+ */
+export const printFiles = mysqlTable("print_files", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  conceptId: int("conceptId").notNull(),
+  variationKey: varchar("variationKey", { length: 1 }).notNull(),
+  /** Which design version this was exported from (null = live slot). */
+  sourceRevisionId: varchar("sourceRevisionId", { length: 36 }),
+  /** fulltone (DTF, print as-is) | halftone (single-ink screen/vintage) | knockout (shirt shows through) */
+  kind: varchar("kind", { length: 16 }).notNull(),
+  /** Ink color for halftone, or the knocked-out color for knockout. NULL for fulltone. */
+  inkColor: varchar("inkColor", { length: 24 }),
+  url: text("url").notNull(),
+  filename: varchar("filename", { length: 200 }).notNull(),
+  widthPx: int("widthPx").notNull(),
+  heightPx: int("heightPx").notNull(),
+  dpi: int("dpi").notNull().default(300),
+  /** SHA-256 of the PNG bytes — dedupe identical exports so the library + S3 don't balloon. */
+  contentHash: varchar("contentHash", { length: 64 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type PrintFile = typeof printFiles.$inferSelect;
+export type InsertPrintFile = typeof printFiles.$inferInsert;
+
 /** Phase G: Design revision iteration history */
 export const designRevisions = mysqlTable("design_revisions", {
   id: varchar("id", { length: 36 }).primaryKey(),
