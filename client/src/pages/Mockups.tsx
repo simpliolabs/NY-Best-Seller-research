@@ -59,7 +59,7 @@ export default function Mockups() {
 
   // Track whether the last generation used a default zone
   const [usedDefaultZone, setUsedDefaultZone] = useState<boolean>(false);
-  const [productionReady, setProductionReady] = useState<boolean>(true);
+
 
   // Fetch concepts that have images (all concepts, not just winners)
   const conceptsQuery = trpc.library.list.useQuery(
@@ -111,9 +111,8 @@ export default function Mockups() {
   // Generate mutation
   const generateMutation = trpc.mockup.generate.useMutation({
     onSuccess: (data) => {
-      // Surface usedDefaultZone and productionReady flags
+      // Surface usedDefaultZone flag
       setUsedDefaultZone(!!data.usedDefaultZone);
-      setProductionReady(!!data.productionReady);
       if (data.failedCount && data.failedCount > 0) {
         const total = data.mockupCount + data.failedCount;
         toast.warning(`${data.failedCount} of ${total} templates failed`);
@@ -126,6 +125,17 @@ export default function Mockups() {
       toast.error(err.message);
     },
   });
+
+  // Print export mutations
+  const exportPrintMutation = trpc.mockup.exportPrintFile.useMutation({
+    onError: (e) => toast.error(e.message),
+  });
+  const halftoneMutation = trpc.mockup.generateHalftone.useMutation({
+    onError: (e) => toast.error(e.message),
+  });
+  const [inkColor, setInkColor] = useState<
+    "black" | "white" | "navy" | "red" | "forest" | "maroon" | "gold"
+  >("black");
 
   // Delete mutation
   const deleteMockup = trpc.mockup.deleteMockup.useMutation({
@@ -204,7 +214,6 @@ export default function Mockups() {
     if (!canGenerate) return;
     // Clear previous warning state
     setUsedDefaultZone(false);
-    setProductionReady(true);
     generateMutation.mutate({
       conceptId: Number(selectedConceptId),
       variationKey: selectedVariation as "A" | "B" | "C",
@@ -391,16 +400,7 @@ export default function Mockups() {
         </div>
       )}
 
-      {/* Warning banner: not production ready (no transparent PNG) */}
-      {!productionReady && (
-        <div className="flex items-start gap-3 rounded-lg border border-orange-500/40 bg-orange-500/10 px-4 py-3">
-          <AlertTriangle className="h-5 w-5 text-orange-400 shrink-0 mt-0.5" />
-          <div className="text-sm text-orange-200">
-            <span className="font-semibold">Design not production-ready</span> — background was auto-removed (may be imperfect on colored backgrounds).
-            Process this design for production for a clean cutout.
-          </div>
-        </div>
-      )}
+
 
       {/* Mockup Gallery */}
       {selectedConceptId && filteredMockups.length > 0 && (
@@ -469,6 +469,77 @@ export default function Mockups() {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {/* Print files panel */}
+      {!!selectedConceptId && (
+        <div className="mt-4 p-3 rounded-lg border bg-slate-50">
+          <h3 className="text-sm font-semibold mb-2">Print files — 300 DPI</h3>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button
+              variant="outline" size="sm"
+              disabled={exportPrintMutation.isPending}
+              onClick={() => exportPrintMutation.mutate({
+                conceptId: Number(selectedConceptId),
+                variationKey: (selectedVariation || "A") as "A" | "B" | "C",
+                ...(revisionId ? { sourceRevisionId: revisionId } : {}),
+              })}
+            >
+              {exportPrintMutation.isPending ? "Preparing…" : "Download print file"}
+            </Button>
+
+            <select
+              value={inkColor}
+              onChange={(e) => setInkColor(e.target.value as typeof inkColor)}
+              className="text-xs border rounded px-2 py-1 bg-white"
+            >
+              <option value="black">Black ink</option>
+              <option value="white">White ink</option>
+              <option value="navy">Navy ink</option>
+              <option value="red">Red ink</option>
+              <option value="forest">Forest ink</option>
+              <option value="maroon">Maroon ink</option>
+              <option value="gold">Gold ink</option>
+            </select>
+            <Button
+              variant="outline" size="sm"
+              disabled={halftoneMutation.isPending}
+              onClick={() => halftoneMutation.mutate({
+                conceptId: Number(selectedConceptId),
+                variationKey: (selectedVariation || "A") as "A" | "B" | "C",
+                ...(revisionId ? { sourceRevisionId: revisionId } : {}),
+                inkColors: [inkColor],
+                lpi: 45,
+              })}
+            >
+              {halftoneMutation.isPending ? "Rendering…" : "Generate halftone"}
+            </Button>
+          </div>
+
+          {exportPrintMutation.data && (
+            <a
+              href={exportPrintMutation.data.url}
+              download={exportPrintMutation.data.filename}
+              className="block mt-2 text-sm text-blue-600 underline"
+            >
+              ⬇ {exportPrintMutation.data.filename} — {exportPrintMutation.data.widthPx}×{exportPrintMutation.data.heightPx}, 300 DPI
+            </a>
+          )}
+
+          {halftoneMutation.data && (
+            <div className="mt-2 space-y-1">
+              {halftoneMutation.data.results.map((r) => (
+                <div key={r.inkColor} className="flex items-center gap-2">
+                  <img src={r.url} alt={r.inkColor}
+                       className="h-12 w-12 object-contain border bg-white rounded" />
+                  <a href={r.url} download={r.filename}
+                     className="text-sm text-blue-600 underline">⬇ {r.filename}</a>
+                </div>
+              ))}
+              <p className="text-[11px] text-amber-700">{halftoneMutation.data.note}</p>
+            </div>
+          )}
+        </div>
       )}
 
       {/* Empty state */}
