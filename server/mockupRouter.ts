@@ -98,6 +98,10 @@ export const mockupRouter = router({
         variationKey: z.enum(["A", "B", "C"]),
         productGroupId: z.string(),
         colorCount: z.number().min(1).max(20).optional(),
+        /** MANUAL color selection (PO 2026-06-17): specific template ids to use instead of the
+         *  auto color-matcher. When provided, ONLY these templates are composited (the seller picked
+         *  the shirt colors themselves). Empty/omitted = auto-pick via colorCount/pickBestColors. */
+        templateIds: z.array(z.string()).optional(),
         /** Force re-derive the production (transparent) URL, ignoring the cached value (PO 2026-06-17).
          *  Use this to invalidate concepts whose cached productionUrl* was created by the broken v2
          *  gpt-image-2 generate-mode path (PADDLE WHISPERER class — the cached URL is a model-redrawn
@@ -218,8 +222,13 @@ export const mockupRouter = router({
         });
       }
 
-      // 3. If colorCount specified, use LLM to pick best colors
-      if (input.colorCount && input.colorCount < templates.length) {
+      // 3. Color selection: MANUAL (specific templateIds the seller picked) wins over AUTO (the
+      // contrast matcher). PO 2026-06-17: "can I select what mockup colors to use and not AUTO mode?"
+      if (input.templateIds && input.templateIds.length > 0) {
+        const wanted = new Set(input.templateIds);
+        const picked = templates.filter((t) => wanted.has(t.id));
+        if (picked.length > 0) templates = picked; // ignore unknown ids; never end up with zero
+      } else if (input.colorCount && input.colorCount < templates.length) {
         templates = await pickBestColors(designUrl, templates, input.colorCount);
       }
 
@@ -592,6 +601,26 @@ export const mockupRouter = router({
     .mutation(async ({ input }) => {
       await deleteMockupRender(input.mockupId);
       return { success: true };
+    }),
+
+  /** Bulk-delete mockups (PO 2026-06-17: "can I bulk delete mockups?"). Pass the ids to remove, or
+   *  set allForConcept to clear every render for a concept (+ optional variation). */
+  deleteMockups: protectedProcedure
+    .input(z.object({
+      mockupIds: z.array(z.string()).optional(),
+      conceptId: z.number().optional(),
+      variationKey: z.enum(["A", "B", "C"]).optional(),
+    }))
+    .mutation(async ({ input }) => {
+      let ids = input.mockupIds ?? [];
+      if (input.conceptId) {
+        const renders = input.variationKey
+          ? await getMockupsByConceptVariation(input.conceptId, input.variationKey)
+          : await getMockupsByConcept(input.conceptId);
+        ids = Array.from(new Set([...ids, ...renders.map((r) => r.id)]));
+      }
+      for (const id of ids) await deleteMockupRender(id);
+      return { success: true, deleted: ids.length };
     }),
 
   /** Get best color matches for a design against a product group's templates */

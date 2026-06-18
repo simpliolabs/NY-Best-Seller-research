@@ -180,6 +180,22 @@ export default function Mockups() {
     onError: (err) => toast.error(err.message),
   });
 
+  // Bulk delete (a49afd1)
+  const deleteMockupsMutation = trpc.mockup.deleteMockups.useMutation({
+    onSuccess: (data) => {
+      mockupsQuery.refetch();
+      setSelectedMockupIds(new Set());
+      toast.success(`Deleted ${data.deleted} mockup${data.deleted !== 1 ? "s" : ""}`);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  // Selection state for bulk delete
+  const [selectedMockupIds, setSelectedMockupIds] = useState<Set<string>>(new Set());
+
+  // Manual color selection (a49afd1): templateIds override auto color-matcher
+  const [manualTemplateIds, setManualTemplateIds] = useState<Set<string>>(new Set());
+
   // Manual Placement state
   const [placementDialogOpen, setPlacementDialogOpen] = useState(false);
   const [selectedTemplateIdx, setSelectedTemplateIdx] = useState(0);
@@ -252,7 +268,10 @@ export default function Mockups() {
       conceptId: Number(selectedConceptId),
       variationKey: selectedVariation as "A" | "B" | "C",
       productGroupId: selectedGroupId,
-      colorCount,
+      // Manual color selection overrides auto when the user has checked specific templates
+      ...(manualTemplateIds.size > 0
+        ? { templateIds: Array.from(manualTemplateIds) }
+        : { colorCount }),
       ...(revisionId ? { sourceRevisionId: revisionId } : {}),
       ...(regenerate ? { regenerateProduction: true } : {}),
     });
@@ -348,25 +367,95 @@ export default function Mockups() {
               </Select>
             </div>
 
-            {/* Color count */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Colors (max)
-              </label>
-              <Select value={String(colorCount)} onValueChange={(v) => setColorCount(Number(v))}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {[3, 5, 6, 7, 8, 10, 15, 20].map((n) => (
-                    <SelectItem key={n} value={String(n)}>
-                      {n} colors
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            {/* Color count — hidden when manual selection is active */}
+            {manualTemplateIds.size === 0 && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Colors (max)
+                </label>
+                <Select value={String(colorCount)} onValueChange={(v) => setColorCount(Number(v))}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {[3, 5, 6, 7, 8, 10, 15, 20].map((n) => (
+                      <SelectItem key={n} value={String(n)}>
+                        {n} colors
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
           </div>
+
+          {/* Manual color selection grid (a49afd1) */}
+          {selectedGroupId && groupDetail.data?.mockups && groupDetail.data.mockups.length > 0 && (
+            <div className="mt-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Manual color selection
+                  {manualTemplateIds.size > 0 && (
+                    <span className="ml-2 text-blue-600 normal-case">{manualTemplateIds.size} selected</span>
+                  )}
+                </label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className="text-xs text-blue-600 hover:underline"
+                    onClick={() => setManualTemplateIds(new Set(groupDetail.data!.mockups.map((t: any) => t.id)))}
+                  >
+                    Select all
+                  </button>
+                  {manualTemplateIds.size > 0 && (
+                    <button
+                      type="button"
+                      className="text-xs text-slate-500 hover:underline"
+                      onClick={() => setManualTemplateIds(new Set())}
+                    >
+                      Clear (use auto)
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {groupDetail.data.mockups.map((t: any) => {
+                  const checked = manualTemplateIds.has(t.id);
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      title={t.colorName}
+                      onClick={() => {
+                        setManualTemplateIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(t.id)) next.delete(t.id);
+                          else next.add(t.id);
+                          return next;
+                        });
+                      }}
+                      className={`flex items-center gap-1.5 px-2 py-1 rounded border text-xs transition-colors ${
+                        checked
+                          ? "border-blue-500 bg-blue-50 text-blue-700"
+                          : "border-slate-200 bg-white text-slate-600 hover:border-slate-400"
+                      }`}
+                    >
+                      <span
+                        className="inline-block h-3 w-3 rounded-full border border-slate-300 shrink-0"
+                        style={{ background: t.colorHex ?? "#ccc" }}
+                      />
+                      {t.colorName ?? t.id}
+                    </button>
+                  );
+                })}
+              </div>
+              {manualTemplateIds.size > 0 && (
+                <p className="text-[11px] text-blue-600">
+                  Only the {manualTemplateIds.size} selected color{manualTemplateIds.size !== 1 ? "s" : ""} will be generated. Auto-matching is disabled.
+                </p>
+              )}
+            </div>
+          )}
 
           <div className="flex gap-2 flex-wrap">
             <Button onClick={handleGenerate} disabled={!canGenerate} className="w-full sm:w-auto">
@@ -444,6 +533,41 @@ export default function Mockups() {
               <ImageIcon className="h-4 w-4" />
               Generated Mockups ({filteredMockups.length})
               <div className="ml-auto flex items-center gap-1">
+                {/* Bulk delete controls (a49afd1) */}
+                {selectedMockupIds.size > 0 && (
+                  <>
+                    <span className="text-xs text-slate-500">{selectedMockupIds.size} selected</span>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      disabled={deleteMockupsMutation.isPending}
+                      onClick={() => {
+                        if (!confirm(`Delete ${selectedMockupIds.size} selected mockup${selectedMockupIds.size !== 1 ? "s" : ""}?`)) return;
+                        deleteMockupsMutation.mutate({ mockupIds: Array.from(selectedMockupIds) });
+                      }}
+                    >
+                      {deleteMockupsMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Trash2 className="h-3.5 w-3.5 mr-1" />}
+                      Delete selected
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setSelectedMockupIds(new Set())}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </>
+                )}
+                {selectedMockupIds.size === 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setSelectedMockupIds(new Set(filteredMockups.map((m) => m.id)))}
+                    title="Select all to bulk delete"
+                  >
+                    Select all
+                  </Button>
+                )}
                 <Button
                   variant="outline"
                   size="sm"
@@ -470,36 +594,61 @@ export default function Mockups() {
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              {filteredMockups.map((mockup) => (
-                <div
-                  key={mockup.id}
-                  className="group relative rounded-lg overflow-hidden border bg-muted/30"
-                >
-                  <img
-                    src={mockup.compositeUrl}
-                    alt={`Mockup ${mockup.variationKey}`}
-                    className="w-full aspect-square object-contain cursor-zoom-in"
-                    loading="lazy"
-                    onClick={() => setZoomMockupUrl(mockup.compositeUrl)}
-                  />
-                  <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/60 to-transparent p-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-between">
-                    <span className="text-xs text-white font-medium">
-                      Var {mockup.variationKey}
-                    </span>
+              {filteredMockups.map((mockup) => {
+                const isSelected = selectedMockupIds.has(mockup.id);
+                return (
+                  <div
+                    key={mockup.id}
+                    className={`group relative rounded-lg overflow-hidden border bg-muted/30 ${
+                      isSelected ? "ring-2 ring-blue-500" : ""
+                    }`}
+                  >
+                    {/* Selection checkbox */}
                     <button
+                      type="button"
                       onClick={() => {
-                        if (confirm("Delete this mockup?")) {
-                          deleteMockup.mutate({ mockupId: mockup.id });
-                        }
+                        setSelectedMockupIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(mockup.id)) next.delete(mockup.id);
+                          else next.add(mockup.id);
+                          return next;
+                        });
                       }}
-                      className="p-1 rounded bg-red-600 hover:bg-red-700 text-white"
-                      title="Delete mockup"
+                      className={`absolute top-1.5 left-1.5 z-10 h-5 w-5 rounded border-2 flex items-center justify-center transition-opacity ${
+                        isSelected
+                          ? "bg-blue-500 border-blue-500 opacity-100"
+                          : "bg-white/80 border-slate-300 opacity-0 group-hover:opacity-100"
+                      }`}
+                      title={isSelected ? "Deselect" : "Select for bulk delete"}
                     >
-                      <Trash2 className="h-3 w-3" />
+                      {isSelected && <Check className="h-3 w-3 text-white" />}
                     </button>
+                    <img
+                      src={mockup.compositeUrl}
+                      alt={`Mockup ${mockup.variationKey}`}
+                      className="w-full aspect-square object-contain cursor-zoom-in"
+                      loading="lazy"
+                      onClick={() => setZoomMockupUrl(mockup.compositeUrl)}
+                    />
+                    <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/60 to-transparent p-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-between">
+                      <span className="text-xs text-white font-medium">
+                        Var {mockup.variationKey}
+                      </span>
+                      <button
+                        onClick={() => {
+                          if (confirm("Delete this mockup?")) {
+                            deleteMockup.mutate({ mockupId: mockup.id });
+                          }
+                        }}
+                        className="p-1 rounded bg-red-600 hover:bg-red-700 text-white"
+                        title="Delete mockup"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </CardContent>
         </Card>
