@@ -524,26 +524,38 @@ export async function updateConceptImages(
   const db = await getDb();
   if (!db) return;
 
+  // Fetch current state once — needed for BOTH the immutability guard and the snapshot invariant.
+  const existing = (await db
+    .select({
+      imageUrlA: designConcepts.imageUrlA,
+      imageUrlB: designConcepts.imageUrlB,
+      imageUrlC: designConcepts.imageUrlC,
+      style: designConcepts.style,
+    })
+    .from(designConcepts)
+    .where(eq(designConcepts.id, conceptId))
+    .limit(1))[0];
+
   // IMMUTABILITY GUARD: Never overwrite existing non-null image URLs with null.
   // Concepts are permanent records — once an image is generated it must never be erased.
-  if (data.imageUrlA === null || data.imageUrlB === null || data.imageUrlC === null) {
-    const existing = await db
-      .select({ imageUrlA: designConcepts.imageUrlA, imageUrlB: designConcepts.imageUrlB, imageUrlC: designConcepts.imageUrlC })
-      .from(designConcepts)
-      .where(eq(designConcepts.id, conceptId))
-      .limit(1);
-    const row = existing[0];
-    if (row) {
-      if (data.imageUrlA === null && row.imageUrlA) {
-        delete data.imageUrlA; // preserve existing
-      }
-      if (data.imageUrlB === null && row.imageUrlB) {
-        delete data.imageUrlB; // preserve existing
-      }
-      if (data.imageUrlC === null && row.imageUrlC) {
-        delete data.imageUrlC; // preserve existing
-      }
-    }
+  if (existing) {
+    if (data.imageUrlA === null && existing.imageUrlA) delete data.imageUrlA; // preserve existing
+    if (data.imageUrlB === null && existing.imageUrlB) delete data.imageUrlB; // preserve existing
+    if (data.imageUrlC === null && existing.imageUrlC) delete data.imageUrlC; // preserve existing
+  }
+
+  // SNAPSHOT-BEFORE-OVERWRITE INVARIANT (PO 2026-06-17 data-loss fix). Any change to a non-null
+  // imageUrlA → a DIFFERENT non-null value MUST first persist the old URL to the "H" history. This
+  // is the ONE chokepoint every imageUrlA writer funnels through, so no caller can bypass it —
+  // closing the holes the audit found (pipeline.ts:2757 no-snapshot, revisionRouter.ts:48 no-snapshot,
+  // and the try/catch-swallow on the council regen path that overwrote anyway on a snapshot failure).
+  // FATAL BY DESIGN: if the snapshot throws, this function throws and the imageUrlA write never runs —
+  // the prior design is never lost. snapshotGenerationToHistory URL-dedupes, so callers that still
+  // snapshot themselves are harmless (idempotent). First-write (existing.imageUrlA null) never snaps.
+  // Dynamic import avoids a load-time db.ts ⇄ revisionDb.ts circular dependency.
+  if (existing?.imageUrlA && typeof data.imageUrlA === "string" && data.imageUrlA !== existing.imageUrlA) {
+    const { snapshotGenerationToHistory } = await import("./revisionDb");
+    await snapshotGenerationToHistory(conceptId, existing.imageUrlA, existing.style ?? null);
   }
 
   await db.update(designConcepts).set(data).where(eq(designConcepts.id, conceptId));

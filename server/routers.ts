@@ -708,16 +708,35 @@ export const appRouter = router({
         name: z.string().min(1).max(255),
         imageBase64: z.string(),
         mimeType: z.enum(["image/jpeg", "image/png", "image/webp"]),
+        /** Re-upload onto an EXISTING concept (PO 2026-06-17 data-loss fix). When set, the upload
+         *  versions that concept IN PLACE — snapshots the prior design to history (centrally, via
+         *  updateConceptImages) and overwrites imageUrlA — instead of minting a brand-new concept.
+         *  This is what stranded the raccoon's history: a re-upload forked 1020006 → 1320001 and the
+         *  "Previous versions" strip (keyed by conceptId) couldn't find the old version. */
+        conceptId: z.number().optional(),
       }))
       .mutation(async ({ input }) => {
         const buffer = Buffer.from(input.imageBase64, "base64");
         const ext = input.mimeType === "image/jpeg" ? "jpg" : input.mimeType === "image/png" ? "png" : "webp";
-        const { bookId, runId } = await getOrCreateManualUploadBook(input.workspaceId);
         const { url } = await storagePut(
           `manual-uploads/${input.workspaceId}/${Date.now()}.${ext}`,
           buffer,
           input.mimeType,
         );
+
+        // Version-in-place path: re-uploading onto an existing concept. updateConceptImages now
+        // snapshots the prior imageUrlA to history centrally (the data-loss invariant), so the old
+        // design is preserved and the version strip keeps working on the SAME conceptId.
+        if (input.conceptId) {
+          const existing = await getConceptById(input.conceptId);
+          if (!existing) return { success: false as const, message: "Concept not found." };
+          await updateConceptImages(input.conceptId, { imageUrlA: url });
+          await updateConceptProductionUrl(input.conceptId, "A", null); // drop stale cutout cache
+          return { success: true as const, conceptId: input.conceptId, imageUrl: url };
+        }
+
+        // New-concept path (first upload): mint a fresh concept under the Manual Uploads book.
+        const { bookId, runId } = await getOrCreateManualUploadBook(input.workspaceId);
         const conceptId = await insertConcept({
           bookId,
           runId,
@@ -726,7 +745,7 @@ export const appRouter = router({
           style: "Manual upload",
           imageUrlA: url,
         });
-        return { success: true, conceptId, imageUrl: url };
+        return { success: true as const, conceptId, imageUrl: url };
       }),
   }),
 
@@ -999,7 +1018,7 @@ export const appRouter = router({
   health: router({
     status: publicProcedure.query(async () => {
       const health = await checkHealth();
-      return { ...health, buildCommit: "fdcfa2d", buildPipelineMd5: "672a435b8cfcc998bd56b16cd615fd86" };
+      return { ...health, buildCommit: "289e495", buildPipelineMd5: "0efd0de0384a01bf2784bfda859921d2" };
     }),
 
     healingLog: protectedProcedure
