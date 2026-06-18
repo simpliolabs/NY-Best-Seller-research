@@ -27,7 +27,7 @@ import type { PrintZoneCoords } from "@/components/PrintZoneEditor";
 import { MockupLightbox } from "@/components/MockupLightbox";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
-import { Loader2, Image as ImageIcon, Shirt, RefreshCw, Trash2, AlertTriangle, Move, Check, X, Download, Info } from "lucide-react";
+import { Loader2, Image as ImageIcon, Shirt, RefreshCw, Trash2, AlertTriangle, Move, Check, X } from "lucide-react";
 
 
 export default function Mockups() {
@@ -128,9 +128,11 @@ export default function Mockups() {
 
   // Print export mutations
   const exportPrintMutation = trpc.mockup.exportPrintFile.useMutation({
+    onSuccess: () => { printFilesQuery.refetch(); },
     onError: (e) => toast.error(e.message),
   });
   const halftoneMutation = trpc.mockup.generateHalftone.useMutation({
+    onSuccess: () => { printFilesQuery.refetch(); },
     onError: (e) => toast.error(e.message),
   });
   const [inkColor, setInkColor] = useState<
@@ -193,8 +195,9 @@ export default function Mockups() {
   // Selection state for bulk delete
   const [selectedMockupIds, setSelectedMockupIds] = useState<Set<string>>(new Set());
 
-  // Manual color selection (a49afd1): templateIds override auto color-matcher
-  const [manualTemplateIds, setManualTemplateIds] = useState<Set<string>>(new Set());
+  // Color mode: auto (default) vs manual (PO plan section 2)
+  const [colorMode, setColorMode] = useState<"auto" | "manual">("auto");
+  const [selectedTemplateIds, setSelectedTemplateIds] = useState<string[]>([]);
 
   // Manual Placement state
   const [placementDialogOpen, setPlacementDialogOpen] = useState(false);
@@ -245,6 +248,11 @@ export default function Mockups() {
     }
   }, [urlConceptId, conceptsWithImages, selectedConceptId]);
 
+  // (F) Auto-select when there's exactly one product group
+  useEffect(() => {
+    if (groupsQuery.data?.length === 1) setSelectedGroupId(groupsQuery.data[0].id);
+  }, [groupsQuery.data]);
+
   // Get available variations for selected concept
   const availableVariations = useMemo(() => {
     if (!selectedConceptId) return [];
@@ -257,6 +265,13 @@ export default function Mockups() {
     return vars;
   }, [selectedConceptId, conceptsWithImages]);
 
+  // (F) Default variation to "A" when concept selected (most concepts only have A)
+  useEffect(() => {
+    if (selectedConceptId && !selectedVariation && availableVariations.includes("A")) {
+      setSelectedVariation("A");
+    }
+  }, [selectedConceptId, selectedVariation, availableVariations]);
+
   const canGenerate =
     selectedConceptId && selectedVariation && selectedGroupId && !generateMutation.isPending;
 
@@ -268,9 +283,9 @@ export default function Mockups() {
       conceptId: Number(selectedConceptId),
       variationKey: selectedVariation as "A" | "B" | "C",
       productGroupId: selectedGroupId,
-      // Manual color selection overrides auto when the user has checked specific templates
-      ...(manualTemplateIds.size > 0
-        ? { templateIds: Array.from(manualTemplateIds) }
+      // Manual color selection overrides auto when the user has picked specific templates
+      ...(colorMode === "manual" && selectedTemplateIds.length
+        ? { templateIds: selectedTemplateIds }
         : { colorCount }),
       ...(revisionId ? { sourceRevisionId: revisionId } : {}),
       ...(regenerate ? { regenerateProduction: true } : {}),
@@ -289,6 +304,18 @@ export default function Mockups() {
             : "Generate product mockups by compositing your designs onto blank shirt templates."}
         </p>
       </div>
+
+      {/* (B) Design thumbnail */}
+      {selectedConceptId && (() => {
+        const sc = conceptsWithImages.find((c) => c.id === Number(selectedConceptId));
+        const thumbUrl = (sc as any)?.productionUrlA || sc?.imageUrlA;
+        return thumbUrl ? (
+          <div className="flex items-center gap-3 mb-3">
+            <img src={thumbUrl} alt="" className="h-20 w-20 object-contain border rounded bg-white" />
+            <div className="text-sm font-medium">{sc?.conceptName}</div>
+          </div>
+        ) : null;
+      })()}
 
       {/* Generation Form */}
       <Card>
@@ -367,8 +394,8 @@ export default function Mockups() {
               </Select>
             </div>
 
-            {/* Color count — hidden when manual selection is active */}
-            {manualTemplateIds.size === 0 && (
+            {/* Color count — shown only in auto mode */}
+            {colorMode === "auto" && (
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                   Colors (max)
@@ -389,70 +416,75 @@ export default function Mockups() {
             )}
           </div>
 
-          {/* Manual color selection grid (a49afd1) */}
+          {/* (E) Color selection: auto/manual toggle + garment guidance */}
           {selectedGroupId && groupDetail.data?.mockups && groupDetail.data.mockups.length > 0 && (
             <div className="mt-3 space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  Manual color selection
-                  {manualTemplateIds.size > 0 && (
-                    <span className="ml-2 text-blue-600 normal-case">{manualTemplateIds.size} selected</span>
-                  )}
+              {/* Garment guidance summary */}
+              {garmentQuery.data?.summary && (
+                <p className="text-xs text-slate-700" dangerouslySetInnerHTML={{ __html: garmentQuery.data.summary.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') }} />
+              )}
+
+              {/* Auto / Manual toggle */}
+              <div className="flex items-center gap-4 text-sm">
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" name="colorMode" value="auto" checked={colorMode === "auto"}
+                    onChange={() => setColorMode("auto")} className="accent-blue-600" />
+                  Auto-pick best colors
                 </label>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    className="text-xs text-blue-600 hover:underline"
-                    onClick={() => setManualTemplateIds(new Set(groupDetail.data!.mockups.map((t: any) => t.id)))}
-                  >
-                    Select all
-                  </button>
-                  {manualTemplateIds.size > 0 && (
-                    <button
-                      type="button"
-                      className="text-xs text-slate-500 hover:underline"
-                      onClick={() => setManualTemplateIds(new Set())}
-                    >
-                      Clear (use auto)
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" name="colorMode" value="manual" checked={colorMode === "manual"}
+                    onChange={() => setColorMode("manual")} className="accent-blue-600" />
+                  Choose colors myself
+                </label>
+              </div>
+
+              {/* Manual checkbox grid */}
+              {colorMode === "manual" && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <button type="button" className="text-xs text-blue-600 hover:underline"
+                      onClick={() => setSelectedTemplateIds(groupDetail.data!.mockups.map((t: any) => t.id))}>
+                      Select all
                     </button>
-                  )}
+                    {selectedTemplateIds.length > 0 && (
+                      <button type="button" className="text-xs text-slate-500 hover:underline"
+                        onClick={() => setSelectedTemplateIds([])}>
+                        Clear
+                      </button>
+                    )}
+                    {selectedTemplateIds.length > 0 && (
+                      <span className="text-xs text-blue-600">{selectedTemplateIds.length} selected</span>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {groupDetail.data.mockups.map((t: any) => {
+                      const checked = selectedTemplateIds.includes(t.id);
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          title={t.colorName}
+                          onClick={() => {
+                            setSelectedTemplateIds((prev) =>
+                              checked ? prev.filter((id) => id !== t.id) : [...prev, t.id]
+                            );
+                          }}
+                          className={`flex items-center gap-1.5 px-2 py-1 rounded border text-xs transition-colors ${
+                            checked
+                              ? "border-blue-500 bg-blue-50 text-blue-700"
+                              : "border-slate-200 bg-white text-slate-600 hover:border-slate-400"
+                          }`}
+                        >
+                          <span
+                            className="inline-block h-3 w-3 rounded-full border border-slate-300 shrink-0"
+                            style={{ background: t.colorHex ?? "#ccc" }}
+                          />
+                          {t.colorName ?? t.id}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {groupDetail.data.mockups.map((t: any) => {
-                  const checked = manualTemplateIds.has(t.id);
-                  return (
-                    <button
-                      key={t.id}
-                      type="button"
-                      title={t.colorName}
-                      onClick={() => {
-                        setManualTemplateIds((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(t.id)) next.delete(t.id);
-                          else next.add(t.id);
-                          return next;
-                        });
-                      }}
-                      className={`flex items-center gap-1.5 px-2 py-1 rounded border text-xs transition-colors ${
-                        checked
-                          ? "border-blue-500 bg-blue-50 text-blue-700"
-                          : "border-slate-200 bg-white text-slate-600 hover:border-slate-400"
-                      }`}
-                    >
-                      <span
-                        className="inline-block h-3 w-3 rounded-full border border-slate-300 shrink-0"
-                        style={{ background: t.colorHex ?? "#ccc" }}
-                      />
-                      {t.colorName ?? t.id}
-                    </button>
-                  );
-                })}
-              </div>
-              {manualTemplateIds.size > 0 && (
-                <p className="text-[11px] text-blue-600">
-                  Only the {manualTemplateIds.size} selected color{manualTemplateIds.size !== 1 ? "s" : ""} will be generated. Auto-matching is disabled.
-                </p>
               )}
             </div>
           )}
@@ -568,6 +600,22 @@ export default function Mockups() {
                     Select all
                   </Button>
                 )}
+                {/* (C) Clear all mockups for this concept+variation */}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-red-600 hover:text-red-700"
+                  disabled={deleteMockupsMutation.isPending}
+                  onClick={() => {
+                    if (!confirm("Clear ALL mockups for this concept" + (selectedVariation ? ` (Var ${selectedVariation})` : "") + "?")) return;
+                    deleteMockupsMutation.mutate({
+                      conceptId: Number(selectedConceptId),
+                      ...(selectedVariation ? { variationKey: selectedVariation as "A" | "B" | "C" } : {}),
+                    });
+                  }}
+                >
+                  Clear all mockups
+                </Button>
                 <Button
                   variant="outline"
                   size="sm"
@@ -654,181 +702,166 @@ export default function Mockups() {
         </Card>
       )}
 
-      {/* Print files panel */}
+      {/* Print-ready file (simplified — PO plan section 4) */}
       {!!selectedConceptId && (
-        <div className="mt-4 p-3 rounded-lg border bg-slate-50 space-y-3">
-          <h3 className="text-sm font-semibold">Print files — 300 DPI</h3>
-
-          {/* Garment guidance */}
-          {garmentQuery.data && (
-            <div className="p-2 rounded bg-blue-50 border border-blue-200 text-xs text-blue-800">
-              <p className="font-semibold">{garmentQuery.data.summary}</p>
-              {garmentQuery.data.underbaseNote && (
-                <p className="mt-1 text-blue-600">{garmentQuery.data.underbaseNote}</p>
-              )}
-            </div>
-          )}
-
-          {/* Full-tone export */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <Button
-              variant="outline" size="sm"
-              disabled={exportPrintMutation.isPending}
-              onClick={() => {
-                exportPrintMutation.mutate({
-                  conceptId: Number(selectedConceptId),
-                  variationKey: (selectedVariation || "A") as "A" | "B" | "C",
-                  ...(revisionId ? { sourceRevisionId: revisionId } : {}),
-                });
-              }}
-            >
-              {exportPrintMutation.isPending ? "Preparing…" : "Download print file (DTF)"}
-            </Button>
-          </div>
+        <div className="p-3 rounded-lg border bg-slate-50 space-y-3">
+          <h3 className="text-sm font-semibold">Print-ready file</h3>
+          <p className="text-xs text-muted-foreground">
+            {garmentQuery.data?.summary
+              ? "Best on: " + (garmentQuery.data.recommendDarkShirt ? "black/charcoal (vintage)" : "") +
+                (garmentQuery.data.recommendLightShirt ? " · white/cream" : "")
+              : "Your full-color print file, ready for any DTF/DTG printer."}
+          </p>
+          <Button
+            disabled={exportPrintMutation.isPending}
+            onClick={() => exportPrintMutation.mutate({
+              conceptId: Number(selectedConceptId),
+              variationKey: (selectedVariation || "A") as "A" | "B" | "C",
+              ...(revisionId ? { sourceRevisionId: revisionId } : {}),
+            })}
+          >
+            {exportPrintMutation.isPending ? "Preparing…" : "Download print-ready file"}
+          </Button>
           {exportPrintMutation.data && (
-            <a
-              href={exportPrintMutation.data.url}
-              download={exportPrintMutation.data.filename}
-              className="block text-sm text-blue-600 underline"
-            >
-              ⬇ {exportPrintMutation.data.filename} — {exportPrintMutation.data.widthPx}×{exportPrintMutation.data.heightPx}, 300 DPI
+            <a className="block mt-2 text-sm text-blue-600 underline"
+              href={exportPrintMutation.data.url} download={exportPrintMutation.data.filename}>
+              ⬇ {exportPrintMutation.data.filename} (300 DPI)
             </a>
           )}
-
-          {/* Halftone section */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <select
-              value={inkColor}
-              onChange={(e) => setInkColor(e.target.value as typeof inkColor)}
-              className="text-xs border rounded px-2 py-1 bg-white"
-            >
-              <option value="black">Black ink</option>
-              <option value="white">White ink</option>
-              <option value="navy">Navy ink</option>
-              <option value="red">Red ink</option>
-              <option value="forest">Forest ink</option>
-              <option value="maroon">Maroon ink</option>
-              <option value="gold">Gold ink</option>
-            </select>
-            <Button
-              variant="outline" size="sm"
-              disabled={halftoneMutation.isPending}
-              onClick={() => halftoneMutation.mutate({
-                conceptId: Number(selectedConceptId),
-                variationKey: (selectedVariation || "A") as "A" | "B" | "C",
-                ...(revisionId ? { sourceRevisionId: revisionId } : {}),
-                inkColors: [inkColor],
-                lpi: 45,
-              })}
-            >
-              {halftoneMutation.isPending ? "Rendering…" : "Generate halftone"}
-            </Button>
-            {classifyQuery.data?.recommendations.halftone === "not-recommended" && (
-              <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-0.5" title={classifyQuery.data.reason}>
-                <AlertTriangle className="h-3 w-3" /> Not ideal for this design
-              </span>
-            )}
-          </div>
-          {halftoneMutation.data && (
-            <div className="space-y-1">
-              {halftoneMutation.data.results.map((r: any) => (
-                <div key={r.inkColor} className="flex items-center gap-2">
-                  <img src={r.url} alt={r.inkColor}
-                       className="h-12 w-12 object-contain border bg-white rounded" />
-                  <a href={r.url} download={r.filename}
-                     className="text-sm text-blue-600 underline">⬇ {r.filename}</a>
-                </div>
-              ))}
-              <p className="text-[11px] text-amber-700">{halftoneMutation.data.note}</p>
-            </div>
+          {garmentQuery.data?.underbaseNote && (
+            <p className="text-[11px] text-amber-700 mt-1">ℹ {garmentQuery.data.underbaseNote}</p>
           )}
 
-          {/* Knockout section */}
-          <div className="border-t pt-3">
-            <h4 className="text-xs font-semibold mb-1">Color Knockout</h4>
-            <div className="flex items-center gap-2 flex-wrap">
-              <label className="text-xs">Shirt hex:</label>
-              <input
-                type="color"
-                value={knockoutHex}
-                onChange={(e) => setKnockoutHex(e.target.value)}
-                className="h-7 w-10 border rounded cursor-pointer"
-              />
-              <input
-                type="text"
-                value={knockoutHex}
-                onChange={(e) => setKnockoutHex(e.target.value)}
-                className="text-xs border rounded px-2 py-1 w-20 bg-white font-mono"
-              />
-              <label className="flex items-center gap-1 text-xs">
-                <input
-                  type="checkbox"
-                  checked={knockoutMode === "global"}
-                  onChange={(e) => setKnockoutMode(e.target.checked ? "global" : "flood")}
-                />
-                Remove enclosed areas too
-              </label>
-              <Button
-                variant="outline" size="sm"
-                disabled={knockoutMutation.isPending}
-                onClick={() => knockoutMutation.mutate({
-                  conceptId: Number(selectedConceptId),
-                  variationKey: (selectedVariation || "A") as "A" | "B" | "C",
-                  ...(revisionId ? { sourceRevisionId: revisionId } : {}),
-                  knockoutColor: knockoutHex,
-                  garmentColor: knockoutHex,
-                  mode: knockoutMode,
-                })}
-              >
-                {knockoutMutation.isPending ? "Knocking out…" : "Knockout"}
-              </Button>
-              {classifyQuery.data?.recommendations.knockout === "not-recommended" && (
-                <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-0.5" title={classifyQuery.data.reason}>
-                  <AlertTriangle className="h-3 w-3" /> Not ideal for this design
-                </span>
+          {/* Advanced print options (collapsed by default) */}
+          <details className="mt-2">
+            <summary className="text-xs cursor-pointer text-muted-foreground">Advanced print options (halftone, color knockout)</summary>
+
+            {/* Halftone */}
+            <div className="mt-3 space-y-2">
+              {classifyQuery.data?.recommendations.halftone === "not-recommended" && (
+                <p className="text-[11px] text-amber-700">⚠ {classifyQuery.data.reason}</p>
+              )}
+              <div className="flex items-center gap-2 flex-wrap">
+                <select
+                  value={inkColor}
+                  onChange={(e) => setInkColor(e.target.value as typeof inkColor)}
+                  className="text-xs border rounded px-2 py-1 bg-white"
+                >
+                  <option value="black">Black ink</option>
+                  <option value="white">White ink</option>
+                  <option value="navy">Navy ink</option>
+                  <option value="red">Red ink</option>
+                  <option value="forest">Forest ink</option>
+                  <option value="maroon">Maroon ink</option>
+                  <option value="gold">Gold ink</option>
+                </select>
+                <Button
+                  variant="outline" size="sm"
+                  disabled={halftoneMutation.isPending}
+                  onClick={() => halftoneMutation.mutate({
+                    conceptId: Number(selectedConceptId),
+                    variationKey: (selectedVariation || "A") as "A" | "B" | "C",
+                    ...(revisionId ? { sourceRevisionId: revisionId } : {}),
+                    inkColors: [inkColor],
+                    lpi: 45,
+                  })}
+                >
+                  {halftoneMutation.isPending ? "Rendering…" : "Generate halftone"}
+                </Button>
+              </div>
+              {halftoneMutation.data && (
+                <div className="space-y-1">
+                  {halftoneMutation.data.results.map((r: any) => (
+                    <div key={r.inkColor} className="flex items-center gap-2">
+                      <img src={r.url} alt={r.inkColor}
+                           className="h-12 w-12 object-contain border bg-white rounded" />
+                      <a href={r.url} download={r.filename}
+                         className="text-sm text-blue-600 underline">⬇ {r.filename}</a>
+                    </div>
+                  ))}
+                  <p className="text-[11px] text-amber-700">{halftoneMutation.data.note}</p>
+                </div>
               )}
             </div>
-            {knockoutMutation.data && (
-              <div className="mt-2 space-y-2">
-                <p className="text-xs font-medium">Preview (on-garment proof):</p>
-                <img
-                  src={knockoutMutation.data.previewUrl}
-                  alt="Knockout preview on garment"
-                  className="h-40 w-40 object-contain border rounded bg-neutral-200"
-                />
-                <a
-                  href={knockoutMutation.data.url}
-                  download={knockoutMutation.data.filename}
-                  className="block text-sm text-blue-600 underline"
-                >
-                  ⬇ Download knockout file: {knockoutMutation.data.filename}
-                </a>
-              </div>
-            )}
-          </div>
 
-          {/* Print files library */}
-          {printFilesQuery.data && printFilesQuery.data.length > 0 && (
-            <div className="border-t pt-3">
-              <h4 className="text-xs font-semibold mb-1 flex items-center gap-1">
-                <Download className="h-3 w-3" /> Saved print files ({printFilesQuery.data.length})
-              </h4>
-              <div className="space-y-1 max-h-40 overflow-y-auto">
-                {printFilesQuery.data.map((f: any) => (
-                  <a
-                    key={f.id}
-                    href={f.url}
-                    download={f.filename}
-                    className="flex items-center gap-2 text-xs text-blue-600 hover:underline"
-                  >
-                    <span className="px-1 py-0.5 bg-slate-200 rounded text-[10px] font-mono">{f.kind}</span>
-                    {f.filename}
-                    <span className="text-slate-400">{f.widthPx}×{f.heightPx}</span>
-                  </a>
-                ))}
+            {/* Color Knockout */}
+            <div className="mt-3 border-t pt-3 space-y-2">
+              <h4 className="text-xs font-semibold">Color Knockout</h4>
+              {classifyQuery.data?.recommendations.knockout === "not-recommended" && (
+                <p className="text-[11px] text-amber-700">⚠ Knockout suits flat/limited-color art, not this design.</p>
+              )}
+              <div className="flex items-center gap-2 flex-wrap">
+                <label className="text-xs">Shirt hex:</label>
+                <input
+                  type="color"
+                  value={knockoutHex}
+                  onChange={(e) => setKnockoutHex(e.target.value)}
+                  className="h-7 w-10 border rounded cursor-pointer"
+                />
+                <input
+                  type="text"
+                  value={knockoutHex}
+                  onChange={(e) => setKnockoutHex(e.target.value)}
+                  className="text-xs border rounded px-2 py-1 w-20 bg-white font-mono"
+                />
+                <label className="flex items-center gap-1 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={knockoutMode === "global"}
+                    onChange={(e) => setKnockoutMode(e.target.checked ? "global" : "flood")}
+                  />
+                  Remove enclosed areas too
+                </label>
+                <Button
+                  variant="outline" size="sm"
+                  disabled={knockoutMutation.isPending}
+                  onClick={() => knockoutMutation.mutate({
+                    conceptId: Number(selectedConceptId),
+                    variationKey: (selectedVariation || "A") as "A" | "B" | "C",
+                    ...(revisionId ? { sourceRevisionId: revisionId } : {}),
+                    knockoutColor: knockoutHex,
+                    garmentColor: knockoutHex,
+                    mode: knockoutMode,
+                  })}
+                >
+                  {knockoutMutation.isPending ? "Knocking out…" : "Knockout"}
+                </Button>
               </div>
+              {/* CRITICAL: show previewUrl FIRST (on-garment proof), then download */}
+              {knockoutMutation.data && (
+                <div className="mt-2 space-y-2">
+                  <p className="text-xs font-medium">Preview (on-garment proof):</p>
+                  <img
+                    src={knockoutMutation.data.previewUrl}
+                    alt="Knockout preview on garment"
+                    className="h-40 w-40 object-contain border rounded bg-neutral-200"
+                  />
+                  <a
+                    href={knockoutMutation.data.url}
+                    download={knockoutMutation.data.filename}
+                    className="block text-sm text-blue-600 underline"
+                  >
+                    ⬇ Download knockout file: {knockoutMutation.data.filename}
+                  </a>
+                </div>
+              )}
             </div>
-          )}
+          </details>
+
+          {/* (D) Print files library */}
+          <div className="mt-3">
+            <h3 className="text-sm font-semibold">Your print files</h3>
+            {(!printFilesQuery.data || printFilesQuery.data.length === 0) && (
+              <p className="text-xs text-muted-foreground">None yet — click “Download print-ready file” above.</p>
+            )}
+            {printFilesQuery.data?.map((f: any) => (
+              <div key={f.id} className="flex items-center gap-2 text-sm py-0.5">
+                <span className="text-xs px-1.5 rounded bg-slate-200">{f.kind}</span>
+                <a href={f.url} download={f.filename} className="text-blue-600 underline">{f.filename}</a>
+                <span className="text-xs text-muted-foreground">{f.widthPx}×{f.heightPx}</span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
