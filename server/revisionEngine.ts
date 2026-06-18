@@ -61,23 +61,14 @@ Keep EVERYTHING ELSE pixel-for-pixel identical to the attached image:
 Do NOT redraw, restyle, recolour, resize, reposition, or add/remove ANYTHING the instruction did not explicitly name. Change only what the instruction asks; leave all else exactly as in the attached image.`;
   }
 
-  // Non-square (canvas-changing) revision — the ONLY thing changing is the CANVAS dimensions. The
-  // artwork itself is preserved pixel-for-pixel, same as the 1:1 surgical branch. The aspect change
-  // is never licence to redraw, restyle, or "reinterpret" any existing element. Without this strong
-  // universal-preservation clause, the PO has to manually append "keep all elements the same besides
-  // that" to every non-square revision (PO 2026-06-16).
-  return `You are making a SURGICAL canvas change to the attached design image. The ONLY change is the canvas aspect — everything else is preserved pixel-for-pixel. Apply this change, exactly as written, and nothing more:
+  // Non-square (canvas-changing) revision — PHOTO-EDITOR MODE (PO 2026-06-17): the previous
+  // "everything pixel-for-pixel identical" prompt + composite-back lock fought every style request
+  // (Kitchen Violation "make it more solid" was silently ignored because composite-back overwrote
+  // the model's style change). Trust the model + input_fidelity:high to preserve what shouldn't
+  // change; let it actually apply the user's edit. If preservation drifts, the user iterates.
+  return `Apply this edit to the attached image: "${instruction}"
 
-"${instruction}"
-
-The new canvas is ${aspect}. Keep EVERYTHING in the attached image pixel-for-pixel identical:
-- every existing element (subject, character, illustration, text, decoration, background pattern) at the SAME size, position, pose, proportions, font, weight, colour, and palette as the attached image — do NOT redraw, restyle, recolour, resize, reposition, simplify, or reinterpret any of it;
-- every letter and word exactly as written, never cropped, never resized;
-- the existing background art (stripes, colours, pattern, texture) unchanged where it already exists.
-
-The ONLY new pixels you may paint are in the EXTRA canvas space created by the new aspect ratio, and those new pixels must be a seamless continuation of the existing background (same stripes, colours, pattern, texture) — never a different style, never new subjects or decorations the instruction did not explicitly name. Do NOT crop or cut off any existing element; reposition the existing artwork within the new canvas only as needed so nothing is clipped. Transparent background where the existing design is transparent.
-
-Do NOT add, remove, redraw, or change ANYTHING the instruction did not explicitly name. Change only the canvas; leave all artwork exactly as in the attached image.`;
+Output canvas: ${aspect}. Keep the subject, any text, and the overall composition legible and recognisable. If the instruction adds canvas space (new aspect), paint the extra area as background continuation — do not duplicate the subject or text in the new area. Otherwise honour the instruction as written.`;
 }
 
 /** Generate a design revision using GPT Image with the original as reference */
@@ -184,33 +175,12 @@ export async function generateRevision(
     size: targetSize, // 1:1 → 1024x1024 (legacy surgical), portrait → 1024x1536, landscape → 1536x1024
   });
 
-  // 2a. COMPOSITE-BACK (PO 2026-06-16, bug fix on the 9:16 stripe-recolouring miss): even with the
-  // padded canvas + input_fidelity:high + an uncompromising preservation prompt, gpt-image-1 can
-  // still re-paint opaque pixels — the previous 9:16 result preserved subject + text + sparkle but
-  // recoloured the pink/teal stripes to all-teal. The architectural lock: paste the ORIGINAL artwork
-  // back over its exact original position in the edit result. The existing pixels become byte-for-
-  // byte the source; the model's output ONLY contributes pixels in the transparent extension margin.
-  // Skipped for 1:1 (pad-to-square + trim already restores the source verbatim).
+  // PHOTO-EDITOR MODE (PO 2026-06-17): the composite-back lock that used to live here paste the
+  // original artwork back over the model's output, byte-for-byte, to defend the YEE HAW stripes
+  // from getting recoloured. That same lock silently swallowed every style request — Kitchen
+  // Violation's "make it more solid" had nowhere to land. PO call: trust the model + input_fidelity,
+  // let the user iterate if it drifts. Recovery path is one extra revision turn, not a hard lock.
   let finalBuf = edited;
-  if (aspect !== "1:1" && rw > 0 && rh > 0) {
-    try {
-      const originalCentered = await sharp(refRaw)
-        .ensureAlpha()
-        .resize(rw, rh, { fit: "fill" })
-        .png()
-        .toBuffer();
-      finalBuf = await sharp(edited)
-        .composite([{
-          input: originalCentered,
-          top: Math.floor(padY / 2),
-          left: Math.floor(padX / 2),
-        }])
-        .png()
-        .toBuffer();
-    } catch (err) {
-      console.warn(`[Revision] composite-back failed for concept ${conceptId} ${variationKey}; using raw edit:`, err);
-    }
-  }
 
   // 2b. Safety net only: gpt-image-1 already returns native transparency above. If a run instead
   // comes back on a white box, strip it (edge-connected white flood-fill; passthrough when already
@@ -340,4 +310,111 @@ export async function trimAndCleanRevision(
   });
 
   return { revisionId, imageUrl: url };
+}
+
+/**
+ * Revision via FLUX.1 Kontext [pro] — the photo-editor path (PO 2026-06-17).
+ *
+ * Kontext is built for "swap subject, freeze the rest" — the exact thing ChatGPT's image editor
+ * does well that our gpt-image-1 surgical path doesn't. PO use cases: replace the raccoon with a
+ * possum (character_swap), redraw the whole design in a different style (restyle), make text
+ * thicker / more solid (render-style shift). Image URL is fetched server-side by fal, so no local
+ * download/upload round-trip.
+ *
+ * Same DB plumbing as generateRevision (snapshot → insertRevision row), so the Design Studio
+ * accept/revert UI works with this path unchanged.
+ *
+ * Requires FAL_KEY in the environment.
+ */
+export async function generateRevisionViaFalKontext(
+  conceptId: number,
+  variationKey: string,
+  instruction: string,
+  referenceImageUrl: string,
+  aspect: RevisionAspect = "1:1",
+): Promise<{ revisionId: string; imageUrl: string }> {
+  const key = process.env.FAL_KEY;
+  if (!key) throw new Error("FAL_KEY is not configured");
+
+  // Snapshot the prior design BEFORE this edit replaces it — same data-loss fix as the gpt-image-1
+  // path (PO 2026-06-16, YEE DINK regression).
+  const priorConcept = await getConceptById(conceptId);
+  if (priorConcept?.imageUrlA) await snapshotGenerationToHistory(conceptId, priorConcept.imageUrlA, priorConcept.style);
+
+  const headers = { Authorization: `Key ${key}`, "Content-Type": "application/json" };
+
+  // Kontext accepts aspect_ratio directly — no pad-to-square/composite-back trickery needed.
+  // Use [pro] tier ($0.04/img) as the default; [max] ($0.08) lives on patternProductionProcessor
+  // for its niche-conversion path. If PO data shows [pro] under-adheres, swap the endpoint.
+  const submit = await fetch("https://queue.fal.run/fal-ai/flux-pro/kontext", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      prompt: instruction,
+      image_url: referenceImageUrl,
+      aspect_ratio: aspect,
+      safety_tolerance: "6",  // most permissive — design content (mascots, slogans) trips low tolerances
+    }),
+  });
+  if (!submit.ok) {
+    throw new Error(`fal Kontext submit error (${submit.status}): ${(await submit.text()).slice(0, 300)}`);
+  }
+  const { status_url, response_url } = (await submit.json()) as {
+    status_url: string;
+    response_url: string;
+  };
+
+  // Poll until COMPLETED (matches patternProductionProcessor's existing pattern: ~3s × 80 = 240s cap)
+  let completed = false;
+  for (let i = 0; i < 80; i++) {
+    await new Promise((r) => setTimeout(r, 3000));
+    const st = (await (await fetch(status_url, { headers })).json()) as {
+      status?: string;
+      error?: unknown;
+    };
+    if (st.status === "COMPLETED") { completed = true; break; }
+    if (st.status === "FAILED" || st.error) {
+      throw new Error(`fal Kontext failed: ${JSON.stringify(st).slice(0, 300)}`);
+    }
+  }
+  if (!completed) throw new Error("fal Kontext timed out after 240s");
+
+  const out = (await (await fetch(response_url, { headers })).json()) as {
+    images?: Array<{ url: string }>;
+  };
+  const kontextUrl = out.images?.[0]?.url;
+  if (!kontextUrl) throw new Error(`fal Kontext returned no image: ${JSON.stringify(out).slice(0, 200)}`);
+
+  const dl = await fetch(kontextUrl);
+  if (!dl.ok) throw new Error(`Failed to download Kontext output: ${dl.status}`);
+  let finalBuf: Buffer = Buffer.from(await dl.arrayBuffer());
+
+  // Safety net: strip an opaque white background if Kontext rendered on one. Matches the
+  // gpt-image-1 path's removeBackground call; passthrough when already transparent.
+  try {
+    finalBuf = await removeBackground(finalBuf);
+  } catch (err) {
+    console.warn(`[Revision/Kontext] background cleanup failed for concept ${conceptId} ${variationKey}; using raw output:`, err);
+  }
+
+  const { url: imageUrl } = await storagePut(
+    `revisions/${conceptId}-${variationKey}-${Date.now()}.png`,
+    finalBuf,
+    "image/png",
+  );
+
+  const iterationNumber = await getNextIterationNumber(conceptId, variationKey);
+  const revisionId = nanoid();
+  await insertRevision({
+    id: revisionId,
+    conceptId,
+    variationKey,
+    iterationNumber,
+    instruction,
+    referenceImageUrl,
+    resultImageUrl: imageUrl,
+    accepted: false,
+  });
+
+  return { revisionId, imageUrl };
 }

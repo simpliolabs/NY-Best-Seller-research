@@ -6,7 +6,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "./_core/trpc";
-import { generateRevision, trimAndCleanRevision } from "./revisionEngine";
+import { generateRevision, generateRevisionViaFalKontext, trimAndCleanRevision } from "./revisionEngine";
 import {
   getRevisionsByConceptVariation,
   getRevisionById,
@@ -95,6 +95,12 @@ export const revisionRouter = router({
          *  behavior (anti-outpaint guardrail). Portrait/landscape options unlock canvas-changing
          *  edits like "extend vertically" by using gpt-image-1's native non-square sizes. */
         aspectRatio: z.enum(["1:1", "3:4", "4:3", "9:16", "16:9"]).optional().default("1:1"),
+        /** Which image engine to use (PO 2026-06-17, photo-editor pivot):
+         *   - "gpt-image" (default) — the existing gpt-image-1 surgical/redesign path. Best at
+         *     simple text edits, "change YEE DINK to YEE HAW", small style tweaks.
+         *   - "fal-kontext" — FLUX.1 Kontext via fal. Built for "swap subject, freeze the rest"
+         *     and "redraw in a new style" — the cases where ChatGPT's editor used to beat us. */
+        engine: z.enum(["gpt-image", "fal-kontext"]).optional().default("gpt-image"),
       })
     )
     .mutation(async ({ input }) => {
@@ -131,20 +137,28 @@ export const revisionRouter = router({
         ? acceptedRevision.resultImageUrl
         : referenceImageUrl;
 
-      const result = await generateRevision(
-        input.conceptId,
-        input.variationKey,
-        input.instruction,
-        actualReference,
-        {
-          conceptName: concept.conceptName,
-          format: concept.format,
-          style: concept.style,
-          headline: concept.headline,
-          subtext: concept.subtext,
-        },
-        input.aspectRatio
-      );
+      const result = input.engine === "fal-kontext"
+        ? await generateRevisionViaFalKontext(
+            input.conceptId,
+            input.variationKey,
+            input.instruction,
+            actualReference,
+            input.aspectRatio,
+          )
+        : await generateRevision(
+            input.conceptId,
+            input.variationKey,
+            input.instruction,
+            actualReference,
+            {
+              conceptName: concept.conceptName,
+              format: concept.format,
+              style: concept.style,
+              headline: concept.headline,
+              subtext: concept.subtext,
+            },
+            input.aspectRatio
+          );
 
       return { revisionId: result.revisionId, imageUrl: result.imageUrl };
     }),

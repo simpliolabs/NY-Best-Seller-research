@@ -45,6 +45,7 @@ export function RevisionPanel({
 }: RevisionPanelProps) {
   const [instruction, setInstruction] = useState("");
   const [aspectRatio, setAspectRatio] = useState<"1:1" | "3:4" | "4:3" | "9:16" | "16:9">("1:1");
+  const [engine, setEngine] = useState<"gpt-image" | "fal-kontext">("gpt-image");
   const [showHistory, setShowHistory] = useState(false);
 
   const utils = trpc.useUtils();
@@ -69,6 +70,7 @@ export function RevisionPanel({
       toast.success("Revision generated!");
       setInstruction("");
       setAspectRatio("1:1");
+      setEngine("gpt-image");
       utils.revision.getHistory.invalidate({ conceptId, variationKey });
     },
     onError: (err) => {
@@ -235,6 +237,19 @@ export function RevisionPanel({
         </div>
       </div>
 
+      {/* Engine Toggle */}
+      <div className="flex items-center gap-2 mb-2">
+        <label className="text-xs font-medium">Engine:</label>
+        <select
+          value={engine}
+          onChange={(e) => setEngine(e.target.value as "gpt-image" | "fal-kontext")}
+          className="text-xs border rounded px-2 py-1 bg-background"
+        >
+          <option value="gpt-image">GPT (default — text edits, simple tweaks)</option>
+          <option value="fal-kontext">Fal Kontext (swap subject, redraw style)</option>
+        </select>
+      </div>
+
       {/* Aspect Ratio Picker */}
       <div className="space-y-1.5">
         <div className="flex flex-wrap gap-1.5">
@@ -286,6 +301,7 @@ export function RevisionPanel({
                 variationKey,
                 instruction,
                 aspectRatio,
+                engine,
               })
             }
             disabled={!instruction.trim() || submitMutation.isPending || trimAndCleanMutation.isPending}
