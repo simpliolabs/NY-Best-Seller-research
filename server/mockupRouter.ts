@@ -20,8 +20,41 @@ import { storagePut } from "./storage";
 import { nanoid } from "nanoid";
 import { getDb } from "./db";
 import { designConcepts, botRuns } from "../drizzle/schema";
+import type { DesignConcept } from "../drizzle/schema";
 import { eq } from "drizzle-orm";
 import { invokeLLM } from "./_core/llm";
+import { generateHalftoneSeparation, prepareFullTonePrintFile, INK_COLORS } from "./halftone";
+import type { InkName } from "./halftone";
+
+const INK_NAMES = Object.keys(INK_COLORS) as [InkName, ...InkName[]];
+
+/** Resolve the design source URL for an export (PO 2026-06-17, print export). A specific version
+ *  when sourceRevisionId is given, else the live slot: imageUrl (the design as drawn) preferred,
+ *  falling back to productionUrl for legacy niche concepts whose design lives there (imageUrl null). */
+async function resolveExportSourceUrl(
+  concept: DesignConcept,
+  variationKey: "A" | "B" | "C",
+  sourceRevisionId?: string,
+): Promise<string | null> {
+  if (sourceRevisionId) {
+    const { getRevisionById } = await import("./revisionDb");
+    const rev = await getRevisionById(sourceRevisionId);
+    return rev?.resultImageUrl ?? null;
+  }
+  const imageUrl = concept[`imageUrl${variationKey}` as "imageUrlA" | "imageUrlB" | "imageUrlC"];
+  const productionUrl = concept[`productionUrl${variationKey}` as "productionUrlA" | "productionUrlB" | "productionUrlC"];
+  return imageUrl ?? productionUrl ?? null;
+}
+
+function slugify(s: string): string {
+  return (s || "design").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "design";
+}
+
+async function fetchToBuffer(url: string): Promise<Buffer> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to download design source: ${url} (${res.status})`);
+  return Buffer.from(await res.arrayBuffer());
+}
 
 export const mockupRouter = router({
   /**
@@ -303,6 +336,70 @@ export const mockupRouter = router({
       const templates = await getMockupTemplatesByIds(uniqueTemplateIds);
       const templatesById = new Map(templates.map((t) => [t.id, t]));
       return scoreRendersReadability(designUrl, renders.map((r) => ({ id: r.id, templateId: r.templateId })), templatesById);
+    }),
+
+  /** Print export — full continuous-tone design at 300 DPI, transparent PNG (PO 2026-06-17, feat B).
+   *  This is the file a DTF/DTG press actually prints; garment-independent. Operates on the selected
+   *  version (sourceRevisionId) or the live design. */
+  exportPrintFile: protectedProcedure
+    .input(z.object({
+      conceptId: z.number(),
+      variationKey: z.enum(["A", "B", "C"]).default("A"),
+      sourceRevisionId: z.string().min(1).optional(),
+      widthIn: z.number().min(1).max(40).default(12),
+      heightIn: z.number().min(1).max(40).default(16),
+    }))
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      const concept = (await db.select().from(designConcepts).where(eq(designConcepts.id, input.conceptId)).limit(1))[0];
+      if (!concept) throw new TRPCError({ code: "NOT_FOUND", message: "Concept not found" });
+      const srcUrl = await resolveExportSourceUrl(concept, input.variationKey, input.sourceRevisionId);
+      if (!srcUrl) throw new TRPCError({ code: "BAD_REQUEST", message: "No design image to export" });
+
+      const srcBuf = await fetchToBuffer(srcUrl);
+      const png = await prepareFullTonePrintFile(srcBuf, input.widthIn, input.heightIn);
+      const name = `${slugify(concept.conceptName)}-print.png`;
+      const { url } = await storagePut(`print/${input.conceptId}-${input.variationKey}-${nanoid(6)}-${name}`, png, "image/png");
+      const { widthPx, heightPx } = { widthPx: input.widthIn * 300, heightPx: input.heightIn * 300 };
+      return { url, filename: name, widthPx, heightPx, dpi: 300 };
+    }),
+
+  /** Halftone print export (PO 2026-06-17, feat B). One single-ink AM halftone separation per
+   *  requested ink (black first/default), 300 DPI transparent PNG, for screen-print or the halftone
+   *  look. Inks processed SEQUENTIALLY (each 300-DPI raw buffer is ~69MB; Coolify OOM history). */
+  generateHalftone: protectedProcedure
+    .input(z.object({
+      conceptId: z.number(),
+      variationKey: z.enum(["A", "B", "C"]).default("A"),
+      sourceRevisionId: z.string().min(1).optional(),
+      inkColors: z.array(z.enum(INK_NAMES)).min(1).max(7).default(["black"]),
+      lpi: z.number().min(20).max(85).default(45),
+      widthIn: z.number().min(1).max(40).default(12),
+      heightIn: z.number().min(1).max(40).default(16),
+    }))
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      const concept = (await db.select().from(designConcepts).where(eq(designConcepts.id, input.conceptId)).limit(1))[0];
+      if (!concept) throw new TRPCError({ code: "NOT_FOUND", message: "Concept not found" });
+      const srcUrl = await resolveExportSourceUrl(concept, input.variationKey, input.sourceRevisionId);
+      if (!srcUrl) throw new TRPCError({ code: "BAD_REQUEST", message: "No design image to halftone" });
+
+      const srcBuf = await fetchToBuffer(srcUrl);
+      const slug = slugify(concept.conceptName);
+      // De-dup inks (preserve order, black first if present) and process sequentially for memory.
+      const inks = Array.from(new Set(input.inkColors)) as InkName[];
+      const results: Array<{ inkColor: InkName; url: string; filename: string }> = [];
+      for (const inkColor of inks) {
+        const png = await generateHalftoneSeparation(srcBuf, {
+          inkColor, lpi: input.lpi, widthIn: input.widthIn, heightIn: input.heightIn,
+        });
+        const filename = `${slug}-halftone-${inkColor}.png`;
+        const { url } = await storagePut(`print/${input.conceptId}-${input.variationKey}-${nanoid(6)}-${filename}`, png, "image/png");
+        results.push({ inkColor, url, filename });
+      }
+      return { results, lpi: input.lpi, dpi: 300, note: "Single-ink halftone proof — verify on a test print before relying on it." };
     }),
 
   /** Regenerate a single mockup (re-composite with current design) */
