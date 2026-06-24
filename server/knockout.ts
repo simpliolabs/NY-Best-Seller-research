@@ -127,3 +127,53 @@ export async function knockoutColors(
 
   return sharp(out, { raw: { width: W, height: H, channels: 4 } }).png().toBuffer();
 }
+
+/**
+ * Sample the design's BORDER colour + how uniform it is. A uniform border = a flat background colour
+ * (white canvas, solid colour) we can safely remove. A non-uniform border = a full scene (the raccoon
+ * night street), where there's no "empty" area to cut — that's the opacity-blend case, not removal.
+ */
+export async function sampleBorderColor(srcBuf: Buffer): Promise<{ color: RGB; uniform: boolean; variance: number }> {
+  const { data, info } = await sharp(srcBuf).ensureAlpha().resize(64, 64, { fit: "fill" }).raw().toBuffer({ resolveWithObject: true });
+  const W = info.width, H = info.height;
+  const px: number[] = [];
+  let rs = 0, gs = 0, bs = 0, n = 0;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (x > 1 && x < W - 2 && y > 1 && y < H - 2) continue; // border ring only
+      const i = (y * W + x) * 4;
+      if (data[i + 3] < 40) continue; // skip already-transparent
+      rs += data[i]; gs += data[i + 1]; bs += data[i + 2]; n++;
+      px.push(data[i], data[i + 1], data[i + 2]);
+    }
+  }
+  if (n === 0) return { color: { r: 255, g: 255, b: 255 }, uniform: false, variance: 1e9 };
+  const color = { r: rs / n, g: gs / n, b: bs / n };
+  let varSum = 0;
+  for (let k = 0; k < px.length; k += 3) {
+    const dr = px[k] - color.r, dg = px[k + 1] - color.g, db = px[k + 2] - color.b;
+    varSum += dr * dr + dg * dg + db * db;
+  }
+  const variance = varSum / (px.length / 3);
+  return { color: { r: Math.round(color.r), g: Math.round(color.g), b: Math.round(color.b) }, uniform: variance < 1800, variance };
+}
+
+/**
+ * Canva-style background removal (PO 2026-06-17): find the big UNIFORM background region and remove
+ * it, never the subject. Samples the border colour, then edge-connected flood-fills that colour from
+ * the borders inward — so a disconnected subject can NEVER be deleted (the failure mode of rembg's
+ * salient-object detection, which threw away the dark raccoon). Clean cut on flat/white/solid
+ * backgrounds; on a full-scene design the border isn't uniform → returns as-is (removed:false) so the
+ * UI can steer the user to the opacity/blend tool instead.
+ */
+export async function removeUniformBackground(
+  srcBuf: Buffer,
+  opts?: { tolerance?: number; fuzz?: number; force?: boolean },
+): Promise<{ buf: Buffer; removed: boolean; borderUniform: boolean }> {
+  const { color, uniform } = await sampleBorderColor(srcBuf);
+  if (!uniform && !opts?.force) return { buf: srcBuf, removed: false, borderUniform: false };
+  const buf = await knockoutColors(srcBuf, {
+    targets: [color], tolerance: opts?.tolerance ?? 55, fuzz: opts?.fuzz ?? 50, mode: "flood", defringe: true,
+  });
+  return { buf, removed: true, borderUniform: uniform };
+}

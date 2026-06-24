@@ -420,63 +420,37 @@ export async function generateRevisionViaFalKontext(
 }
 
 /**
- * Remove background — USER-DRIVEN explicit cutout (PO 2026-06-17 QA 1.5: "Remove background FAIL —
- * background removal at all"). Uses fal rembg (a dedicated SEGMENTATION model) to produce a REAL
- * alpha-transparent cutout. This is the reliable removal the Kontext "remove the background"
- * instruction could not deliver — Kontext is a generative editor and outputs OPAQUE images, so the
- * background never actually became transparent.
+ * Remove background — USER-DRIVEN, CANVA-STYLE (PO 2026-06-17 QA 1.5). Removes the big UNIFORM
+ * background region and NEVER the subject — see removeUniformBackground in knockout.ts.
  *
- * Why rembg is safe HERE (it was pulled from the AUTOMATIC pipeline in v5 because it stripped
- * intentional scenes like the raccoon's night street): this only runs when the user EXPLICITLY
- * clicks "Remove background," so isolating the subject is exactly what they asked for. Creates a
- * new revision (snapshot first; the original with-background version is kept and restorable).
- *
- * Requires FAL_KEY.
+ * History: first tried as a Kontext instruction (opaque output, no real transparency), then fal
+ * rembg (real transparency but salient-object detection DELETED the subject on a low-contrast design
+ * — it threw away the dark raccoon and kept only the red can). Both wrong. The deterministic
+ * border-flood-fill is the right model: it finds the empty background and removes it, edge-connected,
+ * so a disconnected subject can't be deleted. Clean cut on flat/white/solid backgrounds; full-scene
+ * designs (the raccoon night street) have no uniform area to cut → the user blends those with the
+ * opacity tool instead. Creates a new revision (original snapshotted + restorable). No external model.
  */
 export async function removeBackgroundRevision(
   conceptId: number,
   variationKey: string,
   referenceImageUrl: string,
 ): Promise<{ revisionId: string; imageUrl: string }> {
-  const key = process.env.FAL_KEY;
-  if (!key) throw new Error("FAL_KEY is not configured");
-
   const priorConcept = await getConceptById(conceptId);
   if (priorConcept?.imageUrlA) await snapshotGenerationToHistory(conceptId, priorConcept.imageUrlA, priorConcept.style);
 
-  const headers = { Authorization: `Key ${key}`, "Content-Type": "application/json" };
-  const submit = await fetch("https://queue.fal.run/fal-ai/imageutils/rembg", {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ image_url: referenceImageUrl }),
-  });
-  if (!submit.ok) {
-    throw new Error(`fal rembg submit error (${submit.status}): ${(await submit.text()).slice(0, 300)}`);
-  }
-  const { status_url, response_url } = (await submit.json()) as { status_url: string; response_url: string };
+  // CANVA-STYLE removal (PO 2026-06-17): remove the big UNIFORM background region, never the subject.
+  // The earlier rembg version used salient-object detection and DELETED the subject on a low-contrast
+  // design (it threw away the dark raccoon, kept only the red can). removeUniformBackground samples the
+  // border colour and edge-connected flood-fills it — a disconnected subject can never be removed.
+  // force:true so the user always gets a result; on a flat/solid bg it's a clean cut, on a scene it
+  // removes the connected background-ish region (the user blends scene designs with the opacity tool).
+  const dl = await fetch(referenceImageUrl);
+  if (!dl.ok) throw new Error(`Failed to download design for background removal: ${dl.status}`);
+  const srcBuf = Buffer.from(await dl.arrayBuffer());
 
-  let completed = false;
-  for (let i = 0; i < 80; i++) {
-    await new Promise((r) => setTimeout(r, 3000));
-    const st = (await (await fetch(status_url, { headers })).json()) as { status?: string; error?: unknown };
-    if (st.status === "COMPLETED") { completed = true; break; }
-    if (st.status === "FAILED" || st.error) {
-      throw new Error(`fal rembg failed: ${JSON.stringify(st).slice(0, 300)}`);
-    }
-  }
-  if (!completed) throw new Error("fal rembg timed out after 240s");
-
-  // rembg returns { image: { url } } (singular); handle the array shape defensively too.
-  const outp = (await (await fetch(response_url, { headers })).json()) as {
-    image?: { url: string };
-    images?: Array<{ url: string }>;
-  };
-  const rembgUrl = outp.image?.url ?? outp.images?.[0]?.url;
-  if (!rembgUrl) throw new Error(`fal rembg returned no image: ${JSON.stringify(outp).slice(0, 200)}`);
-
-  const dl = await fetch(rembgUrl);
-  if (!dl.ok) throw new Error(`Failed to download rembg output: ${dl.status}`);
-  const finalBuf = Buffer.from(await dl.arrayBuffer());
+  const { removeUniformBackground } = await import("./knockout");
+  const { buf: finalBuf } = await removeUniformBackground(srcBuf, { force: true });
 
   const { url: imageUrl } = await storagePut(
     `revisions/${conceptId}-${variationKey}-${Date.now()}.png`,
