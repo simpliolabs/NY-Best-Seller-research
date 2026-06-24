@@ -65,6 +65,17 @@ export function RevisionPanel({
     },
   });
 
+  // (1.5) Real remove-background via rembg (produces alpha-transparent cutout)
+  const removeBackgroundMutation = trpc.revision.removeBackground.useMutation({
+    onSuccess: () => {
+      toast.success("Background removed! New transparent version created.");
+      utils.revision.getHistory.invalidate({ conceptId, variationKey });
+    },
+    onError: (err) => {
+      toast.error(`Remove background failed: ${err.message}`);
+    },
+  });
+
   const submitMutation = trpc.revision.submitRevision.useMutation({
     onSuccess: (data) => {
       toast.success("Revision generated!");
@@ -183,7 +194,7 @@ export function RevisionPanel({
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium">
-              {latestRevision ? `Revision #${latestRevision.iterationNumber}` : "Revised"}
+              {latestRevision ? ((latestRevision as any).name ?? `Revision #${latestRevision.iterationNumber}`) : "Revised"}
             </span>
             {latestRevision && !isOriginal && (
               <Badge className="text-xs bg-blue-100 text-blue-800">Latest</Badge>
@@ -343,6 +354,30 @@ export function RevisionPanel({
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    removeBackgroundMutation.mutate({ conceptId, variationKey })
+                  }
+                  disabled={removeBackgroundMutation.isPending || submitMutation.isPending || trimAndCleanMutation.isPending}
+                  className="shrink-0"
+                >
+                  {removeBackgroundMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-4 w-4" />
+                  )}
+                  <span className="ml-2">Remove Background</span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-xs">
+                Creates a transparent cutout (rembg segmentation). Original is kept as a previous version.
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
       </div>
 
@@ -369,7 +404,7 @@ export function RevisionPanel({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium">
-                        #{rev.iterationNumber}
+                        {(rev as any).name ?? `#${rev.iterationNumber}`}
                       </span>
                       {rev.accepted && (
                         <Badge className="text-xs bg-green-100 text-green-800">

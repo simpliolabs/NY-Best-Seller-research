@@ -148,13 +148,14 @@ export default function Mockups() {
   );
 
   // Design-type classification (warn, never disable)
+  // (3.3/4.1) refetchOnMount ensures it re-runs on every page load, not just once
   const classifyQuery = trpc.mockup.classifyDesign.useQuery(
     {
       conceptId: Number(selectedConceptId),
       variationKey: (selectedVariation || "A") as "A" | "B" | "C",
       ...(revisionId ? { sourceRevisionId: revisionId } : {}),
     },
-    { enabled: !!selectedConceptId }
+    { enabled: !!selectedConceptId, refetchOnMount: "always", staleTime: 0 }
   );
 
   // Garment guidance
@@ -305,14 +306,21 @@ export default function Mockups() {
         </p>
       </div>
 
-      {/* (B) Design thumbnail */}
+      {/* (B) Design thumbnail — (2.1) show revision image when revisionId selected */}
       {selectedConceptId && (() => {
         const sc = conceptsWithImages.find((c) => c.id === Number(selectedConceptId));
-        const thumbUrl = (sc as any)?.productionUrlA || sc?.imageUrlA;
+        // When a revision is selected, show that revision's resultImageUrl
+        let thumbUrl: string | undefined;
+        if (revisionId && revisionHistoryQuery.data) {
+          const rev = revisionHistoryQuery.data.find((r) => r.id === revisionId);
+          thumbUrl = rev?.resultImageUrl ?? undefined;
+        }
+        if (!thumbUrl) thumbUrl = (sc as any)?.productionUrlA || sc?.imageUrlA;
+        const displayName = revisionName ?? sc?.conceptName;
         return thumbUrl ? (
           <div className="flex items-center gap-3 mb-3">
             <img src={thumbUrl} alt="" className="h-20 w-20 object-contain border rounded bg-white" />
-            <div className="text-sm font-medium">{sc?.conceptName}</div>
+            <div className="text-sm font-medium">{displayName}</div>
           </div>
         ) : null;
       })()}
@@ -845,6 +853,19 @@ export default function Mockups() {
                   </a>
                 </div>
               )}
+              {/* (3.4) Persist: show latest knockout from library when inline result is gone */}
+              {!knockoutMutation.data && (() => {
+                const latestKnockout = printFilesQuery.data?.find((f: any) => f.kind === "knockout");
+                return latestKnockout ? (
+                  <div className="mt-2 space-y-1">
+                    <p className="text-xs text-muted-foreground">Latest knockout (from library):</p>
+                    <a href={latestKnockout.url} download={latestKnockout.filename}
+                       className="text-sm text-blue-600 underline">
+                      ⬇ {latestKnockout.filename}
+                    </a>
+                  </div>
+                ) : null;
+              })()}
             </div>
           </details>
 

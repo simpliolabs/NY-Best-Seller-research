@@ -50,7 +50,19 @@ export async function prepareFullTonePrintFile(
   heightIn: number,
 ): Promise<Buffer> {
   const { widthPx, heightPx } = printPx(widthIn, heightIn);
-  return sharp(srcBuf)
+  // STRIP THE WHITE CANVAS (PO 2026-06-17 QA 3.1): for DTF you never want a printed white box.
+  // removeBackground is deterministic + SAFE: transparent → unchanged; near-white edge → flood-fill
+  // to transparent (preserves interior whites like text); colored/scene → returned VERBATIM (the
+  // raccoon's night scene is kept — it's not white). So a mascot-on-white exports as a clean cutout
+  // while an intentional scene prints as drawn. The user still removes a colored/scene bg explicitly.
+  let cleaned = srcBuf;
+  try {
+    const { removeBackground } = await import("./mockupCompositor");
+    cleaned = await removeBackground(srcBuf);
+  } catch (err) {
+    console.warn("[Print] white-bg removal failed, exporting as-is:", err);
+  }
+  return sharp(cleaned)
     .ensureAlpha()
     .resize(widthPx, heightPx, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
     .withMetadata({ density: DPI })

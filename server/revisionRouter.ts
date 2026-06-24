@@ -211,6 +211,42 @@ export const revisionRouter = router({
     }),
 
   /**
+   * Remove background — USER-DRIVEN transparent cutout (PO 2026-06-17 QA 1.5). Uses fal rembg to
+   * produce REAL alpha transparency (the Kontext "remove background" instruction returned opaque
+   * images, so the bg never went away). Creates a new revision; the original is snapshotted + kept.
+   */
+  removeBackground: protectedProcedure
+    .input(
+      z.object({
+        conceptId: z.number(),
+        variationKey: z.enum(["A", "B", "C"]),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const concept = await getConceptById(input.conceptId);
+      if (!concept) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Concept not found" });
+      }
+      const imageUrlMap: Record<string, string | null> = {
+        A: concept.imageUrlA,
+        B: concept.imageUrlB,
+        C: concept.imageUrlC,
+      };
+      const referenceImageUrl = imageUrlMap[input.variationKey];
+      if (!referenceImageUrl) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `No image exists for variation ${input.variationKey}` });
+      }
+      // Same accepted-only chain anchor as the other revision actions.
+      const existingRevisions = await getRevisionsByConceptVariation(input.conceptId, input.variationKey);
+      const acceptedRevision = existingRevisions.find((r) => r.accepted);
+      const actualReference = acceptedRevision ? acceptedRevision.resultImageUrl : referenceImageUrl;
+
+      const { removeBackgroundRevision } = await import("./revisionEngine");
+      const result = await removeBackgroundRevision(input.conceptId, input.variationKey, actualReference);
+      return { revisionId: result.revisionId, imageUrl: result.imageUrl };
+    }),
+
+  /**
    * Accept a specific revision (or the original) as the final design.
    * Marks the revision as accepted and un-accepts all others.
    */
