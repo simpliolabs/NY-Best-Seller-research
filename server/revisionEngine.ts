@@ -473,3 +473,46 @@ export async function removeBackgroundRevision(
 
   return { revisionId, imageUrl };
 }
+
+/**
+ * Blend background into garment — luminance-keyed opacity (PO 2026-06-17). For a full-SCENE design
+ * (the raccoon night street) where removal can't cleanly cut a subject, fade the dark + desaturated
+ * areas to transparent so the scene melts into a dark shirt, while the light subject + colourful
+ * elements (the red can) stay opaque. Deterministic; new revision (original snapshotted + kept).
+ */
+export async function reduceBackgroundOpacityRevision(
+  conceptId: number,
+  variationKey: string,
+  referenceImageUrl: string,
+): Promise<{ revisionId: string; imageUrl: string }> {
+  const priorConcept = await getConceptById(conceptId);
+  if (priorConcept?.imageUrlA) await snapshotGenerationToHistory(conceptId, priorConcept.imageUrlA, priorConcept.style);
+
+  const dl = await fetch(referenceImageUrl);
+  if (!dl.ok) throw new Error(`Failed to download design for opacity blend: ${dl.status}`);
+  const srcBuf = Buffer.from(await dl.arrayBuffer());
+
+  const { reduceBackgroundOpacity } = await import("./knockout");
+  const finalBuf = await reduceBackgroundOpacity(srcBuf);
+
+  const { url: imageUrl } = await storagePut(
+    `revisions/${conceptId}-${variationKey}-${Date.now()}.png`,
+    finalBuf,
+    "image/png",
+  );
+
+  const iterationNumber = await getNextIterationNumber(conceptId, variationKey);
+  const revisionId = nanoid();
+  await insertRevision({
+    id: revisionId,
+    conceptId,
+    variationKey,
+    iterationNumber,
+    instruction: "Blend background into garment (luminance fade)",
+    referenceImageUrl,
+    resultImageUrl: imageUrl,
+    accepted: false,
+  });
+
+  return { revisionId, imageUrl };
+}

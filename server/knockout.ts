@@ -177,3 +177,36 @@ export async function removeUniformBackground(
   });
   return { buf, removed: true, borderUniform: uniform };
 }
+
+/**
+ * Luminance-keyed opacity / "blend into garment" (PO 2026-06-17). For a full-SCENE design (the
+ * raccoon night street) where there's no uniform area to cut, fade the DARK + DESATURATED areas to
+ * transparent so the scene melts into a dark shirt, while the light subject + colourful elements stay
+ * opaque. Keys on BOTH luminance AND saturation: a pixel stays opaque if it's bright OR colourful —
+ * so the dark grey/black night scene drops out, but the LIGHT fur AND the dark-but-SATURATED red can
+ * both survive (pure luminance would wrongly fade the red can, which has low luminance).
+ *
+ * alpha *= max( smoothstep(darkPoint,lightPoint, luminance), smoothstep(satLow,satKeep, saturation) )
+ */
+export async function reduceBackgroundOpacity(
+  srcBuf: Buffer,
+  opts?: { darkPoint?: number; lightPoint?: number; satKeep?: number },
+): Promise<Buffer> {
+  const dark = opts?.darkPoint ?? 45;
+  const light = opts?.lightPoint ?? 115;
+  const satKeep = opts?.satKeep ?? 55;
+  const { data, info } = await sharp(srcBuf).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const W = info.width, H = info.height;
+  const out = Buffer.from(data);
+  for (let i = 0; i < W * H; i++) {
+    const o = i * 4;
+    const a = data[o + 3];
+    if (a === 0) continue;
+    const r = data[o], g = data[o + 1], b = data[o + 2];
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    const sat = Math.max(r, g, b) - Math.min(r, g, b);
+    const mult = Math.max(smoothstep(dark, light, lum), smoothstep(satKeep * 0.55, satKeep, sat));
+    out[o + 3] = Math.round(a * mult);
+  }
+  return sharp(out, { raw: { width: W, height: H, channels: 4 } }).png().toBuffer();
+}

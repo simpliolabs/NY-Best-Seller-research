@@ -247,6 +247,41 @@ export const revisionRouter = router({
     }),
 
   /**
+   * Blend background into garment — luminance-keyed opacity (PO 2026-06-17). For full-SCENE designs
+   * (the raccoon) where removal can't cut cleanly: fade dark/desaturated areas to transparent so the
+   * scene melts into a dark shirt; light subject + colourful elements stay. New revision; original kept.
+   */
+  blendBackground: protectedProcedure
+    .input(
+      z.object({
+        conceptId: z.number(),
+        variationKey: z.enum(["A", "B", "C"]),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const concept = await getConceptById(input.conceptId);
+      if (!concept) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Concept not found" });
+      }
+      const imageUrlMap: Record<string, string | null> = {
+        A: concept.imageUrlA,
+        B: concept.imageUrlB,
+        C: concept.imageUrlC,
+      };
+      const referenceImageUrl = imageUrlMap[input.variationKey];
+      if (!referenceImageUrl) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `No image exists for variation ${input.variationKey}` });
+      }
+      const existingRevisions = await getRevisionsByConceptVariation(input.conceptId, input.variationKey);
+      const acceptedRevision = existingRevisions.find((r) => r.accepted);
+      const actualReference = acceptedRevision ? acceptedRevision.resultImageUrl : referenceImageUrl;
+
+      const { reduceBackgroundOpacityRevision } = await import("./revisionEngine");
+      const result = await reduceBackgroundOpacityRevision(input.conceptId, input.variationKey, actualReference);
+      return { revisionId: result.revisionId, imageUrl: result.imageUrl };
+    }),
+
+  /**
    * Accept a specific revision (or the original) as the final design.
    * Marks the revision as accepted and un-accepts all others.
    */

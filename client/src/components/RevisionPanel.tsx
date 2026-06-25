@@ -76,6 +76,17 @@ export function RevisionPanel({
     },
   });
 
+  // fe827ad: Blend into shirt — luminance-keyed opacity fade for scene designs
+  const blendBackgroundMutation = trpc.revision.blendBackground.useMutation({
+    onSuccess: () => {
+      toast.success("Background blended! Scene fades into shirt. New version created.");
+      utils.revision.getHistory.invalidate({ conceptId, variationKey });
+    },
+    onError: (err) => {
+      toast.error(`Blend failed: ${err.message}`);
+    },
+  });
+
   const submitMutation = trpc.revision.submitRevision.useMutation({
     onSuccess: (data) => {
       toast.success("Revision generated!");
@@ -374,7 +385,31 @@ export function RevisionPanel({
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="top" className="max-w-xs">
-                Creates a transparent cutout (rembg segmentation). Original is kept as a previous version.
+                Creates a transparent cutout (flood-fill from border). Original is kept as a previous version.
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    blendBackgroundMutation.mutate({ conceptId, variationKey })
+                  }
+                  disabled={blendBackgroundMutation.isPending || submitMutation.isPending || trimAndCleanMutation.isPending || removeBackgroundMutation.isPending}
+                  className="shrink-0"
+                >
+                  {blendBackgroundMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-4 w-4" />
+                  )}
+                  <span className="ml-2">Blend into Shirt</span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-xs">
+                Fades dark/desaturated scene areas to transparent (luminance key). Best on dark shirts. Original kept.
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
