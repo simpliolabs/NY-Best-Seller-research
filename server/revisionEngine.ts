@@ -420,16 +420,53 @@ export async function generateRevisionViaFalKontext(
 }
 
 /**
- * Remove background — USER-DRIVEN, CANVA-STYLE (PO 2026-06-17 QA 1.5). Removes the big UNIFORM
- * background region and NEVER the subject — see removeUniformBackground in knockout.ts.
- *
- * History: first tried as a Kontext instruction (opaque output, no real transparency), then fal
- * rembg (real transparency but salient-object detection DELETED the subject on a low-contrast design
- * — it threw away the dark raccoon and kept only the red can). Both wrong. The deterministic
- * border-flood-fill is the right model: it finds the empty background and removes it, edge-connected,
- * so a disconnected subject can't be deleted. Clean cut on flat/white/solid backgrounds; full-scene
- * designs (the raccoon night street) have no uniform area to cut → the user blends those with the
- * opacity tool instead. Creates a new revision (original snapshotted + restorable). No external model.
+ * fal BiRefNet — a MATTING model. Produces a precise foreground alpha matte: keeps the WHOLE subject
+ * and removes the WHOLE background (no enclosed pockets). VERIFIED from FACT on the photoreal raccoon
+ * (PO 2026-06-17): the entire raccoon + can survived, cleanly cut from the night scene — where rembg
+ * (U2Net salient-object) deleted the raccoon and the deterministic flood left white patches. Base
+ * endpoint, `image_url` in, `image.url` out. Requires FAL_KEY.
+ */
+export async function removeBackgroundViaBiRefNet(imageUrl: string): Promise<Buffer> {
+  const key = process.env.FAL_KEY;
+  if (!key) throw new Error("FAL_KEY is not configured");
+  const headers = { Authorization: `Key ${key}`, "Content-Type": "application/json" };
+  const submit = await fetch("https://queue.fal.run/fal-ai/birefnet", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ image_url: imageUrl }),
+  });
+  if (!submit.ok) {
+    throw new Error(`fal BiRefNet submit error (${submit.status}): ${(await submit.text()).slice(0, 300)}`);
+  }
+  const { status_url, response_url } = (await submit.json()) as { status_url: string; response_url: string };
+
+  let completed = false;
+  for (let i = 0; i < 80; i++) {
+    await new Promise((r) => setTimeout(r, 3000));
+    const st = (await (await fetch(status_url, { headers })).json()) as { status?: string; error?: unknown };
+    if (st.status === "COMPLETED") { completed = true; break; }
+    if (st.status === "FAILED" || st.error) {
+      throw new Error(`fal BiRefNet failed: ${JSON.stringify(st).slice(0, 300)}`);
+    }
+  }
+  if (!completed) throw new Error("fal BiRefNet timed out after 240s");
+
+  const out = (await (await fetch(response_url, { headers })).json()) as {
+    image?: { url: string };
+    images?: Array<{ url: string }>;
+  };
+  const url = out.image?.url ?? out.images?.[0]?.url;
+  if (!url) throw new Error(`fal BiRefNet returned no image: ${JSON.stringify(out).slice(0, 200)}`);
+  const dl = await fetch(url);
+  if (!dl.ok) throw new Error(`Failed to download BiRefNet output: ${dl.status}`);
+  return Buffer.from(await dl.arrayBuffer());
+}
+
+/**
+ * Remove background — USER-DRIVEN, PRODUCTION (PO 2026-06-17 QA 1.5). fal BiRefNet matting (keeps the
+ * whole subject + removes the whole background incl. pockets), deterministic flood as the fallback.
+ * Creates a new revision (original snapshotted + restorable). The compositor/print NEVER auto-run this
+ * — removal is explicit only (CP2: no auto bg-removal), they consume whatever version the user selects.
  */
 export async function removeBackgroundRevision(
   conceptId: number,
@@ -439,18 +476,27 @@ export async function removeBackgroundRevision(
   const priorConcept = await getConceptById(conceptId);
   if (priorConcept?.imageUrlA) await snapshotGenerationToHistory(conceptId, priorConcept.imageUrlA, priorConcept.style);
 
-  // CANVA-STYLE removal (PO 2026-06-17): remove the big UNIFORM background region, never the subject.
-  // The earlier rembg version used salient-object detection and DELETED the subject on a low-contrast
-  // design (it threw away the dark raccoon, kept only the red can). removeUniformBackground samples the
-  // border colour and edge-connected flood-fills it — a disconnected subject can never be removed.
-  // force:true so the user always gets a result; on a flat/solid bg it's a clean cut, on a scene it
-  // removes the connected background-ish region (the user blends scene designs with the opacity tool).
-  const dl = await fetch(referenceImageUrl);
-  if (!dl.ok) throw new Error(`Failed to download design for background removal: ${dl.status}`);
-  const srcBuf = Buffer.from(await dl.arrayBuffer());
-
-  const { removeUniformBackground } = await import("./knockout");
-  const { buf: finalBuf } = await removeUniformBackground(srcBuf, { force: true });
+  // PRODUCTION engine = fal BiRefNet (a MATTING model). VERIFIED from FACT on the real photoreal
+  // raccoon (PO 2026-06-17): BiRefNet kept the WHOLE raccoon + can cleanly cut from the night scene,
+  // on transparent, no patches. This is the Canva-quality removal the earlier attempts couldn't do —
+  // gpt-image-2 redrew, Kontext returned opaque, rembg (U2Net salient-object) DELETED the raccoon and
+  // kept only the can, and the deterministic flood left enclosed "white patches." A matting model
+  // produces a precise foreground alpha that keeps the full subject AND removes the whole background
+  // (no pockets). Even the dark-on-dark raccoon cuts cleanly.
+  //
+  // Fallback: if BiRefNet errors, fall back to the deterministic uniform-bg flood (safe, never
+  // deletes the subject) so the user always gets a result.
+  let finalBuf: Buffer;
+  try {
+    finalBuf = await removeBackgroundViaBiRefNet(referenceImageUrl);
+  } catch (err) {
+    console.warn(`[RemoveBG] BiRefNet failed for concept ${conceptId} ${variationKey}; falling back to deterministic flood:`, err);
+    const dl = await fetch(referenceImageUrl);
+    if (!dl.ok) throw new Error(`Failed to download design for background removal: ${dl.status}`);
+    const srcBuf = Buffer.from(await dl.arrayBuffer());
+    const { removeUniformBackground } = await import("./knockout");
+    finalBuf = (await removeUniformBackground(srcBuf, { force: true })).buf;
+  }
 
   const { url: imageUrl } = await storagePut(
     `revisions/${conceptId}-${variationKey}-${Date.now()}.png`,

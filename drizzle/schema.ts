@@ -601,6 +601,19 @@ export const printFiles = mysqlTable("print_files", {
 export type PrintFile = typeof printFiles.$inferSelect;
 export type InsertPrintFile = typeof printFiles.$inferInsert;
 
+/** Per-run treated-image cache (PO 2026-06-25, automatic/manual mockup treatment). Maps
+ *  sha256(sourceUrl | TREATMENT_ALGO_VERSION | treatment params) → the stored treated PNG url, so
+ *  re-running a mockup with the SAME treatment reuses the cut instead of re-paying BiRefNet. The
+ *  sourceUrl is part of the key and storagePut hash-suffixes every upload, so an art edit changes the
+ *  source url → the cache can never serve a treated cut of stale art. This is NOT a design version
+ *  (no design_revisions row); it's pure cache, safe to clear/GC. */
+export const treatedCache = mysqlTable("treated_cache", {
+  hash: varchar("hash", { length: 64 }).primaryKey(),
+  url: text("url").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type TreatedCache = typeof treatedCache.$inferSelect;
+
 /** Phase G: Design revision iteration history */
 export const designRevisions = mysqlTable("design_revisions", {
   id: varchar("id", { length: 36 }).primaryKey(),

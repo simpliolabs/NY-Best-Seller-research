@@ -414,6 +414,15 @@ export function RevisionPanel({
             </Tooltip>
           </TooltipProvider>
         </div>
+        {/* (7) One-liner descriptions under each action */}
+        <div className="grid grid-cols-3 gap-2 text-[11px] text-muted-foreground">
+          <p>Clean cutout, for subjects on plain backgrounds</p>
+          <p>Fade a scene onto dark fabric</p>
+          <p>Tidy edges/margins</p>
+        </div>
+        <p className="text-[11px] text-muted-foreground mt-2 border-t pt-2">
+          <strong>Advanced</strong> — saves a new version you can pick in the Mockup Generator.
+        </p>
       </div>
 
       {/* Revision history timeline */}

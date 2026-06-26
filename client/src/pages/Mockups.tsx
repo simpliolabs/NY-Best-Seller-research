@@ -27,12 +27,13 @@ import type { PrintZoneCoords } from "@/components/PrintZoneEditor";
 import { MockupLightbox } from "@/components/MockupLightbox";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
-import { Loader2, Image as ImageIcon, Shirt, RefreshCw, Trash2, AlertTriangle, Move, Check, X } from "lucide-react";
+import { Loader2, Image as ImageIcon, Shirt, RefreshCw, Trash2, AlertTriangle, Move, Check, X, Sparkles, Palette, Save } from "lucide-react";
+import { ConceptPicker } from "@/components/ConceptPicker";
 
 
 export default function Mockups() {
   const [zoomMockupUrl, setZoomMockupUrl] = useState<string | null>(null);
-  const [conceptSearch, setConceptSearch] = useState("");
+  // conceptSearch state removed — ConceptPicker handles its own search internally
   const { activeWorkspace } = useWorkspace();
   const workspaceId = activeWorkspace?.id ?? "";
 
@@ -59,6 +60,16 @@ export default function Mockups() {
 
   // Track whether the last generation used a default zone
   const [usedDefaultZone, setUsedDefaultZone] = useState<boolean>(false);
+
+  // Treatment-per-run state (7e82ac5)
+  const [treatmentMode, setTreatmentMode] = useState<"automatic" | "manual">("automatic");
+  const [manualType, setManualType] = useState<"cutout" | "blend" | "knockout" | "none">("cutout");
+  const [treatmentKnockoutTargets, setTreatmentKnockoutTargets] = useState<string[]>(["#111111"]);
+  // Stores the treatment info returned from the last generate call
+  const [lastTreatment, setLastTreatment] = useState<{
+    mode: string; treatment: string; reason?: string; confidence?: number;
+    garmentColors?: string[]; treatedImageUrl?: string;
+  } | null>(null);
 
 
   // Fetch concepts that have images (all concepts, not just winners)
@@ -117,6 +128,8 @@ export default function Mockups() {
     onSuccess: (data) => {
       // Surface usedDefaultZone flag
       setUsedDefaultZone(!!data.usedDefaultZone);
+      // Store treatment info from response
+      if ((data as any).treatment) setLastTreatment((data as any).treatment);
       if (data.failedCount && data.failedCount > 0) {
         const total = data.mockupCount + data.failedCount;
         toast.warning(`${data.failedCount} of ${total} templates failed`);
@@ -128,6 +141,12 @@ export default function Mockups() {
     onError: (err) => {
       toast.error(err.message);
     },
+  });
+
+  // Save treatment as version (escape hatch)
+  const saveTreatmentMutation = trpc.mockup.saveTreatmentAsVersion.useMutation({
+    onSuccess: () => { toast.success("Treatment saved as a new design version"); },
+    onError: (e) => toast.error(e.message),
   });
 
   // Print export mutations
@@ -232,16 +251,7 @@ export default function Mockups() {
     );
   }, [conceptsQuery.data]);
 
-  // Filtered concepts for search box
-  const filteredConcepts = useMemo(() => {
-    const q = conceptSearch.trim().toLowerCase();
-    if (!q) return conceptsWithImages;
-    return conceptsWithImages.filter((c) =>
-      (c.conceptName ?? "").toLowerCase().includes(q) ||
-      ((c as any).signal ?? "").toString().toLowerCase().includes(q) ||
-      ((c as any).style ?? "").toString().toLowerCase().includes(q)
-    );
-  }, [conceptsWithImages, conceptSearch]);
+  // filteredConcepts removed — ConceptPicker handles filtering internally
 
   // Sync URL param once concepts load
   useEffect(() => {
@@ -284,10 +294,24 @@ export default function Mockups() {
     if (!canGenerate) return;
     // Clear previous warning state
     setUsedDefaultZone(false);
+    setLastTreatment(null);
+
+    // Build treatment field
+    const treatment = treatmentMode === "automatic"
+      ? { mode: "automatic" as const }
+      : {
+          mode: "manual" as const,
+          type: manualType,
+          ...(manualType === "knockout" && treatmentKnockoutTargets.length
+            ? { knockoutTargets: treatmentKnockoutTargets }
+            : {}),
+        };
+
     generateMutation.mutate({
       conceptId: Number(selectedConceptId),
       variationKey: selectedVariation as "A" | "B" | "C",
       productGroupId: selectedGroupId,
+      treatment,
       // Manual color selection overrides auto when the user has picked specific templates
       ...(colorMode === "manual" && selectedTemplateIds.length
         ? { templateIds: selectedTemplateIds }
@@ -338,29 +362,17 @@ export default function Mockups() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* Concept selector */}
+            {/* Concept selector — ConceptPicker with typeahead, recent, favorites, thumbnails */}
             <div className="space-y-1.5 min-w-0">
               <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                 Concept
               </label>
-              <Input
-                value={conceptSearch}
-                onChange={(e) => setConceptSearch(e.target.value)}
-                placeholder="Search concepts…"
-                className="mb-1.5 h-8 text-sm"
+              <ConceptPicker
+                concepts={conceptsWithImages as any[]}
+                value={selectedConceptId}
+                onChange={(v) => { setSelectedConceptId(v); setSelectedVariation(""); }}
+                disabled={conceptsQuery.isLoading}
               />
-              <Select value={selectedConceptId} onValueChange={(v) => { setSelectedConceptId(v); setSelectedVariation(""); }}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select concept…" className="truncate" />
-                </SelectTrigger>
-                <SelectContent>
-                  {filteredConcepts.map((c) => (
-                    <SelectItem key={c.id} value={String(c.id)}>
-                      {c.conceptName}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
             </div>
 
             {/* Variation selector */}
@@ -500,6 +512,94 @@ export default function Mockups() {
             </div>
           )}
 
+          {/* (1) Treatment chooser: two-card picker */}
+          <div className="mt-3 space-y-2">
+            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              Design Treatment
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => setTreatmentMode("automatic")}
+                className={`p-3 rounded-lg border text-left transition-colors ${
+                  treatmentMode === "automatic"
+                    ? "border-blue-500 bg-blue-50 ring-1 ring-blue-500"
+                    : "border-slate-200 bg-white hover:border-slate-400"
+                }`}
+              >
+                <div className="flex items-center gap-2 font-medium text-sm">
+                  <Sparkles className="h-4 w-4 text-blue-600" />
+                  Automatic
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  We pick the best treatment, garments &amp; print file
+                </p>
+              </button>
+              <button
+                type="button"
+                onClick={() => setTreatmentMode("manual")}
+                className={`p-3 rounded-lg border text-left transition-colors ${
+                  treatmentMode === "manual"
+                    ? "border-blue-500 bg-blue-50 ring-1 ring-blue-500"
+                    : "border-slate-200 bg-white hover:border-slate-400"
+                }`}
+              >
+                <div className="flex items-center gap-2 font-medium text-sm">
+                  <Palette className="h-4 w-4 text-slate-600" />
+                  Manual
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  You choose the treatment type
+                </p>
+              </button>
+            </div>
+
+            {/* (4) Manual → labeled radio list */}
+            {treatmentMode === "manual" && (
+              <div className="space-y-2 pl-1">
+                {([
+                  { value: "cutout", label: "Cut out the background", desc: "Subject/logo on a plain background" },
+                  { value: "blend", label: "Blend into a dark shirt", desc: "A full scene on dark fabric" },
+                  { value: "knockout", label: "Knock out a color", desc: "Bold flat graphics; shirt shows through" },
+                  { value: "none", label: "Leave as-is", desc: "Already clean/transparent" },
+                ] as const).map((opt) => (
+                  <label key={opt.value} className="flex items-start gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="manualTreatment"
+                      value={opt.value}
+                      checked={manualType === opt.value}
+                      onChange={() => setManualType(opt.value)}
+                      className="mt-0.5 accent-blue-600"
+                    />
+                    <div>
+                      <span className="text-sm font-medium">{opt.label}</span>
+                      <p className="text-xs text-muted-foreground">{opt.desc}</p>
+                    </div>
+                  </label>
+                ))}
+                {/* Knockout color picker */}
+                {manualType === "knockout" && (
+                  <div className="flex items-center gap-2 ml-5">
+                    <label className="text-xs">Color to knock out:</label>
+                    <input
+                      type="color"
+                      value={treatmentKnockoutTargets[0] ?? "#111111"}
+                      onChange={(e) => setTreatmentKnockoutTargets([e.target.value])}
+                      className="h-7 w-10 border rounded cursor-pointer"
+                    />
+                    <input
+                      type="text"
+                      value={treatmentKnockoutTargets[0] ?? "#111111"}
+                      onChange={(e) => setTreatmentKnockoutTargets([e.target.value])}
+                      className="text-xs border rounded px-2 py-1 w-20 bg-white font-mono"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           <div className="flex gap-2 flex-wrap">
             <Button onClick={handleGenerate} disabled={!canGenerate} className="w-full sm:w-auto">
               {generateMutation.isPending ? (
@@ -563,6 +663,66 @@ export default function Mockups() {
             <span className="font-semibold">No print zone set for this group</span> — using default.
             Draw one for precise placement.
           </div>
+        </div>
+      )}
+
+      {/* (3) Transparency Card — shown after generate when treatment info is available */}
+      {lastTreatment && (
+        <div className="rounded-lg border border-blue-200 bg-blue-50/50 px-4 py-3 space-y-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-semibold px-2 py-0.5 rounded bg-blue-100 text-blue-800 uppercase">
+              {lastTreatment.treatment}
+            </span>
+            {lastTreatment.confidence !== undefined && (
+              <span className={`text-xs px-2 py-0.5 rounded ${
+                lastTreatment.confidence >= 0.6
+                  ? "bg-green-100 text-green-800"
+                  : "bg-amber-100 text-amber-800"
+              }`}>
+                {lastTreatment.confidence >= 0.6 ? "Confident" : "Used safe default"}
+              </span>
+            )}
+            {lastTreatment.mode === "automatic" && (
+              <button
+                type="button"
+                className="text-xs text-blue-600 hover:underline ml-auto"
+                onClick={() => setTreatmentMode("manual")}
+              >
+                Switch to manual
+              </button>
+            )}
+          </div>
+          {lastTreatment.reason && (
+            <p className="text-sm text-slate-700">{lastTreatment.reason}</p>
+          )}
+          {lastTreatment.garmentColors && lastTreatment.garmentColors.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-muted-foreground">Best on:</span>
+              {lastTreatment.garmentColors.map((c, i) => (
+                <span key={i} className="inline-block h-5 w-5 rounded-full border border-slate-300" style={{ background: c }} title={c} />
+              ))}
+            </div>
+          )}
+          <p className="text-[11px] text-muted-foreground italic">
+            Applied to these mockups only — your saved design isn't changed.
+          </p>
+          {/* (6) Save this treatment as a version */}
+          {lastTreatment.treatedImageUrl && lastTreatment.mode === "automatic" && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={saveTreatmentMutation.isPending}
+              onClick={() => saveTreatmentMutation.mutate({
+                conceptId: Number(selectedConceptId),
+                variationKey: (selectedVariation || "A") as "A" | "B" | "C",
+                treatedImageUrl: lastTreatment.treatedImageUrl!,
+                name: `${lastTreatment.treatment} treatment`,
+              })}
+            >
+              <Save className="h-3.5 w-3.5 mr-1" />
+              {saveTreatmentMutation.isPending ? "Saving…" : "Save this treatment as a version"}
+            </Button>
+          )}
         </div>
       )}
 
@@ -729,6 +889,7 @@ export default function Mockups() {
               conceptId: Number(selectedConceptId),
               variationKey: (selectedVariation || "A") as "A" | "B" | "C",
               ...(revisionId ? { sourceRevisionId: revisionId } : {}),
+              ...(lastTreatment?.treatedImageUrl ? { treatedImageUrl: lastTreatment.treatedImageUrl } : {}),
             })}
           >
             {exportPrintMutation.isPending ? "Preparing…" : "Download print-ready file"}
@@ -775,6 +936,7 @@ export default function Mockups() {
                     ...(revisionId ? { sourceRevisionId: revisionId } : {}),
                     inkColors: [inkColor],
                     lpi: 45,
+                    ...(lastTreatment?.treatedImageUrl ? { treatedImageUrl: lastTreatment.treatedImageUrl } : {}),
                   })}
                 >
                   {halftoneMutation.isPending ? "Rendering…" : "Generate halftone"}

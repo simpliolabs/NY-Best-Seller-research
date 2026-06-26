@@ -7,7 +7,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "./_core/trpc";
 import { compositeDesignOnMockup, anchorForProductType, resolvePrintZone } from "./mockupCompositor";
-import { pickBestColors, scoreRendersReadability } from "./mockupColorMatcher";
+import { pickBestColors, pickDarkestColors, scoreRendersReadability } from "./mockupColorMatcher";
 import { processDesignForProduction } from "./productionImageProcessor";
 import {
   createMockupRender,
@@ -29,6 +29,8 @@ import { createPrintFile, findPrintFileByHash, getPrintFilesByConcept } from "./
 import { knockoutColors, hexToRgb } from "./knockout";
 import { classifyDesignType } from "./designType";
 import { analyzeGarmentFit } from "./garmentFit";
+import { applyTreatment, type TreatmentType } from "./treatmentEngine";
+import { runMockupCouncil } from "./mockupCouncil";
 import { createHash } from "crypto";
 
 const INK_NAMES = Object.keys(INK_COLORS) as [InkName, ...InkName[]];
@@ -112,6 +114,22 @@ export const mockupRouter = router({
          *  and the production URL is derived fresh (no live-slot caching for historical versions).
          *  Each rendered mockup row stores this id so multiple versions' mockups coexist. */
         sourceRevisionId: z.string().min(1).optional(),
+        /** PER-RUN TREATMENT (PO 2026-06-25): how the design should meet the garment for THIS run —
+         *  applied to the mockups + print file only, NEVER saved as a design version. Omitted =
+         *  { manual, none } so every existing caller is a no-op pass-through.
+         *  - manual: the seller's explicit pick (cutout / blend / knockout / none).
+         *  - automatic: the Mockup Council looks at the design and decides. */
+        treatment: z
+          .discriminatedUnion("mode", [
+            z.object({
+              mode: z.literal("manual"),
+              type: z.enum(["none", "cutout", "blend", "knockout"]),
+              /** Knockout only: hex colors to delete. Empty = auto-sample the background color. */
+              knockoutTargets: z.array(z.string()).optional(),
+            }),
+            z.object({ mode: z.literal("automatic") }),
+          ])
+          .optional(),
       })
     )
     .mutation(async ({ input }) => {
@@ -222,12 +240,55 @@ export const mockupRouter = router({
         });
       }
 
+      // 2b. PER-RUN TREATMENT (PO 2026-06-25): apply the chosen treatment to the design for THIS run
+      // ONLY — no new version. Manual = the seller's explicit pick; Automatic = the Mockup Council
+      // decides from the image. CP2-safe: applied here from an EXPLICIT choice, UPSTREAM of the
+      // compositor — the compositor still just composites whatever url it's handed. The treated url
+      // feeds BOTH the color matcher (so contrast picks reflect what actually prints) and the composite
+      // loop, and is returned so the print-file export can reuse the SAME bytes (mockup/print parity).
+      const treatmentReq = input.treatment ?? { mode: "manual" as const, type: "none" as const };
+      let treatmentInfo: {
+        mode: "manual" | "automatic";
+        treatment: TreatmentType;
+        reason?: string;
+        confidence?: number;
+        garmentColors?: string[];
+        treatedImageUrl?: string;
+      };
+      {
+        let plan: { type: TreatmentType; knockoutTargets?: string[] };
+        let reason: string | undefined;
+        let confidence: number | undefined;
+        let garmentColors: string[] | undefined;
+        if (treatmentReq.mode === "automatic") {
+          const verdict = await runMockupCouncil(designUrl);
+          plan = { type: verdict.treatment };
+          reason = verdict.reason;
+          confidence = verdict.confidence;
+          garmentColors = verdict.garmentColors;
+        } else {
+          plan = { type: treatmentReq.type, knockoutTargets: treatmentReq.knockoutTargets };
+        }
+        if (plan.type !== "none") {
+          const treatedUrl = await applyTreatment(designUrl, plan);
+          designUrl = treatedUrl;
+          treatmentInfo = { mode: treatmentReq.mode, treatment: plan.type, reason, confidence, garmentColors, treatedImageUrl: treatedUrl };
+        } else {
+          treatmentInfo = { mode: treatmentReq.mode, treatment: "none", reason, confidence, garmentColors };
+        }
+      }
+
       // 3. Color selection: MANUAL (specific templateIds the seller picked) wins over AUTO (the
       // contrast matcher). PO 2026-06-17: "can I select what mockup colors to use and not AUTO mode?"
       if (input.templateIds && input.templateIds.length > 0) {
         const wanted = new Set(input.templateIds);
         const picked = templates.filter((t) => wanted.has(t.id));
         if (picked.length > 0) templates = picked; // ignore unknown ids; never end up with zero
+      } else if (treatmentInfo.treatment === "blend" && templates.length > (input.colorCount ?? 6)) {
+        // BLEND prints onto DARK fabric (the scene fades into the shirt) — pick the darkest garments,
+        // not the contrast-best ones (which would be LIGHT shirts for a grey design, defeating the
+        // blend). PO 2026-06-25 ("BLEND as I requested"). Manual templateIds still win above.
+        templates = pickDarkestColors(templates, input.colorCount ?? 6);
       } else if (input.colorCount && input.colorCount < templates.length) {
         templates = await pickBestColors(designUrl, templates, input.colorCount);
       }
@@ -329,13 +390,13 @@ export const mockupRouter = router({
             ? qualityCheck.choices[0].message.content : "{}";
           const qa = JSON.parse(qaContent);
           // Attach QA result to response
-          return { success: true, mockupCount: renders.length, renders, qualityCheck: qa, usedDefaultZone: !hasGroupZone, productionReady: isProductionReady, failedCount };
+          return { success: true, mockupCount: renders.length, renders, qualityCheck: qa, usedDefaultZone: !hasGroupZone, productionReady: isProductionReady, failedCount, treatment: treatmentInfo };
         } catch (qaErr) {
           console.warn("[Mockup QA] Vision check failed (non-blocking):", qaErr);
         }
       }
 
-      return { success: true, mockupCount: renders.length, renders, qualityCheck: null, usedDefaultZone: !hasGroupZone, productionReady: isProductionReady, failedCount };
+      return { success: true, mockupCount: renders.length, renders, qualityCheck: null, usedDefaultZone: !hasGroupZone, productionReady: isProductionReady, failedCount, treatment: treatmentInfo };
     }),
 
   /** Get all mockup renders for a concept (all variations) */
@@ -385,6 +446,10 @@ export const mockupRouter = router({
       conceptId: z.number(),
       variationKey: z.enum(["A", "B", "C"]).default("A"),
       sourceRevisionId: z.string().min(1).optional(),
+      /** PO 2026-06-25: when set (from a per-run treatment in mockup.generate's response), export THIS
+       *  exact treated image so the print file matches the mockups byte-for-byte; bypasses source
+       *  resolution. This is the mockup/print parity guarantee (no "blended mockup, untreated download"). */
+      treatedImageUrl: z.string().optional(),
       widthIn: z.number().min(1).max(40).default(12),
       heightIn: z.number().min(1).max(40).default(16),
     }))
@@ -393,7 +458,7 @@ export const mockupRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
       const concept = (await db.select().from(designConcepts).where(eq(designConcepts.id, input.conceptId)).limit(1))[0];
       if (!concept) throw new TRPCError({ code: "NOT_FOUND", message: "Concept not found" });
-      const srcUrl = await resolveExportSourceUrl(concept, input.variationKey, input.sourceRevisionId);
+      const srcUrl = input.treatedImageUrl ?? await resolveExportSourceUrl(concept, input.variationKey, input.sourceRevisionId);
       if (!srcUrl) throw new TRPCError({ code: "BAD_REQUEST", message: "No design image to export" });
 
       const srcBuf = await fetchToBuffer(srcUrl);
@@ -414,6 +479,9 @@ export const mockupRouter = router({
       conceptId: z.number(),
       variationKey: z.enum(["A", "B", "C"]).default("A"),
       sourceRevisionId: z.string().min(1).optional(),
+      /** PO 2026-06-25: halftone THIS exact treated image (from a per-run treatment) for mockup/print
+       *  parity; bypasses source resolution when set. */
+      treatedImageUrl: z.string().optional(),
       inkColors: z.array(z.enum(INK_NAMES)).min(1).max(7).default(["black"]),
       lpi: z.number().min(20).max(85).default(45),
       widthIn: z.number().min(1).max(40).default(12),
@@ -424,7 +492,7 @@ export const mockupRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
       const concept = (await db.select().from(designConcepts).where(eq(designConcepts.id, input.conceptId)).limit(1))[0];
       if (!concept) throw new TRPCError({ code: "NOT_FOUND", message: "Concept not found" });
-      const srcUrl = await resolveExportSourceUrl(concept, input.variationKey, input.sourceRevisionId);
+      const srcUrl = input.treatedImageUrl ?? await resolveExportSourceUrl(concept, input.variationKey, input.sourceRevisionId);
       if (!srcUrl) throw new TRPCError({ code: "BAD_REQUEST", message: "No design image to halftone" });
 
       const srcBuf = await fetchToBuffer(srcUrl);
@@ -549,6 +617,35 @@ export const mockupRouter = router({
     .input(z.object({ conceptId: z.number() }))
     .query(async ({ input }) => {
       return getPrintFilesByConcept(input.conceptId);
+    }),
+
+  /** Save a per-run treatment as a durable design version (PO 2026-06-25, F6 escape hatch). Per-run
+   *  treated images live only in the cache (garbage-collectable); when the seller loves an Automatic
+   *  result, this promotes that exact treated PNG to a real design version they can re-select later. */
+  saveTreatmentAsVersion: protectedProcedure
+    .input(z.object({
+      conceptId: z.number(),
+      variationKey: z.enum(["A", "B", "C"]).default("A"),
+      treatedImageUrl: z.string().min(1),
+      name: z.string().max(120).optional(),
+      label: z.string().max(80).optional(),
+    }))
+    .mutation(async ({ input }) => {
+      const { insertRevision, getNextIterationNumber, updateRevisionName } = await import("./revisionDb");
+      const iterationNumber = await getNextIterationNumber(input.conceptId, input.variationKey);
+      const revisionId = nanoid();
+      await insertRevision({
+        id: revisionId,
+        conceptId: input.conceptId,
+        variationKey: input.variationKey,
+        iterationNumber,
+        instruction: input.label ?? "Saved mockup treatment",
+        referenceImageUrl: null,
+        resultImageUrl: input.treatedImageUrl,
+        accepted: false,
+      });
+      if (input.name) await updateRevisionName(revisionId, input.name);
+      return { revisionId, imageUrl: input.treatedImageUrl };
     }),
 
   /** Regenerate a single mockup (re-composite with current design) */

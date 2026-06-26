@@ -190,7 +190,7 @@ export async function removeUniformBackground(
  */
 export async function reduceBackgroundOpacity(
   srcBuf: Buffer,
-  opts?: { darkPoint?: number; lightPoint?: number; satKeep?: number },
+  opts?: { darkPoint?: number; lightPoint?: number; satKeep?: number; overallOpacity?: number },
 ): Promise<Buffer> {
   // More fade (PO 2026-06-17: the first pass was too subtle — the mid-tone scene, bokeh + curb, stayed
   // so the mockup "looked like before"). Raised so the whole night scene drops out, leaving the
@@ -199,6 +199,9 @@ export async function reduceBackgroundOpacity(
   const dark = opts?.darkPoint ?? 70;
   const light = opts?.lightPoint ?? 145;
   const satKeep = opts?.satKeep ?? 55;
+  // overallOpacity (PO 2026-06-25): lower the WHOLE design's alpha so a blended scene melts further
+  // into the (dark) shirt — the "lower design opacity, blend into the shirt layout" look. 1 = off.
+  const overall = opts?.overallOpacity ?? 1;
   const { data, info } = await sharp(srcBuf).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   const W = info.width, H = info.height;
   const out = Buffer.from(data);
@@ -210,7 +213,7 @@ export async function reduceBackgroundOpacity(
     const lum = 0.299 * r + 0.587 * g + 0.114 * b;
     const sat = Math.max(r, g, b) - Math.min(r, g, b);
     const mult = Math.max(smoothstep(dark, light, lum), smoothstep(satKeep * 0.55, satKeep, sat));
-    out[o + 3] = Math.round(a * mult);
+    out[o + 3] = Math.round(a * mult * overall);
   }
   return sharp(out, { raw: { width: W, height: H, channels: 4 } }).png().toBuffer();
 }

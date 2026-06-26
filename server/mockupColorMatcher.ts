@@ -140,6 +140,17 @@ export async function pickBestColors(
   return pick.map((s) => s.t);
 }
 
+/** Pick the N DARKEST garment templates (lowest blank-color luminance). Blend prints a scene onto a
+ *  DARK shirt, so it needs dark garments — the contrast matcher would wrongly pick LIGHT shirts for a
+ *  dark/grey design (e.g. the grey raccoon), defeating the blend. PO 2026-06-25. */
+export function pickDarkestColors(templates: MockupTemplate[], count: number): MockupTemplate[] {
+  const lum = (hex: string) => {
+    const c = hexToRgb(hex);
+    return c ? 0.299 * c.r + 0.587 * c.g + 0.114 * c.b : 999;
+  };
+  return [...templates].sort((a, b) => lum(a.colorHex) - lum(b.colorHex)).slice(0, count);
+}
+
 export type ReadabilityScore = {
   renderId: string;
   templateId: string;
