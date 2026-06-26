@@ -192,8 +192,12 @@ export async function reduceBackgroundOpacity(
   srcBuf: Buffer,
   opts?: { darkPoint?: number; lightPoint?: number; satKeep?: number },
 ): Promise<Buffer> {
-  const dark = opts?.darkPoint ?? 45;
-  const light = opts?.lightPoint ?? 115;
+  // More fade (PO 2026-06-17: the first pass was too subtle — the mid-tone scene, bokeh + curb, stayed
+  // so the mockup "looked like before"). Raised so the whole night scene drops out, leaving the
+  // raccoon's lighter fur + the (saturation-kept) red can. Below darkPoint → fully transparent; above
+  // lightPoint → fully opaque; saturated pixels stay regardless.
+  const dark = opts?.darkPoint ?? 70;
+  const light = opts?.lightPoint ?? 145;
   const satKeep = opts?.satKeep ?? 55;
   const { data, info } = await sharp(srcBuf).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   const W = info.width, H = info.height;

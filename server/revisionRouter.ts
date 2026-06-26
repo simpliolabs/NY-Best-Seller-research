@@ -356,4 +356,12 @@ export const revisionRouter = router({
       await deleteConceptById(input.conceptId);
       return { success: true };
     }),
+
+  /** Fetch a single revision by id — used by Mockups to resolve the version name
+   *  regardless of whether it lives under variationKey A/B/C or the HISTORY_KEY H. */
+  getOne: protectedProcedure
+    .input(z.object({ revisionId: z.string() }))
+    .query(async ({ input }) => {
+      return getRevisionById(input.revisionId);
+    }),
 });

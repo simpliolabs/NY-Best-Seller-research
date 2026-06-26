@@ -89,24 +89,28 @@ export default function Mockups() {
     return mockupsQuery.data.filter((m) => m.sourceRevisionId === revisionId);
   }, [mockupsQuery.data, revisionId]);
 
-  // Fetch revision name when revisionId is in URL
+  // Fetch the specific revision by id — works for both HISTORY_KEY (H) and Design Studio (A/B/C) rows.
+  // This is the correct fix: getGenerationHistory only returns HISTORY_KEY rows, so it would miss
+  // Design Studio revisions. trpc.revision.getOne fetches by primary key regardless of variationKey.
+  const revisionQuery = trpc.revision.getOne.useQuery(
+    { revisionId: revisionId! },
+    { enabled: !!revisionId, refetchOnMount: "always", staleTime: 0 }
+  );
+  // Also keep the generation history query for the thumbnail lookup (2.1)
   const revisionHistoryQuery = trpc.concepts.getGenerationHistory.useQuery(
     { conceptId: Number(selectedConceptId) },
     { enabled: !!selectedConceptId && !!revisionId }
   );
   const revisionName = useMemo(() => {
-    if (!revisionId || !revisionHistoryQuery.data) return undefined;
-    const allRevs = revisionHistoryQuery.data;
-    const revIdx = allRevs.findIndex((r) => r.id === revisionId);
-    if (revIdx === -1) return undefined;
-    const rev = allRevs[revIdx];
-    // Derive version label: oldest = V1, newest history = V(total-1), live = V(total)
-    const totalVersions = allRevs.length + 1;
-    const versionNumber = totalVersions - 1 - revIdx;
+    if (!revisionId) return undefined;
+    const rev = revisionQuery.data;
+    if (!rev) return undefined;
+    // Prefer the human-set name; fall back to a version label derived from the concept name
+    if (rev.name) return rev.name;
     const selectedConcept = (conceptsQuery.data?.concepts ?? []).find((c: any) => String(c.id) === selectedConceptId);
     const cName = selectedConcept?.conceptName ?? "Concept";
-    return rev.name ?? `${cName} V${versionNumber}`;
-  }, [revisionId, revisionHistoryQuery.data, conceptsQuery.data, selectedConceptId]);
+    return `${cName} — Version`;
+  }, [revisionId, revisionQuery.data, conceptsQuery.data, selectedConceptId]);
 
   // Generate mutation
   const generateMutation = trpc.mockup.generate.useMutation({
@@ -309,11 +313,10 @@ export default function Mockups() {
       {/* (B) Design thumbnail — (2.1) show revision image when revisionId selected */}
       {selectedConceptId && (() => {
         const sc = conceptsWithImages.find((c) => c.id === Number(selectedConceptId));
-        // When a revision is selected, show that revision's resultImageUrl
+        // When a revision is selected, use the revision's resultImageUrl directly (from getOne)
         let thumbUrl: string | undefined;
-        if (revisionId && revisionHistoryQuery.data) {
-          const rev = revisionHistoryQuery.data.find((r) => r.id === revisionId);
-          thumbUrl = rev?.resultImageUrl ?? undefined;
+        if (revisionId && revisionQuery.data) {
+          thumbUrl = revisionQuery.data.resultImageUrl ?? undefined;
         }
         if (!thumbUrl) thumbUrl = (sc as any)?.productionUrlA || sc?.imageUrlA;
         const displayName = revisionName ?? sc?.conceptName;
