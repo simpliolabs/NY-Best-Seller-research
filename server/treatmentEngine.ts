@@ -14,13 +14,17 @@
  */
 import { createHash } from "crypto";
 import { storagePut } from "./storage";
-import { reduceBackgroundOpacity, knockoutColors, sampleBorderColor, hexToRgb } from "./knockout";
+import { fadeOpacity, knockoutColors, sampleBorderColor, hexToRgb } from "./knockout";
 import type { RGB } from "./knockout";
 import { removeBackgroundViaBiRefNet } from "./revisionEngine";
 import { getTreatedUrl, putTreatedUrl } from "./treatedCacheDb";
 
 /** Bump when ANY treatment algorithm or model changes, so the cache can't serve a stale-algo image. */
-export const TREATMENT_ALGO_VERSION = "v2-birefnet+lumakey0.8+flood";
+export const TREATMENT_ALGO_VERSION = "v3-birefnet+uniformfade0.6+flood";
+
+/** Blend opacity — how much of the shirt shows through the kept scene (PO 2026-06-25: keep the scene,
+ *  just lower opacity so it fades into the fabric). Lower = more faded/blended. Tuned from a preview. */
+export const BLEND_OPACITY = 0.6;
 
 export type TreatmentType = "none" | "cutout" | "blend" | "knockout";
 
@@ -65,9 +69,11 @@ export async function applyTreatment(sourceUrl: string, plan: TreatmentPlan): Pr
       out = (await removeUniformBackground(await fetchBuf(sourceUrl), { force: true })).buf;
     }
   } else if (plan.type === "blend") {
-    // Lower the overall opacity so a scene melts further into the (dark) shirt — PO 2026-06-25
-    // ("lower design opacity and blend better to the shirt layout"). Tuned from a real preview.
-    out = await reduceBackgroundOpacity(await fetchBuf(sourceUrl), { overallOpacity: 0.8 });
+    // Keep the FULL scene, just lower its opacity uniformly so it fades into the shirt's fabric + folds
+    // (PO 2026-06-25: "KEEP THE SCENE and just lower opacity and blend better to curves of shirts, NOT
+    // remove the entire background"). Uniform alpha — NOT the luminance key, which punched transparent
+    // holes in the raccoon's dark fur and read as a ghosted color-knockout on colored shirts.
+    out = await fadeOpacity(await fetchBuf(sourceUrl), BLEND_OPACITY);
   } else {
     // knockout: explicit hex targets, else auto-sample the uniform border (the background color).
     const buf = await fetchBuf(sourceUrl);

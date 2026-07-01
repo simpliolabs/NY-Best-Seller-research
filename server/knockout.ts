@@ -188,6 +188,24 @@ export async function removeUniformBackground(
  *
  * alpha *= max( smoothstep(darkPoint,lightPoint, luminance), smoothstep(satLow,satKeep, saturation) )
  */
+/**
+ * Uniform opacity fade — "blend into the shirt" the way the PO means it (2026-06-25): KEEP the whole
+ * design (scene + subject), just lower EVERY pixel's alpha equally so it fades into the shirt's fabric
+ * and folds. This is NOT background removal and NOT a luminance key — the luminance key punched
+ * transparent holes in dark areas (the raccoon's fur), which read as a ghosted color-knockout on
+ * colored shirts. A flat alpha scale can't hole: everything just gets more see-through, uniformly.
+ */
+export async function fadeOpacity(srcBuf: Buffer, opacity: number): Promise<Buffer> {
+  const { data, info } = await sharp(srcBuf).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const out = Buffer.from(data);
+  const op = Math.max(0, Math.min(1, opacity));
+  for (let i = 0; i < info.width * info.height; i++) {
+    const o = i * 4;
+    out[o + 3] = Math.round(data[o + 3] * op);
+  }
+  return sharp(out, { raw: { width: info.width, height: info.height, channels: 4 } }).png().toBuffer();
+}
+
 export async function reduceBackgroundOpacity(
   srcBuf: Buffer,
   opts?: { darkPoint?: number; lightPoint?: number; satKeep?: number; overallOpacity?: number },
